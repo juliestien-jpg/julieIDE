@@ -14,3 +14,9 @@ julie-index.workspace = true
 julie-phpunit.workspace = true
 julie-terminal.workspace = true
 eframe.workspace = true
+# Sélecteur de dossiers du système (Ouvrir un dossier).
+rfd = "0.15"
+# Captures PNG du mode scénario (déjà dans le verrou via egui).
+png = "0.18"
+# État écrit par le mode scénario.
+serde_json = "1"

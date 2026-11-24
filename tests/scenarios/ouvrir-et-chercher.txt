@@ -1,0 +1,35 @@
+# Parcours de base en lecture seule sur labmate_paper : ouvrir le projet, aller
+# au fichier, rechercher dans les fichiers, ouvrir à la ligne, terminal.
+# Lancer depuis la racine de JulieStorm :
+#   target\debug\juliestorm.exe --scenario tests\scenarios\ouvrir-et-chercher.txt
+# Les captures et l'état vont dans out\ (dossier créé au besoin).
+project C:/Program Files (x86)/AgileBio/LabCollector/www/labmate_paper
+tree-expand src
+screenshot out/01-projet.png
+state out/01-projet.json
+action nav.goto_file
+type main
+wait-idle
+screenshot out/02-aller-au-fichier.png
+state out/02-aller-au-fichier.json
+key Enter
+wait-idle
+action nav.find_in_files
+type import
+wait-idle
+key Down
+key Down
+wait 300
+screenshot out/03-recherche.png
+state out/03-recherche.json
+key Enter
+wait-idle
+screenshot out/04-ouvert-a-la-ligne.png
+action view.terminal
+wait 3000
+type pwd
+key Enter
+wait 1000
+screenshot out/05-terminal.png
+state out/05-terminal.json
+quit
