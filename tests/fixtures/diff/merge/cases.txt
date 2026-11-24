@@ -1,0 +1,63 @@
+# Corpus de fusion de julie-diff, comparé à `git merge-file` par
+# crates/diff/tests/git_compare.rs. Les fichiers sont produits par ../generate.py.
+#
+# Une ligne par cas : nom | relation | explication (obligatoire s'il y a un écart)
+#
+#   same          même verdict que Git ; si la fusion est propre, même texte à l'octet près
+#   stricter      nous déclarons un conflit là où Git fusionne (prudence voulue)
+#   line-endings  écart voulu sur les fins de ligne ; il disparaît quand on donne à
+#                 Git les mêmes fichiers aux fins de ligne normalisées
+#
+# Il n'existe pas de relation « plus laxiste que Git » : le test l'interdit.
+
+css-both-append | same |
+css-both-append-same | same |
+css-one-line-apart | same |
+emptied-by-them | same |
+final-newline-removed-by-us | same |
+js-blank-run-vs-neighbour | stricter | notre côté retire une ligne vide parmi trois : laquelle, on ne peut pas le dire. Git la place en bas, à deux lignes du changement d'en face ; placée en haut elle le toucherait. Zone ambiguë au contact d'un changement opposé : conflit.
+js-many-disjoint | same |
+js-moved-line-near-edit | same |
+lone-cr | same |
+long-line | same |
+markers-in-base | same |
+mixed-endings-disjoint | same |
+no-final-newline-all | same |
+nothing-changed | same |
+php-adjacent-lines | same |
+php-both-add-method-same-place | same |
+php-crlf-disjoint | same |
+php-delete-vs-modify | same |
+php-disjoint-methods | same |
+php-identical-fix | same |
+php-new-method-after-edited-statement | stricter | la méthode ajoutée peut se lire insérée après l'accolade fermante ou avant elle (la ligne « } » existe des deux côtés du point d'insertion). Dans la seconde lecture elle touche l'instruction modifiée en face. Git choisit la première et fusionne ; nous montrons le conflit.
+php-new-method-far-from-edit | same |
+php-reindent-vs-far-edit | same |
+php-reindent-vs-same-line | same |
+php-same-line | same |
+php-their-crlf-conversion | line-endings | leur côté a converti le fichier en CRLF : pour Git chaque ligne a changé, d'où un conflit avec notre ligne modifiée. Pour nous (spécification, cas 15) une conversion de fins de ligne n'est pas un changement : fusion propre, aux fins de ligne de notre version, et bandeau d'information.
+repeated-lines | same |
+spec-01 | same |
+spec-02 | same |
+spec-03 | same |
+spec-04 | same |
+spec-05 | same |
+spec-06 | same |
+spec-07 | same |
+spec-08 | same |
+spec-09 | same |
+spec-10 | same |
+spec-11 | same |
+spec-12 | same |
+spec-14 | same |
+spec-15 | line-endings | cas 15 de la spécification : leur conversion en CRLF seule n'est pas un changement. Git compare les octets et voit un conflit sur la ligne que nous avons modifiée.
+spec-16 | line-endings | cas 16 de la spécification : les deux fusionnent sans conflit, mais Git prend leur fichier entier (en LF) alors que le résultat suit les fins de ligne de notre version (CRLF).
+spec-17 | same |
+spec-18 | same |
+spec-19 | same |
+spec-20 | same |
+spec-21 | same |
+spec-22 | same |
+spec-23 | same |
+spec-25 | same |
+spec-26 | same |

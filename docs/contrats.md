@@ -409,3 +409,220 @@ Versions fixées dans `[workspace.dependencies]` du `Cargo.toml` racine ; une cr
 - Journal d'exécution (fichier de log) commun.
 - UTF-16 et détection des fichiers binaires à la lecture.
 - Plafond du nombre de tâches simultanées, si la mesure en montre le besoin.
+
+
+## 8. `julie-vcs` (dev-git, lot 2 de la v0)
+
+Détail et exemples en tête de `crates/vcs/src/lib.rs`. Ne dépend que de
+`julie-core` ; ne connaît pas `julie-diff` (c'est `app` qui passe les versions
+d'un conflit au moteur de fusion et rend le résultat).
+
+### Service (fil de l'interface)
+
+`Vcs::new(tasks, &settings)` (`settings: VcsSettings` = section `[vcs]`,
+`git_path: Option<PathBuf>`). Chaque méthode lance une tâche `Domain::Vcs` et rend
+un `TaskHandle` ; le résultat arrive en `VcsEvent` (`event.get::<julie_vcs::VcsEvent>()`).
+
+| Méthode | Clé de tâche | Événements publiés |
+|---|---|---|
+| `open(dir)` | `vcs.open` | `Opened(Repository)` puis `Status`, ou `NoRepository { dir }` |
+| `refresh_status(&repo)` | `vcs.status` | `Status(Status)` |
+| `notify_disk_change(&repo, &paths)` | `vcs.status` | `Status`, 300 ms après le dernier changement pertinent ; une tâche à la fois (`None` si déjà prévue) |
+| `load_diff(&repo, DiffRequest)` | `vcs.diff` | `Diff(DiffSides)` |
+| `commit(&repo, CommitRequest)` | `vcs.commit` | `Committed(CommitOutcome)` puis `Status` |
+| `load_log(&repo, LogQuery)` | `vcs.log` | `Log(LogPage)` |
+| `load_commit(&repo, id)` | `vcs.commit_details` | `CommitDetails(CommitDetails)` |
+| `load_conflict(&repo, path)` | `vcs.conflict` | `Conflict(ConflictVersions)` |
+| `resolve_conflict(&repo, path, octets, attendu)` | `vcs.resolve` | `Resolved { path }` puis `Status` |
+| `accept_side(&repo, paths, ConflictSide)` | `vcs.accept_side` | `SideAccepted { side, files }` puis `Status` |
+| `continue_operation(&repo, message)` | `vcs.continue` | `OperationContinued(ContinueOutcome)` puis `Status` |
+| `abort_operation(&repo)` | `vcs.abort` | `OperationAborted(OperationKind)` puis `Status` |
+
+- Toute commande Git lancée publie `VcsEvent::Command(CommandRecord)` deux fois
+  (début, `result: None` ; fin, avec durée, code, sortie tronquée à 16 Kio), même
+  `id` : c'est l'onglet Console. `vcs.command_log()` en rend une copie (500
+  dernières) sans accès disque.
+- Échec : `VcsEvent::Failed(Failure { action, error })` **et** tâche `Failed`.
+  La sortie de Git (crochets compris) est dans `VcsError::GitFailed { stdout,
+  stderr, .. }`. Annulation : rien d'autre que `Cancelled`.
+- Après toute écriture, réussie ou non, un `Status` frais suit. Les écritures sont
+  sérialisées entre elles.
+
+### Types principaux
+
+- `Repository` : `work_tree()` (écrit comme le dossier donné à `open`, non
+  canonisé), `git_dir()`, `to_repo_path(&Path)`, `to_absolute(&str)`,
+  `operation()`.
+- `Status { head: Head, upstream: Option<Upstream>, operation: Option<Operation>, files }` ;
+  `Head::Branch { name, commit: Option<_> }` (`None` : dépôt sans commit) ou
+  `Head::Detached { commit }` ; `Upstream { name, ahead_behind }` ;
+  `Operation { kind: Merge | Rebase | CherryPick | Revert, message (MERGE_MSG), their_commit, rebase_branch }`.
+- `FileStatus { path, repo_path, original_path, original_repo_path, kind, staged, unstaged, conflict, submodule }` ;
+  `kind` : `Modified | Added | Deleted | Renamed | Copied | TypeChanged | Untracked | Conflicted` ;
+  `group()` : `Conflicted | Changed | Untracked` ; `conflict` : `ConflictKind`
+  (`BothModified`, `BothAdded`, `BothDeleted`, `AddedByUs`, `AddedByThem`,
+  `DeletedByUs`, `DeletedByThem`, avec `involves_deletion()`).
+- `Content` : `Missing | Blob { bytes, mode } | TooLarge { size } | Submodule { commit } | Directory` ;
+  `is_binary()` (NUL dans les 8 premiers Kio), `size()`, `into_bytes()`.
+  Les versions tirées de Git passent par `git cat-file --filters` : octets tels
+  que Git les écrirait sur le disque (`autocrlf` compris). Au-delà de 20 Mio :
+  `TooLarge`.
+- `Revision` : `Absent | Head | Index | Stage(Base | Ours | Theirs) | Commit(id) | WorkTree`.
+  `DiffRequest::local_change(&FileStatus)` (HEAD de l'ancien chemin → disque),
+  `DiffRequest::commit_file(id, &CommitFile)` (premier parent → commit).
+- `CommitRequest { paths, message, amend }` ; `CommitOutcome { commit, subject, amended, output }`.
+- `LogQuery { revision: Option<String>, skip, limit }` (500 par défaut,
+  `next_page()`) ; `LogPage { commits, has_more }` ; `CommitSummary { id, short_id,
+  parents, author, committer, subject, refs }` (`is_merge()`) ; `Person { name,
+  email, time (Unix), offset_minutes }` ; `RefLabel { kind, name, current }`.
+- `CommitDetails { summary, message, files: Vec<CommitFile> }` ; `CommitFile {
+  path, repo_path, original_*, change, parent }`.
+- `ConflictVersions { path, repo_path, kind, operation, base, ours, theirs, work_tree }`.
+  Pendant un rebase, `ours` est la branche sur laquelle on rejoue (sens de Git).
+- `ContinueOutcome { kind, finished, head, conflicts, output }` (`finished:
+  false` : le rebase s'est arrêté sur un nouveau conflit, ce n'est pas un échec).
+
+### Commandes retenues
+
+- **État** : `git status --porcelain=v2 -z --branch --untracked-files=all` ;
+  opération lue dans le dossier Git (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`,
+  `CHERRY_PICK_HEAD`, `REVERT_HEAD`).
+- **Commit** (confirme la proposition de `git.md`, précisée) :
+  `git add -- <non suivis choisis>` puis
+  `git commit -F - --only [--amend] -- <choisis>` (message sur l'entrée standard ;
+  un renommage choisi entraîne son ancien chemin). Si le commit échoue, l'ajout
+  des non suivis est défait (`git rm --cached --quiet -- …`) : index inchangé.
+  `--amend` sans fichier = message seul (l'index n'est pas validé). Pendant une
+  fusion ou un rebase, le commit de fichiers choisis est refusé
+  (`OperationInProgress`) : Git interdit le commit partiel, on passe par
+  `continue_operation` (`git commit --no-edit` ou `-F -` pour une fusion,
+  `git <op> --continue` sinon).
+- **Conflits** : étages par `git ls-files -s -z`, contenu par `git cat-file
+  --filters --path=<chemin> <oid>` ; enregistrer = écriture atomique
+  (`file::write_atomic`) puis `git add --all -- <chemin>` ; garder un côté =
+  `git checkout --ours|--theirs -- …` + `git add`, ou `git rm` si ce côté avait
+  supprimé le fichier ; abandon = `git <op> --abort`.
+- **Journal** : `git log -z --date=raw --decorate=full --format=… --skip --max-count
+  --end-of-options <rév> --` ; fichiers : `git diff-tree -r -z -M --name-status`
+  contre le premier parent (`--root` pour un commit racine).
+
+### Environnement de chaque appel
+
+`--no-pager -c color.ui=false -c core.quotepath=false -c log.showSignature=false` ;
+`LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=:`, `GIT_SEQUENCE_EDITOR=:`,
+`GIT_MERGE_AUTOEDIT=no`, `GIT_LITERAL_PATHSPECS=1` (un nom avec `[` n'est pas un
+motif), `GIT_OPTIONAL_LOCKS=0` pour les lectures ; `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE` hérités retirés. Crochets et signature jamais contournés.
+Destructif seulement sur demande nommée : `accept_side` (écrase ou supprime le
+fichier) et `abort_operation`.
+
+## 9. `julie-diff` (dev-fusion-diff, lot 2 de la v0)
+
+Bibliothèque **pure** : ni Git, ni fichiers, ni bus, ni service. Elle reçoit des
+`&str`, elle rend des structures ; `app` l'appelle directement, ou dans une tâche
+qu'elle lance elle-même pour un gros fichier (`Domain::Diff`). Spécification :
+`docs/specs/fusion.md` (les 26 cas sont des tests) et `docs/specs/git.md` (diff
+côte à côte). Documentation complète et exemples exécutés : tête de
+`crates/diff/src/lib.rs`.
+
+### Conventions
+
+- **Lignes** numérotées à partir de zéro selon `TextLines` : fin de ligne = `\n`
+  ou `\r\n` ; un `\r` isolé reste dans la ligne (comme Git) ; texte vide = zéro
+  ligne. Plages `début..fin`, fin exclue ; plage vide = point d'insertion.
+  `TextLines::new(texte)` donne `len()`, `content(i)`, `ending(i)`,
+  `byte_range(i)`, `has_bom()`, `has_final_newline()`, `style()`.
+- **Entrées = contenu exact des fichiers**, fins de ligne comprises. Pour la
+  fusion, partir des octets de `julie_vcs::ConflictVersions` (`String::from_utf8` ;
+  un échec = fichier non UTF-8 = pas de dialogue) et **non** du texte normalisé en
+  `\n` de `julie_core::file::read_text`, sinon les fins de ligne d'origine sont
+  perdues. Une BOM en tête est acceptée, ignorée dans les comparaisons, et remise
+  en tête du résultat si notre version en avait une : `result_text().into_bytes()`
+  se passe tel quel à `julie_vcs::resolve_conflict`.
+- Colonnes : `InlineSpan::range` est en **octets** dans le contenu de la ligne
+  (frontières de caractères garanties) ; `MergeSession::edit` prend des
+  `julie_core::TextPosition` (colonnes en caractères).
+- Erreurs : `DiffError` (en pratique l'annulation seule, `is_cancelled()`) pour
+  les calculs ; `SessionError` pour un geste refusé (`UnknownBlock`,
+  `SideNotApplicable`, `AlreadyAccepted`, `AlreadyIgnored`, `NotAConflict`,
+  `OutOfRange`) — un refus ne change rien et ne laisse rien dans l'historique.
+
+### Diff à deux côtés
+
+```rust
+let diff = julie_diff::diff_lines(&left, &right, &DiffOptions::default(), cancel)?;
+```
+
+| Type | Contenu |
+|---|---|
+| `DiffOptions { whitespace, line_endings_matter, final_newline_matters, inline }` | Défaut : espaces exacts, style de fin de ligne et saut final **hors blocs** (rapportés à part), affinage calculé. `DiffOptions::exact()` : à l'octet près. `Whitespace` : `Exact`, `IgnoreTrailing`, `IgnoreAmount`, `IgnoreAll`. |
+| `Diff { hunks, left_line_count, right_line_count, left_style, right_style, final_newline, identical }` | `only_line_endings_differ()` (« Seules les fins de ligne diffèrent »), `final_newline` : `Same`, `Added`, `Removed` (à signaler en bas), `changed_line_counts()`. Compteur « n différences » = `hunks.len()`. |
+| `Hunk { kind, left, right, inline }` | `HunkKind` : `Added` (gauche vide), `Removed` (droite vide), `Modified`. Blocs dans l'ordre, séparés par au moins une ligne identique. |
+| `InlineDiff { left, right }`, `InlineSpan { line, range }` | Portions modifiées au mot, au caractère entre deux mots proches ; `None` au-delà de 400 lignes ou 100 Ko par côté. |
+| `diff.alignment() -> Vec<AlignedRange { left, right, hunk }>` | Couvre les deux textes sans trou : connecteurs et défilement synchronisé. |
+| `diff.left_to_right(ligne)`, `right_to_left(ligne) -> LineMatch` | `Same(ligne)` ou `Changed { hunk, other }`. |
+
+### Fusion à trois volets
+
+```rust
+// base, notre version (gauche), leur version (droite) ; pas d'ancêtre : base = ""
+let mut session = MergeSession::new(&base, &ours, &theirs, cancel)?;   // rien n'est appliqué
+session.apply_non_conflicting(ApplyScope::All);        // ou Left, Right ; rend le nombre appliqué
+session.accept(id, Side::Left)?;                       // flèche ; sur un conflit dont l'autre côté
+                                                       // est accepté : « ajouter à la suite »
+session.ignore(id, Side::Right)?;                      // croix
+session.accept_both(id, Side::Left)?;                  // les deux, une seule étape annulable
+session.edit(start, end, "texte")?;                    // frappe (TextPosition)
+session.replace_lines(3..4, &["ligne"])?;              // frappe par lignes entières
+session.undo(); session.redo();                        // frappe et clics, compteur compris
+let MergeCounts { changes, conflicts } = session.counts();
+if session.is_all_resolved() { /* « Tout est traité » */ }
+let texte = session.result_text();                     // à écrire tel quel
+```
+
+| Méthode | Sert à |
+|---|---|
+| `blocks() -> Vec<Block>`, `block(id)` | `Block { id, kind, base, ours, theirs, result, left, right, resolved }` ; `kind` : `Left`, `Right`, `Identical`, `Conflict` ; `left`/`right` : `SideState` (`NotApplicable`, `Pending`, `Accepted`, `Ignored`) ; `result` = place **actuelle** au centre. `can_accept(side)`, `accept_appends(side)`, `can_ignore(side)` disent quelles commandes dessiner. `shape(side) -> HunkKind` donne la couleur (ajout, suppression, modification). `id` = indice stable. |
+| `alignment() -> Vec<AlignedSegment { left, result, right, block }>` | Correspondance des trois volets, sans trou. |
+| `result_lines()`, `result_line(i)`, `result_line_count()` | Le centre, ligne par ligne, sans fins de ligne. |
+| `counts()`, `is_all_resolved()`, `is_touched()` | Compteur ; état « tout est traité » ; « quelque chose a été fait » (confirmation à la fermeture). |
+| `next_pending(courant)`, `previous_pending(courant)`, `block_at_result_line(ligne)` | F7 / Maj+F7, bloc courant. |
+| `line_endings() -> LineEndingReport { base, ours, theirs, result, differ }` | `differ` : afficher le bandeau. |
+| `merge_last_two_steps()` | Regrouper une rafale de frappe en une seule étape annulable. |
+| `ours()`, `theirs()`, `base()`, `chunks()` | Les textes des volets et le découpage d'origine. |
+
+Aussi : `merge_chunks(&base, &ours, &theirs, cancel) -> Vec<Chunk>` (découpage
+classé seul : `ChunkKind` = `Unchanged`, `Left`, `Right`, `Identical`, `Conflict`)
+et `merge(base, ours, theirs, cancel) -> MergeOutcome { text, conflicts }`
+(fusion d'un trait, sans interface).
+
+### Décisions à connaître
+
+- **Accepter les deux côtés d'un conflit** (question ouverte de la
+  spécification) : **ordre des clics**. Le premier côté accepté remplace le texte
+  du bloc ; le second s'ajoute à la fin du bloc.
+- **Frappe et blocs** : taper dans un bloc ne le résout pas ; le bloc grandit ou
+  rétrécit avec le texte. Une ligne insérée pile entre un bloc et sa voisine reste
+  hors du bloc, sauf si la frappe est partie d'une ligne du bloc (Entrée en fin
+  de dernière ligne).
+- **Saut de ligne final** : il ne s'édite pas, il suit la règle de la
+  spécification (dernière ligne venue d'une version : comme dans cette version ;
+  dernière ligne tapée : comme notre version). `edit` accepte la position
+  `(nombre de lignes, 0)` pour « la fin du texte ».
+- **Plus prudent que Git, exprès** : un changement dont la place est ambiguë
+  (ligne vide retirée d'une série, fonction insérée entre deux accolades, ligne
+  déplacée) est testé sur toute sa zone d'ambiguïté. D'où parfois un conflit là
+  où `git merge-file` fusionne, et parfois un seul bloc pour deux changements
+  voisins du même côté. Jamais l'inverse sur le corpus et les tirages aléatoires.
+- **Fins de ligne** : `\r\n` et `\n` sont la même ligne (cas 15) ; Git, lui, y
+  voit un changement. Écarts listés dans `tests/fixtures/diff/merge/cases.txt`.
+- Les limites de taille (20 Mio, 200 000 lignes), la détection du binaire et du
+  non-UTF-8 sont à la charge de l'appelant (`julie-vcs` les donne) : la crate ne
+  refuse rien.
+
+### Prévu, pas livré
+
+Modules `julie_diff::resolve` (résolution automatique des conflits simples) et
+`julie_diff::patch` (diff unifié) : emplacements réservés, vides. Options
+« ignorer les espaces » dans la fusion. Affinage au mot dans les blocs de fusion
+(appeler `diff_lines` sur les textes d'un bloc en attendant).

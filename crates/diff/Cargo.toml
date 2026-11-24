@@ -7,3 +7,7 @@ publish.workspace = true
 
 [dependencies]
 julie-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

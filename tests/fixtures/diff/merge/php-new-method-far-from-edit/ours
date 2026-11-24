@@ -1,0 +1,49 @@
+<?php
+
+namespace App\Stock;
+
+use App\Entity\Sample;
+use App\Repository\SampleRepository;
+
+/**
+ * Inventaire des échantillons d'un congélateur.
+ */
+class Inventory
+{
+    private SampleRepository $samples;
+    private int $capacity;
+
+    public function __construct(SampleRepository $samples, int $capacity)
+    {
+        $this->samples = $samples;
+        $this->capacity = $capacity;
+    }
+
+    public function count(): int
+    {
+        return $this->samples->countAll();
+    }
+
+    public function isFull(): bool
+    {
+        return $this->count() >= $this->capacity;
+    }
+
+    public function add(Sample $sample): void
+    {
+        if ($this->isFull()) {
+            throw new \RuntimeException('Congélateur plein');
+        }
+        $this->samples->save($sample);
+    }
+
+    public function remove(Sample $sample): void
+    {
+        $this->samples->delete($sample);
+    }
+
+    public function clear(): void
+    {
+        $this->samples->deleteAll();
+    }
+}

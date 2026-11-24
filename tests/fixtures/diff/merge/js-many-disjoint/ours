@@ -1,0 +1,19 @@
+import { fetchSamples } from './api';
+
+const PAGE_SIZE = 100;
+
+export function listSamples(page) {
+  const offset = page * PAGE_SIZE;
+  return fetchSamples({ offset, limit: PAGE_SIZE });
+}
+
+export function formatSample(sample) {
+  const name = sample.name.trim().toUpperCase();
+  const date = new Date(sample.createdAt);
+
+  return `${name} (${date.getFullYear()})`;
+}
+
+export function sortSamples(samples) {
+  return [...samples].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}

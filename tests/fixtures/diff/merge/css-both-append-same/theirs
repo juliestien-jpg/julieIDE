@@ -1,0 +1,12 @@
+.sample {
+  color: #333;
+  padding: 4px;
+}
+
+.sample--expired {
+  color: #a00;
+}
+
+.sample--new {
+  color: #060;
+}
