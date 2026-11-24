@@ -1,0 +1,25 @@
+# Messages clairs quand PHP, PHPUnit ou phpunit.xml manquent (trois dossiers jetables).
+# Préparer (voir docs/essais.md) : %TEMP%\jsessai-sans-phpunit (pas de vendor/bin/phpunit),
+# %TEMP%\jsessai-sans-xml (pas de phpunit.xml), %TEMP%\jsessai-php-invalide (réglage php_path faux).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-sans-phpunit
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait-idle
+screenshot target/essais/prerequis/01-sans-phpunit.png
+state target/essais/prerequis/01.json
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-sans-xml
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait-idle
+screenshot target/essais/prerequis/02-sans-xml.png
+state target/essais/prerequis/02.json
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-php-invalide
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait-idle
+screenshot target/essais/prerequis/03-php-invalide.png
+state target/essais/prerequis/03.json
+quit

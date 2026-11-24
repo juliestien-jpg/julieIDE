@@ -1,0 +1,11 @@
+# 10 000 lignes, 400 blocs : ouverture et « appliquer tous » (préparer : tests/fixtures/conflit-gros.sh).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-gros
+action view.git
+wait-idle
+ui merge.open gros.txt
+wait-idle
+ui merge.apply all
+wait-idle
+state target/essais/gros/applique.json
+screenshot target/essais/gros/applique.png
+quit

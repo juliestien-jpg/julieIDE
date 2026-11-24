@@ -1,0 +1,30 @@
+# Le dialogue de fusion en 1280x720 et 1920x1080, thèmes sombre et clair, échelles 100 % et 150 %.
+# Préparer : tests/fixtures/labmate-clone.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-fusion
+action view.git
+wait-idle
+ui merge.open README.md
+wait-idle
+wait 400
+screenshot target/essais/ecrans/01-1280x720-sombre-100.png
+theme light
+wait 200
+screenshot target/essais/ecrans/02-1280x720-clair-100.png
+theme dark
+ui merge.apply all
+ui merge.accept 0 left
+resize 1920 1080
+wait 500
+screenshot target/essais/ecrans/03-1920x1080-sombre-100.png
+theme light
+wait 200
+screenshot target/essais/ecrans/04-1920x1080-clair-100.png
+theme dark
+scale 1.5
+wait 500
+screenshot target/essais/ecrans/05-1920x1080-sombre-150.png
+resize 1280 720
+wait 500
+screenshot target/essais/ecrans/06-1280x720-sombre-150.png
+state target/essais/ecrans/06.json
+quit

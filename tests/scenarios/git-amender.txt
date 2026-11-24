@@ -1,0 +1,10 @@
+# Amender le dernier commit (message seul, rien de coché).
+# Préparer : tests/fixtures/labmate-changes.sh puis jouer git-commit-clavier.txt (un commit existe).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+wait-idle
+ui git.amend on
+ui git.message Message amendé depuis l'IDE
+ui git.commit
+wait-idle
+state target/essais/amender/01.json
+quit

@@ -109,6 +109,8 @@ pub struct StatusModel {
     pub ahead_behind: Option<(u32, u32)>,
     pub tasks: Vec<TaskInfo>,
     pub message: Option<(String, bool)>,
+    /// Opération Git en cours et fichiers en conflit (pastille de la barre).
+    pub operation: Option<String>,
 }
 
 impl StatusModel {
@@ -124,6 +126,7 @@ impl StatusModel {
             "ahead_behind": self.ahead_behind,
             "tasks": self.tasks.iter().map(|t| t::task_label(t.kind)).collect::<Vec<_>>(),
             "message": self.message.as_ref().map(|(m, _)| m),
+            "operation": self.operation,
         })
     }
 }
@@ -149,6 +152,14 @@ pub fn show(ui: &mut Ui, p: &Palette, model: &StatusModel) {
         }
         for task in &model.tasks {
             task_widget(ui, p, task);
+        }
+        if let Some(operation) = &model.operation {
+            ui.label(
+                egui::RichText::new(operation)
+                    .color(p.error)
+                    .size(12.5)
+                    .strong(),
+            );
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 14.0;

@@ -1,0 +1,27 @@
+# Arrêter une exécution (test qui dort 30 s) et PHP qui plante (exit(1)).
+# Préparer : copies de tests/fixtures/phpunit dont phpunit.xml a defaultTestSuite="slow" (%TEMP%\jsessai-lent)
+# ou "crash" (%TEMP%\jsessai-plante), avec le réglage phpunit_path de tests/fixtures/phpunit-copy.sh.
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-lent
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait 1500
+screenshot target/essais/arret/01-en-cours.png
+state target/essais/arret/01-en-cours.json
+key Ctrl+Maj+F10
+wait 300
+state target/essais/arret/01b-relance-demandee.json
+screenshot target/essais/arret/01b-confirmer-relance.png
+ui cancel
+key Ctrl+F2
+wait-idle
+screenshot target/essais/arret/02-arrete.png
+state target/essais/arret/02-arrete.json
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-plante
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait-idle
+screenshot target/essais/arret/03-php-plante.png
+state target/essais/arret/03-plante.json
+quit

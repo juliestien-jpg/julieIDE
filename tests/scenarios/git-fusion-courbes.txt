@@ -1,0 +1,18 @@
+# Blocs de hauteurs différentes : connecteurs courbes, défilement synchronisé.
+# Préparer : tests/fixtures/conflits-varies.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-conflits
+action view.git
+wait-idle
+ui merge.open longs.txt
+wait-idle
+wait 300
+screenshot target/essais/courbes/01-avant.png
+state target/essais/courbes/01-avant.json
+ui merge.apply all
+screenshot target/essais/courbes/02-non-conflictuels-appliques.png
+ui merge.accept 0 right
+screenshot target/essais/courbes/03-conflit-accepte-a-droite.png
+ui merge.focus 30
+wait 400
+screenshot target/essais/courbes/04-defilement-synchronise.png
+quit

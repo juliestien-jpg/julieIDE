@@ -17,13 +17,18 @@ use eframe::egui::{self, vec2, Frame, Id, Key, Margin, Modifiers, Sense};
 use julie_core::bus::Bus;
 use julie_core::file::LineEnding;
 use julie_core::{Domain, DomainEvent, Event, Settings, TaskId, Tasks, TextPosition};
+use julie_diff::{ApplyScope, MergeSession, Side};
 use julie_index::{IndexEvent, IndexService, IndexSettings};
+use julie_phpunit::{PhpUnit, PhpUnitEvent, PhpUnitSettings, RunRequest};
 use julie_terminal::{TerminalEvent, TerminalSettings};
 use julie_text::{TextError, TextEvent};
-use julie_vcs::{Vcs, VcsEvent, VcsSettings};
+use julie_vcs::{ConflictSide, ConflictVersions, DiffSides, Vcs, VcsEvent, VcsSettings};
 
 use crate::actions::{ActionId, Menu, Registry};
+use crate::diffpane::{self, DiffPane};
+use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, RepoState};
 use crate::icons::{self, Icon};
+use crate::merge::{self, MergeDialog, MergeIntent};
 use crate::project::{self, Channel, GitInfo, Msg, ProjectState};
 use crate::scenario::{self, Injection, Scenario, Step};
 use crate::search::find_in_files::{self, FindInFiles};
@@ -32,12 +37,15 @@ use crate::search::palette::{self, ActionPalette};
 use crate::status::{self, StatusModel, TaskTracker};
 use crate::tabs::{BannerIntent, Editors, Goto, TabIntent};
 use crate::terminal::{TerminalIntent, TerminalPanel};
+use crate::testsview::{TestsIntent, TestsView};
 use crate::texts as t;
 use crate::theme::{self, Palette};
 use crate::tools::{self, BottomTool, ToolWindows};
 use crate::tree::ProjectTree;
 
 /// Ce que la ligne de commande demande.
+mod scenario_ui;
+
 pub struct Options {
     pub scenario: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
@@ -54,6 +62,38 @@ struct Message {
     text: String,
     error: bool,
     at: Instant,
+}
+
+/// Ce que publient les tâches de calcul de l'application (domaine `Diff`).
+enum AppDiffEvent {
+    /// Un diff calculé, pour l'aperçu ou la grande fenêtre.
+    Prepared {
+        job: DiffJob,
+        prepared: Box<diffpane::Prepared>,
+    },
+    /// La session de fusion est prête.
+    MergeReady {
+        versions: Box<ConflictVersions>,
+        session: Box<MergeSession>,
+    },
+}
+
+/// Ce qu'une tâche de diff doit calculer.
+enum PrepareInput {
+    Sides(Box<DiffSides>, String),
+    Texts {
+        title: String,
+        left_title: String,
+        right_title: String,
+        left: String,
+        right: String,
+    },
+}
+
+/// La grande fenêtre de diff (changements locaux, fichier d'un commit,
+/// attendu / obtenu).
+struct DiffWindow {
+    pane: DiffPane,
 }
 
 pub struct JulieStormApp {
@@ -89,6 +129,11 @@ pub struct JulieStormApp {
     scenario_active: bool,
     injected: VecDeque<Injection>,
     remember_last: bool,
+    git: GitView,
+    tests: TestsView,
+    merge: Option<MergeDialog>,
+    diff_window: Option<DiffWindow>,
+    last_status_poll: Instant,
 }
 
 impl JulieStormApp {
@@ -142,6 +187,11 @@ impl JulieStormApp {
             scenario_active: false,
             injected: VecDeque::new(),
             remember_last: options.scenario.is_none() || project::state_dir_overridden(),
+            git: GitView::new(dark),
+            tests: TestsView::new(PathBuf::new(), None),
+            merge: None,
+            diff_window: None,
+            last_status_poll: Instant::now(),
         };
 
         if let Some(file) = &options.scenario {
@@ -169,8 +219,14 @@ impl JulieStormApp {
     }
 
     fn say(&mut self, text: impl Into<String>, error: bool) {
+        // Une seule ligne dans la barre d'état ; le détail est dans la Console Git.
+        let text: String = text.into();
+        let mut text = text.lines().next().unwrap_or_default().to_owned();
+        if text.chars().count() > 160 {
+            text = text.chars().take(157).collect::<String>() + "…";
+        }
         self.message = Some(Message {
-            text: text.into(),
+            text,
             error,
             at: Instant::now(),
         });
@@ -223,6 +279,7 @@ impl JulieStormApp {
         let index_settings: IndexSettings = settings.section("index").unwrap_or_default();
         let vcs_settings: VcsSettings = settings.section("vcs").unwrap_or_default();
         let terminal_settings: TerminalSettings = settings.section("terminal").unwrap_or_default();
+        let phpunit_settings = PhpUnitSettings::from_settings(&settings).unwrap_or_default();
 
         if let Some(old) = &self.project {
             old.index.cancel_search();
@@ -247,6 +304,17 @@ impl JulieStormApp {
             root.clone(),
             terminal_settings,
         ));
+        self.git = GitView::new(self.dark);
+        self.merge = None;
+        self.diff_window = None;
+        self.tests = TestsView::new(
+            root.clone(),
+            Some(PhpUnit::new(
+                self.tasks.clone(),
+                project.clone(),
+                phpunit_settings,
+            )),
+        );
         self.project = Some(ProjectState {
             project,
             index,
@@ -300,11 +368,114 @@ impl JulieStormApp {
             }
             Domain::Vcs => {
                 if let Some(event) = event.get::<VcsEvent>() {
-                    self.on_vcs(event);
+                    self.on_vcs(task, event);
                 }
             }
-            Domain::Diff | Domain::PhpUnit => {}
+            Domain::PhpUnit => {
+                if let Some(event) = event.get::<PhpUnitEvent>() {
+                    self.tests.on_event(task, event);
+                    // Fin d'exécution : notification si la fenêtre des tests est cachée.
+                    if let PhpUnitEvent::RunFinished(summary) = event {
+                        let visible =
+                            self.tools.bottom_open && self.tools.bottom == BottomTool::Tests;
+                        if !visible && task == self.tests.run_task {
+                            self.say(
+                                t::tests_summary(summary, summary.duration),
+                                !summary.is_green(),
+                            );
+                        }
+                    }
+                }
+            }
+            Domain::Diff => {
+                if let Ok(event) = event.take::<AppDiffEvent>() {
+                    self.on_diff_event(event);
+                }
+            }
         }
+    }
+
+    fn on_diff_event(&mut self, event: AppDiffEvent) {
+        match event {
+            AppDiffEvent::Prepared { job, prepared } => match job.target {
+                DiffTarget::Preview => {
+                    if self.git.accepts(job) {
+                        self.git.set_preview(*prepared, &self.waker);
+                    }
+                }
+                DiffTarget::Window => {
+                    let mut pane = DiffPane::new("diff-fenetre", self.dark);
+                    pane.set(*prepared, &self.waker);
+                    self.diff_window = Some(DiffWindow { pane });
+                }
+            },
+            AppDiffEvent::MergeReady { versions, session } => {
+                self.git.merge_loading = None;
+                let Some(project) = &self.project else { return };
+                let (our_branch, their_branch) = match &self.git.status() {
+                    Some(status) => (
+                        project.branch_name(),
+                        status
+                            .operation
+                            .as_ref()
+                            .and_then(|o| o.message.as_deref())
+                            .and_then(merge::their_name),
+                    ),
+                    None => (None, None),
+                };
+                self.merge = Some(MergeDialog::new(
+                    &versions,
+                    *session,
+                    project.project.root(),
+                    our_branch,
+                    their_branch,
+                    &self.waker,
+                    self.dark,
+                ));
+            }
+        }
+    }
+
+    /// Lance le calcul d'un diff dans une tâche de fond.
+    fn spawn_prepare(&mut self, job: DiffJob, input: PrepareInput) {
+        self.tasks.spawn(Domain::Diff, "diff.compute", move |ctx| {
+            let prepared = match input {
+                PrepareInput::Sides(sides, title) => {
+                    diffpane::prepare_sides(&sides, title, ctx.cancel_token())
+                }
+                PrepareInput::Texts {
+                    title,
+                    left_title,
+                    right_title,
+                    left,
+                    right,
+                } => diffpane::prepare_texts(
+                    title,
+                    left_title,
+                    right_title,
+                    left,
+                    right,
+                    ctx.cancel_token(),
+                ),
+            };
+            ctx.publish(AppDiffEvent::Prepared {
+                job,
+                prepared: Box::new(prepared),
+            });
+            Ok(())
+        });
+    }
+
+    fn spawn_merge(&mut self, versions: ConflictVersions, inputs: merge::Inputs) {
+        self.tasks.spawn(Domain::Diff, "diff.merge", move |ctx| {
+            if let Some(session) = merge::build_session(&inputs, ctx.cancel_token()) {
+                ctx.publish(AppDiffEvent::MergeReady {
+                    versions: Box::new(versions),
+                    session: Box::new(session),
+                });
+            }
+            Ok(())
+        });
     }
 
     fn on_text(&mut self, event: TextEvent) {
@@ -323,6 +494,7 @@ impl JulieStormApp {
             }
             TextEvent::Saved(outcome) => {
                 self.editors.on_saved(&outcome);
+                self.git.invalidate_diff();
                 if let Some(project) = &self.project {
                     if let Some(repo) = &project.repo {
                         project.vcs.refresh_status(repo);
@@ -366,26 +538,215 @@ impl JulieStormApp {
         }
     }
 
-    fn on_vcs(&mut self, event: &VcsEvent) {
-        let Some(project) = &mut self.project else {
-            return;
-        };
+    fn on_vcs(&mut self, task: Option<TaskId>, event: &VcsEvent) {
+        let mut intents = Vec::new();
+        self.git.on_vcs(event, &mut intents);
         match event {
-            VcsEvent::Opened(repo) => project.repo = Some(repo.clone()),
+            VcsEvent::Opened(repo) => {
+                if let Some(project) = &mut self.project {
+                    project.repo = Some(repo.clone());
+                }
+            }
             VcsEvent::NoRepository { .. } => {
-                project.git = GitInfo::NoRepository;
+                if let Some(project) = &mut self.project {
+                    project.git = GitInfo::NoRepository;
+                }
                 self.tree.set_git(None);
             }
             VcsEvent::Status(status) => {
                 self.tree.set_git(Some(status));
-                project.git = GitInfo::Repository(Box::new(status.clone()));
+                self.git.on_status(status);
+                if let Some(project) = &mut self.project {
+                    project.git = GitInfo::Repository(Box::new(status.clone()));
+                }
+            }
+            VcsEvent::Diff(sides) => {
+                if let Some(job) = self.git.take_job(task) {
+                    let root = self
+                        .project
+                        .as_ref()
+                        .map(|p| p.project.root().to_path_buf());
+                    let title = diffpane::request_title(&sides.request, root.as_deref());
+                    self.spawn_prepare(job, PrepareInput::Sides(Box::new(sides.clone()), title));
+                }
+            }
+            VcsEvent::Conflict(versions) => match merge::inputs(versions) {
+                Ok(inputs) => self.spawn_merge(versions.clone(), inputs),
+                Err(reason) => {
+                    self.git.merge_loading = None;
+                    let name = file_name(&versions.path);
+                    let reason = match reason {
+                        merge::Ineligible::Deletion => t::MERGE_REASON_DELETION,
+                        merge::Ineligible::OneSide => t::MERGE_REASON_ONE_SIDE,
+                        merge::Ineligible::Binary => t::MERGE_REASON_BINARY,
+                        merge::Ineligible::NotUtf8 => t::MERGE_REASON_NOT_UTF8,
+                        merge::Ineligible::TooLarge => t::MERGE_REASON_TOO_LARGE,
+                        merge::Ineligible::Unsupported => t::MERGE_REASON_UNSUPPORTED,
+                    };
+                    self.say(t::merge_refused(reason, &name), true);
+                }
+            },
+            VcsEvent::Resolved { path } => {
+                if self.merge.as_ref().is_some_and(|m| &m.path == path) {
+                    self.merge = None;
+                    self.focus_editor();
+                }
             }
             VcsEvent::Failed(failure) => {
-                let text = t::git_failed(&failure.error.to_string());
+                if failure.action == julie_vcs::Action::Resolve {
+                    if let Some(dialog) = &mut self.merge {
+                        dialog.on_save_failed(&failure.error);
+                    }
+                }
+                let text = match failure.action {
+                    julie_vcs::Action::Commit | julie_vcs::Action::Continue => {
+                        t::COMMIT_FAILED.to_owned()
+                    }
+                    _ => t::git_failed(&failure.error.to_string()),
+                };
                 self.say(text, true);
             }
-            // Journal, diff, conflits, console : vues de la passe 2.
             _ => {}
+        }
+        self.run_git_intents(intents);
+    }
+
+    fn repo_state(&self) -> RepoState {
+        match self.project.as_ref().map(|p| &p.git) {
+            Some(GitInfo::Repository(_)) => RepoState::Ready,
+            Some(GitInfo::NoRepository) => RepoState::NoRepository,
+            _ => RepoState::Unknown,
+        }
+    }
+
+    /// Exécute ce que la vue Git a demandé.
+    fn run_git_intents(&mut self, intents: Vec<GitIntent>) {
+        if intents.is_empty() {
+            return;
+        }
+        let Some((vcs, repo)) = self
+            .project
+            .as_ref()
+            .and_then(|p| p.repo.clone().map(|r| (p.vcs.clone(), r)))
+        else {
+            return;
+        };
+        for intent in intents {
+            match intent {
+                GitIntent::Refresh => {
+                    vcs.refresh_status(&repo);
+                }
+                GitIntent::RequestDiff { request, job } => {
+                    let handle = vcs.load_diff(&repo, request);
+                    self.git.note_diff_task(handle.id(), job);
+                }
+                GitIntent::OpenFile(path) => self.open_file(path, None),
+                GitIntent::Commit(request) => {
+                    vcs.commit(&repo, request);
+                }
+                GitIntent::ContinueOperation(message) => {
+                    vcs.continue_operation(&repo, message);
+                }
+                GitIntent::AbortOperation => {
+                    vcs.abort_operation(&repo);
+                }
+                GitIntent::AcceptSide { paths, side } => {
+                    vcs.accept_side(&repo, paths, side);
+                }
+                GitIntent::OpenMerge(path) => {
+                    vcs.load_conflict(&repo, path);
+                }
+                GitIntent::LoadLog(query) => {
+                    vcs.load_log(&repo, query);
+                }
+                GitIntent::LoadCommit(id) => {
+                    vcs.load_commit(&repo, id);
+                }
+                GitIntent::Notify(text) => self.say(text, false),
+            }
+        }
+    }
+
+    fn run_merge_intents(&mut self, intents: Vec<MergeIntent>) {
+        for intent in intents {
+            match intent {
+                MergeIntent::Close => {
+                    self.merge = None;
+                    self.focus_editor();
+                }
+                MergeIntent::Save { bytes, expected } => {
+                    let Some((vcs, repo)) = self
+                        .project
+                        .as_ref()
+                        .and_then(|p| p.repo.clone().map(|r| (p.vcs.clone(), r)))
+                    else {
+                        continue;
+                    };
+                    if let Some(dialog) = &self.merge {
+                        vcs.resolve_conflict(&repo, dialog.path.clone(), bytes, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    fn run_tests_intents(&mut self, intents: Vec<TestsIntent>) {
+        for intent in intents {
+            match intent {
+                TestsIntent::Run => self.run_tests(false),
+                TestsIntent::Restart => self.run_tests(true),
+                TestsIntent::Stop => self.stop_tests(),
+                TestsIntent::Open(location) => {
+                    let goto = Goto {
+                        position: location.position,
+                        end: None,
+                    };
+                    self.open_file(location.path, Some(goto));
+                }
+                TestsIntent::Compare {
+                    title,
+                    expected,
+                    actual,
+                } => {
+                    let job = DiffJob {
+                        target: DiffTarget::Window,
+                        token: 0,
+                    };
+                    self.spawn_prepare(
+                        job,
+                        PrepareInput::Texts {
+                            title,
+                            left_title: t::COMPARE_EXPECTED.to_owned(),
+                            right_title: t::COMPARE_ACTUAL.to_owned(),
+                            left: expected,
+                            right: actual,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn run_tests(&mut self, restart: bool) {
+        let Some(service) = self.tests.service.clone() else {
+            return;
+        };
+        self.tools.bottom = BottomTool::Tests;
+        self.tools.bottom_open = true;
+        if self.tests.is_running() {
+            if !restart {
+                self.tests.confirm_restart = true;
+                return;
+            }
+            self.stop_tests();
+        }
+        let handle = service.run(RunRequest::all());
+        self.tests.begin(handle.id());
+    }
+
+    fn stop_tests(&mut self) {
+        if let (Some(service), Some(task)) = (&self.tests.service, self.tests.run_task) {
+            service.stop(task);
         }
     }
 
@@ -398,6 +759,12 @@ impl JulieStormApp {
             ActionId::NextTab | ActionId::PreviousTab => self.editors.items.len() > 1,
             ActionId::GotoFile | ActionId::FindInFiles => self.project.is_some(),
             ActionId::ReloadFromDisk => self.project.is_some() || !self.editors.items.is_empty(),
+            ActionId::GitCommit | ActionId::ToggleCommit | ActionId::GitRefresh => {
+                self.repo_state() == RepoState::Ready
+            }
+            ActionId::TestsRun => self.tests.service.is_some(),
+            ActionId::TestsStop => self.tests.is_running(),
+            ActionId::TestsRerun => self.tests.service.is_some() && self.tests.has_run(),
             _ => true,
         }
     }
@@ -490,12 +857,50 @@ impl JulieStormApp {
             ActionId::ToggleSearch => self.toggle_bottom(BottomTool::Search),
             ActionId::ToggleTerminal => self.toggle_bottom(BottomTool::Terminal),
             ActionId::ToggleTheme => {
-                self.dark = !self.dark;
-                theme::apply(&ctx, self.dark);
-                self.editors.set_dark(self.dark);
+                let dark = !self.dark;
+                self.set_dark(dark);
             }
+            ActionId::GitCommit => {
+                self.tools.bottom = BottomTool::Git;
+                self.tools.bottom_open = true;
+                self.git.show_changes_for_commit();
+            }
+            ActionId::ToggleCommit => {
+                let visible = self.tools.bottom_open
+                    && self.tools.bottom == BottomTool::Git
+                    && self.git.tab == GitTab::Changes;
+                if visible {
+                    self.tools.bottom_open = false;
+                    self.focus_editor();
+                } else {
+                    self.tools.bottom = BottomTool::Git;
+                    self.tools.bottom_open = true;
+                    self.git.show_changes_for_commit();
+                }
+            }
+            ActionId::BottomTall => self.tools.bottom_tall = !self.tools.bottom_tall,
+            ActionId::GitRefresh => {
+                self.git.invalidate_diff();
+                self.run_git_intents(vec![GitIntent::Refresh]);
+            }
+            ActionId::TestsRun => self.run_tests(false),
+            ActionId::TestsRerun => self.run_tests(false),
+            ActionId::TestsStop => self.stop_tests(),
         }
         ctx.request_repaint();
+    }
+
+    fn set_dark(&mut self, dark: bool) {
+        self.dark = dark;
+        theme::apply(&self.ctx, dark);
+        self.editors.set_dark(dark);
+        self.git.set_dark(dark);
+        if let Some(merge) = &mut self.merge {
+            merge.set_dark(dark);
+        }
+        if let Some(window) = &mut self.diff_window {
+            window.pane.set_dark(dark);
+        }
     }
 
     fn toggle_bottom(&mut self, tool: BottomTool) {
@@ -557,7 +962,7 @@ impl JulieStormApp {
     }
 
     fn dispatch_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.dialog.is_some() {
+        if self.dialog.is_some() || self.merge.is_some() || self.diff_window.is_some() {
             return;
         }
         let terminal_focus = self
@@ -620,6 +1025,27 @@ impl JulieStormApp {
         }
     }
 
+    /// L'état Git se relit toutes les 2,5 s tant que la fenêtre est active (un
+    /// changement fait ailleurs, terminal compris, apparaît en moins de 3 s),
+    /// sans relancer une lecture déjà en cours.
+    fn poll_git(&mut self, ctx: &egui::Context) {
+        let focused = ctx.input(|i| i.focused) || self.scenario_active;
+        let Some(project) = &self.project else { return };
+        let Some(repo) = &project.repo else { return };
+        if !focused {
+            return;
+        }
+        const PERIOD: Duration = Duration::from_millis(2500);
+        if self.last_status_poll.elapsed() >= PERIOD {
+            self.last_status_poll = Instant::now();
+            if !self.tracker.kinds().contains(&"vcs.status") {
+                project.vcs.refresh_status(repo);
+            }
+        }
+        let remaining = PERIOD.saturating_sub(self.last_status_poll.elapsed());
+        ctx.request_repaint_after(remaining.max(Duration::from_millis(100)));
+    }
+
     fn poll_disk(&mut self, ctx: &egui::Context) {
         // En mode scénario la fenêtre n'a pas forcément le focus du système.
         let focused = ctx.input(|i| i.focused) || self.scenario_active;
@@ -632,6 +1058,7 @@ impl JulieStormApp {
             self.last_disk_poll = Instant::now();
             self.editors.check_disk(&self.tasks);
             if regained {
+                self.git.invalidate_diff();
                 if let Some(project) = &self.project {
                     if let Some(repo) = &project.repo {
                         project.vcs.refresh_status(repo);
@@ -656,10 +1083,17 @@ impl JulieStormApp {
             ahead_behind: None,
             tasks: self.tracker.visible(),
             message: self.message.as_ref().map(|m| (m.text.clone(), m.error)),
+            operation: None,
         };
         if let Some(project) = &self.project {
             if let GitInfo::Repository(status) = &project.git {
                 model.ahead_behind = status.upstream.as_ref().and_then(|u| u.ahead_behind);
+                if let Some(operation) = &status.operation {
+                    model.operation = Some(t::operation_conflicts(
+                        operation.kind,
+                        status.conflicts().count(),
+                    ));
+                }
             }
         }
         if let Some(editor) = self.editors.active_editor() {
@@ -715,6 +1149,8 @@ impl JulieStormApp {
                         (Menu::File, t::MENU_FILE),
                         (Menu::Navigate, t::MENU_NAVIGATE),
                         (Menu::View, t::MENU_VIEW),
+                        (Menu::Git, t::MENU_GIT),
+                        (Menu::Tests, t::MENU_TESTS),
                     ] {
                         ui.menu_button(label, |ui| {
                             ui.set_min_width(260.0);
@@ -756,9 +1192,22 @@ impl JulieStormApp {
         let mut selected_tab = None;
         let mut collapse = false;
         let mut open_file: Option<(PathBuf, Option<Goto>)> = None;
-        egui::Panel::bottom("bottom_tools")
+        let mut git_intents = Vec::new();
+        let mut tests_intents = Vec::new();
+        let repo_state = self.repo_state();
+        let shortcut = |id: ActionId| self.registry.shortcut_text(id).unwrap_or_default();
+        let commit_shortcut = shortcut(ActionId::GitCommit);
+        let run_shortcut = shortcut(ActionId::TestsRun);
+        let stop_shortcut = shortcut(ActionId::TestsStop);
+        let screen_height = ui.ctx().content_rect().height();
+        let (panel_id, default_height) = if tools.bottom_tall {
+            ("bottom_tools_tall", (screen_height * 0.62).max(300.0))
+        } else {
+            ("bottom_tools", 280.0)
+        };
+        egui::Panel::bottom(panel_id)
             .resizable(true)
-            .default_size(260.0)
+            .default_size(default_height)
             .min_size(110.0)
             .frame(
                 Frame::new()
@@ -802,13 +1251,11 @@ impl JulieStormApp {
                             open_file = Some((path, goto_for(line, range)));
                         }
                     }
-                    other => {
-                        ui.add_space(12.0);
-                        ui.vertical_centered(|ui| {
-                            ui.weak(other.empty_text());
-                        });
-                        // Même hauteur que le terminal à l'ouverture.
-                        ui.allocate_space(ui.available_size());
+                    BottomTool::Git => {
+                        git_intents = self.git.show(ui, p, repo_state, &commit_shortcut);
+                    }
+                    BottomTool::Tests => {
+                        tests_intents = self.tests.show(ui, p, &run_shortcut, &stop_shortcut);
                     }
                 }
             });
@@ -827,6 +1274,10 @@ impl JulieStormApp {
         if let Some((path, goto)) = open_file {
             self.open_file(path, goto);
         }
+        let intents = std::mem::take(&mut git_intents);
+        self.run_git_intents(intents);
+        let intents = std::mem::take(&mut tests_intents);
+        self.run_tests_intents(intents);
     }
 
     fn draw_left(&mut self, ui: &mut egui::Ui, p: &Palette) -> Vec<ActionId> {
@@ -1008,6 +1459,15 @@ impl JulieStormApp {
                     ActionId::CloseTab | ActionId::LastTab => !self.editors.items.is_empty(),
                     ActionId::NextTab | ActionId::PreviousTab => self.editors.items.len() > 1,
                     ActionId::GotoFile | ActionId::FindInFiles => self.project.is_some(),
+                    ActionId::GitCommit | ActionId::ToggleCommit | ActionId::GitRefresh => {
+                        matches!(
+                            self.project.as_ref().map(|p| &p.git),
+                            Some(GitInfo::Repository(_))
+                        )
+                    }
+                    ActionId::TestsRun => self.tests.service.is_some(),
+                    ActionId::TestsStop => self.tests.is_running(),
+                    ActionId::TestsRerun => self.tests.service.is_some() && self.tests.has_run(),
                     _ => true,
                 };
                 palette.show(ctx, p, &self.registry, &enabled)
@@ -1023,6 +1483,23 @@ impl JulieStormApp {
                     self.run_action(id);
                 }
             }
+        }
+    }
+
+    /// Dialogue de fusion et grande fenêtre de diff.
+    fn draw_modals(&mut self, ctx: &egui::Context, p: &Palette) {
+        if let Some(dialog) = &mut self.merge {
+            let intents = dialog.show(ctx, p);
+            self.run_merge_intents(intents);
+        }
+        let mut close = false;
+        if let Some(window) = &mut self.diff_window {
+            if self.merge.is_none() {
+                close = diff_window_ui(ctx, p, window);
+            }
+        }
+        if close {
+            self.diff_window = None;
         }
     }
 
@@ -1154,6 +1631,7 @@ impl JulieStormApp {
             && self.goto.as_ref().is_none_or(GotoFile::is_settled)
             && self.editors.is_loaded()
             && !self.tree.is_loading()
+            && self.git.merge_loading.is_none()
     }
 
     fn scenario_step(&mut self, ctx: &egui::Context) {
@@ -1310,10 +1788,12 @@ impl JulieStormApp {
                 ctx.set_pixels_per_point(factor);
                 sc.settle = 6;
             }
-            Step::Theme(dark) => {
-                self.dark = dark;
-                theme::apply(ctx, dark);
-                self.editors.set_dark(dark);
+            Step::Theme(dark) => self.set_dark(dark),
+            Step::Ui { command, arg } => {
+                if let Err(error) = self.ui_command(&command, &arg) {
+                    sc.fail(line, &format!("ui {command} : {error}"));
+                }
+                sc.settle = 8;
             }
             Step::TreeExpand(relative) => {
                 if let Some(project) = &self.project {
@@ -1420,7 +1900,12 @@ impl JulieStormApp {
                 "project": self.tools.project_open,
                 "bottom_open": self.tools.bottom_open,
                 "bottom": self.tools.bottom.key(),
+                "bottom_tall": self.tools.bottom_tall,
             },
+            "git": self.git.state(),
+            "merge": self.merge.as_ref().map(MergeDialog::state),
+            "diff_window": self.diff_window.as_ref().map(|w| w.pane.state()),
+            "tests": self.tests.state(),
             "goto": self.goto.as_ref().map(GotoFile::state),
             "find": { "open": self.find_open, "details": self.find.state() },
             "palette": self.palette.as_ref().map(|p| serde_json::json!({
@@ -1435,6 +1920,75 @@ impl JulieStormApp {
             "tasks_busy": self.tracker.kinds(),
         })
     }
+}
+
+/// La grande fenêtre de diff : rend `true` quand on la ferme (Échap, croix).
+fn diff_window_ui(ctx: &egui::Context, p: &Palette, window: &mut DiffWindow) -> bool {
+    let screen = ctx.content_rect();
+    let margin = if screen.width() > 1500.0 { 40.0 } else { 18.0 };
+    let size = vec2(
+        (screen.width() - 2.0 * margin).max(600.0),
+        (screen.height() - 2.0 * margin).max(360.0),
+    );
+    let frame = Frame::new()
+        .fill(p.bg)
+        .stroke(egui::Stroke::new(1.0, p.border))
+        .corner_radius(10)
+        .shadow(egui::Shadow {
+            offset: [0, 10],
+            blur: 36,
+            spread: 2,
+            color: egui::Color32::from_black_alpha(130),
+        });
+    let mut close = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+    crate::kit::modal("diff-fenetre")
+        .frame(frame)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            let bar = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 36.0));
+            ui.painter().rect_filled(
+                bar,
+                egui::CornerRadius {
+                    nw: 10,
+                    ne: 10,
+                    sw: 0,
+                    se: 0,
+                },
+                p.bg_alt,
+            );
+            ui.painter().text(
+                egui::pos2(rect.left() + 16.0, bar.center().y),
+                egui::Align2::LEFT_CENTER,
+                &window.pane.title,
+                egui::FontId::proportional(14.5),
+                p.text,
+            );
+            ui.painter().text(
+                egui::pos2(rect.right() - 48.0, bar.center().y),
+                egui::Align2::RIGHT_CENTER,
+                t::DIFF_CLOSE_HINT,
+                egui::FontId::proportional(12.0),
+                p.text_dim,
+            );
+            let button = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 22.0, bar.center().y),
+                vec2(26.0, 26.0),
+            );
+            if icons::tool_button(
+                ui,
+                button,
+                Id::unique("diff-fermer"),
+                Icon::Close,
+                p,
+                t::CLOSE,
+                true,
+            ) {
+                close = true;
+            }
+            let body = egui::Rect::from_min_max(egui::pos2(rect.left(), bar.bottom()), rect.max);
+            window.pane.show(ui, body, p, true);
+        });
+    close
 }
 
 fn file_name(path: &Path) -> String {
@@ -1488,6 +2042,7 @@ impl eframe::App for JulieStormApp {
         self.handle_close_request(&ctx);
         self.dispatch_shortcuts(&ctx);
         self.poll_disk(&ctx);
+        self.poll_git(&ctx);
         self.update_title(&ctx);
         if self
             .message
@@ -1534,6 +2089,7 @@ impl eframe::App for JulieStormApp {
         if let Some(terminal) = &mut self.terminal {
             terminal.ui_global(ui);
         }
+        self.draw_modals(&ctx, &p);
         self.draw_dialog(&ctx, &p);
 
         for id in actions {

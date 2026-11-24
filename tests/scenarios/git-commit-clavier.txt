@@ -1,0 +1,17 @@
+# Valider au clavier : Ctrl+K, taper le message, Ctrl+Entrée (modifiés cochés par défaut, non suivis non cochés).
+# Préparer : tests/fixtures/labmate-changes.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+wait-idle
+key Ctrl+K
+wait 300
+type Message tapé au clavier
+wait 200
+screenshot target/essais/commit-clavier/01-message.png
+key Ctrl+Enter
+wait-idle
+state target/essais/commit-clavier/02-apres.json
+screenshot target/essais/commit-clavier/02-apres.png
+key Alt+0
+wait 200
+state target/essais/commit-clavier/03-alt0.json
+quit

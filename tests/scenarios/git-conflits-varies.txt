@@ -1,0 +1,64 @@
+# Conflits de toutes natures : seuls les fichiers texte UTF-8 ouvrent la fusion.
+# Préparer : tests/fixtures/conflits-varies.sh   (écrit dans %TEMP%\jsessai-conflits)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-conflits
+action view.git
+action view.bottom_tall
+wait-idle
+screenshot target/essais/conflits/01-liste.png
+state target/essais/conflits/01-liste.json
+# Binaire et non UTF-8 : refus clair, choix d'un côté seulement.
+ui merge.open binaire.bin
+wait-idle
+screenshot target/essais/conflits/02-refus-binaire.png
+state target/essais/conflits/02-refus.json
+ui merge.open latin1.txt
+wait-idle
+state target/essais/conflits/02b-refus-latin1.json
+# Supprimé par eux : « garder le fichier » / « le supprimer », avec confirmation.
+ui git.keep theirs supprime.txt
+screenshot target/essais/conflits/03-confirmer-suppression.png
+ui confirm
+wait-idle
+# Fins de ligne différentes : bandeau d'information.
+ui merge.open crlf.txt
+wait-idle
+screenshot target/essais/conflits/04-fusion-fins-de-ligne.png
+state target/essais/conflits/04-fusion-eol.json
+ui merge.apply all
+ui merge.close
+screenshot target/essais/conflits/05-confirmer-abandon.png
+ui confirm
+# Ajouté des deux côtés : base vide, un seul bloc conflictuel.
+ui merge.open ajoute.txt
+wait-idle
+screenshot target/essais/conflits/06-ajoute-des-deux-cotes.png
+ui merge.accept 0 left
+ui merge.accept 0 right
+screenshot target/essais/conflits/07-les-deux-a-la-suite.png
+state target/essais/conflits/07-les-deux.json
+ui merge.save
+wait-idle
+# Garder la nôtre pour le binaire (confirmation), puis la leur pour le latin1.
+ui git.keep ours binaire.bin
+ui confirm
+wait-idle
+ui git.keep theirs latin1.txt
+screenshot target/essais/conflits/08-confirmer-leur.png
+ui confirm
+wait-idle
+# Le texte fusionnable : enregistrer avec des blocs en attente demande confirmation.
+ui merge.open texte.txt
+wait-idle
+screenshot target/essais/conflits/09-texte-avant.png
+state target/essais/conflits/09-texte.json
+ui merge.apply all
+ui merge.save
+screenshot target/essais/conflits/10-confirmer-enregistrement.png
+state target/essais/conflits/10-question.json
+ui cancel
+ui merge.accept 2 left
+ui merge.save
+wait-idle
+state target/essais/conflits/11-tout-resolu.json
+screenshot target/essais/conflits/11-tout-resolu.png
+quit

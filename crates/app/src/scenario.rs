@@ -62,6 +62,8 @@ pub enum Step {
     /// changement externe. Refusé hors du
     /// dossier temporaire du système.
     ExternalWrite { path: PathBuf, text: String },
+    /// `ui <commande> [argument]` : piloter les vues Git, la fusion et les tests.
+    Ui { command: String, arg: String },
     /// `quit`
     Quit,
 }
@@ -225,6 +227,13 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
                 },
                 None => return Err(fail("`external-write <chemin> <texte>`")),
             },
+            "ui" if !rest.is_empty() => {
+                let (command, arg) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                Step::Ui {
+                    command: command.to_owned(),
+                    arg: arg.trim().to_owned(),
+                }
+            }
             "quit" => Step::Quit,
             other => return Err(fail(&format!("étape inconnue ou incomplète : « {other} »"))),
         };
@@ -334,9 +343,17 @@ mod tests {
             tree-expand src\n\
             log bonjour\n\
             external-write C:/t/a.txt un\\ndeux\n\
+            ui merge.accept 2 left\n\
             quit\n";
         let steps = parse(text).unwrap();
-        assert_eq!(steps.len(), 18);
+        assert_eq!(steps.len(), 19);
+        assert_eq!(
+            steps[17].1,
+            Step::Ui {
+                command: "merge.accept".into(),
+                arg: "2 left".into()
+            }
+        );
         assert_eq!(
             steps[0].1,
             Step::Project {

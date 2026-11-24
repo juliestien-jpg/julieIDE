@@ -1,0 +1,19 @@
+# Journal de 1 200 commits : première page de 500, la suivante se charge en défilant (touche Fin).
+# Préparer : tests/fixtures/many-commits.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-journal
+action view.git
+ui git.tab log
+wait-idle
+screenshot target/essais/journal/01-premiere-page.png
+state target/essais/journal/01.json
+ui git.log-select 1
+wait-idle
+key End
+wait-idle
+key End
+wait-idle
+key End
+wait-idle
+state target/essais/journal/02-apres-fin.json
+screenshot target/essais/journal/02-fin-de-liste.png
+quit

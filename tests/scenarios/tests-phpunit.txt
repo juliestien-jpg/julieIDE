@@ -1,0 +1,30 @@
+# Vue des tests sur la copie jetable du projet PHPUnit d'essai.
+# Préparer : tests/fixtures/phpunit-copy.sh   (écrit dans %TEMP%\jsessai-phpunit)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-phpunit
+action view.tests
+wait-idle
+screenshot target/essais/tests/01-avant-lancement.png
+state target/essais/tests/01-avant.json
+key Ctrl+Maj+F10
+wait 700
+screenshot target/essais/tests/02-en-cours.png
+wait-idle
+action view.bottom_tall
+wait 300
+screenshot target/essais/tests/03-termine.png
+state target/essais/tests/03-termine.json
+ui tests.select testEqualsFailsWithExpectedAndActual
+wait 300
+screenshot target/essais/tests/04-echec-selectionne.png
+state target/essais/tests/04-echec.json
+ui tests.compare
+wait-idle
+screenshot target/essais/tests/05-comparaison.png
+ui diff.close
+ui tests.select testThrowsAnException
+wait 300
+state target/essais/tests/06-exception.json
+ui tests.link 1
+wait-idle
+screenshot target/essais/tests/07-saut-fichier.png
+quit

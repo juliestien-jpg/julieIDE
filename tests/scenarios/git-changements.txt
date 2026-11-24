@@ -1,0 +1,47 @@
+# Changements locaux, diff côte à côte, commit (réussite et refus par un crochet), journal.
+# Préparer le clone : tests/fixtures/labmate-changes.sh   (écrit dans %TEMP%\jsessai-git)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+action view.bottom_tall
+wait-idle
+screenshot target/essais/git/01-changements.png
+state target/essais/git/01-changements.json
+ui git.select src/main.js
+wait-idle
+screenshot target/essais/git/02-apercu-diff.png
+state target/essais/git/02-apercu-diff.json
+ui git.diff
+wait-idle
+screenshot target/essais/git/03-diff-grande-fenetre.png
+key F7
+wait 300
+screenshot target/essais/git/03b-diff-bloc-suivant.png
+ui diff.close
+ui git.select package.json
+wait-idle
+screenshot target/essais/git/04-fins-de-ligne.png
+ui git.check notes-essai.txt
+ui git.uncheck LICENSE
+ui git.message REFUSE ce message
+ui git.commit
+wait-idle
+screenshot target/essais/git/05-echec-crochet.png
+state target/essais/git/05-echec.json
+ui confirm
+ui git.message Essai JulieStorm : trois fichiers\n\nCommit fait depuis l'IDE.
+ui git.commit
+wait-idle
+screenshot target/essais/git/06-apres-commit.png
+state target/essais/git/06-apres-commit.json
+ui git.tab log
+wait-idle
+ui git.log-select 1
+wait-idle
+ui git.commit-file 1
+wait-idle
+screenshot target/essais/git/07-journal-diff-fichier.png
+state target/essais/git/07-journal.json
+ui diff.close
+ui git.tab console
+screenshot target/essais/git/08-console.png
+quit

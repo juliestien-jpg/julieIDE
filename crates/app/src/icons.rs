@@ -1,7 +1,9 @@
 //! Les icônes de JulieStorm : dessinées au tracé (formes simples, une couleur),
 //! pas de police d'icônes ni d'image reprise ailleurs.
 
-use eframe::egui::{self, pos2, vec2, Color32, Painter, Rect, Response, Sense, Shape, Stroke, Ui};
+use eframe::egui::{
+    self, pos2, vec2, Color32, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
@@ -17,6 +19,18 @@ pub enum Icon {
     Close,
     Dot,
     Bolt,
+    ArrowRight,
+    ArrowLeft,
+    ArrowUp,
+    ArrowDown,
+    Plus,
+    Check,
+    Undo,
+    Redo,
+    Refresh,
+    Play,
+    Stop,
+    Warning,
 }
 
 /// Dessine `icon` dans `rect` (carré de préférence).
@@ -133,6 +147,65 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Dot => {
             p.circle_filled(at(0.5, 0.5), rect.width() * 0.2, color);
         }
+        Icon::ArrowRight => {
+            line((0.14, 0.5), (0.84, 0.5));
+            poly(&[(0.58, 0.24), (0.86, 0.5), (0.58, 0.76)]);
+        }
+        Icon::ArrowLeft => {
+            line((0.16, 0.5), (0.86, 0.5));
+            poly(&[(0.42, 0.24), (0.14, 0.5), (0.42, 0.76)]);
+        }
+        Icon::ArrowUp => {
+            line((0.5, 0.86), (0.5, 0.16));
+            poly(&[(0.24, 0.42), (0.5, 0.14), (0.76, 0.42)]);
+        }
+        Icon::ArrowDown => {
+            line((0.5, 0.14), (0.5, 0.84));
+            poly(&[(0.24, 0.58), (0.5, 0.86), (0.76, 0.58)]);
+        }
+        Icon::Plus => {
+            line((0.5, 0.2), (0.5, 0.8));
+            line((0.2, 0.5), (0.8, 0.5));
+        }
+        Icon::Check => {
+            poly(&[(0.18, 0.54), (0.42, 0.78), (0.84, 0.26)]);
+        }
+        Icon::Undo => {
+            poly(&[(0.3, 0.2), (0.12, 0.4), (0.3, 0.6)]);
+            poly(&[(0.12, 0.4), (0.58, 0.4), (0.84, 0.56), (0.84, 0.82)]);
+        }
+        Icon::Redo => {
+            poly(&[(0.7, 0.2), (0.88, 0.4), (0.7, 0.6)]);
+            poly(&[(0.88, 0.4), (0.42, 0.4), (0.16, 0.56), (0.16, 0.82)]);
+        }
+        Icon::Refresh => {
+            let points: Vec<Pos2> = (0..=18)
+                .map(|i| {
+                    let a = (50.0 + 270.0 * i as f32 / 18.0).to_radians();
+                    at(0.5 + 0.34 * a.cos(), 0.5 - 0.34 * a.sin())
+                })
+                .collect();
+            p.add(Shape::line(points, stroke));
+            poly(&[(0.62, 0.1), (0.84, 0.26), (0.58, 0.36)]);
+        }
+        Icon::Play => {
+            p.add(Shape::convex_polygon(
+                vec![at(0.26, 0.14), at(0.86, 0.5), at(0.26, 0.86)],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Stop => {
+            p.rect_filled(Rect::from_min_max(at(0.2, 0.2), at(0.8, 0.8)), 2.0, color);
+        }
+        Icon::Warning => {
+            p.add(Shape::closed_line(
+                vec![at(0.5, 0.1), at(0.94, 0.86), at(0.06, 0.86)],
+                stroke,
+            ));
+            line((0.5, 0.4), (0.5, 0.62));
+            p.circle_filled(at(0.5, 0.75), w * 0.6, color);
+        }
         Icon::Bolt => {
             p.add(Shape::convex_polygon(
                 vec![
@@ -179,4 +252,34 @@ pub fn button(
     };
     paint(ui.painter(), rect.shrink(size * 0.22), icon, color);
     response.on_hover_text(tooltip)
+}
+
+/// Petit bouton d'icône posé dans un rectangle imposé (barres d'outils). Rend
+/// `true` au clic ; grisé et muet quand `enabled` est faux.
+pub fn tool_button(
+    ui: &mut Ui,
+    rect: Rect,
+    id: egui::Id,
+    icon: Icon,
+    colors: &crate::theme::Palette,
+    tooltip: &str,
+    enabled: bool,
+) -> bool {
+    let response = ui.interact(rect, id, Sense::click());
+    let hovered = enabled && response.hovered();
+    if hovered {
+        ui.painter().rect_filled(rect, 4.0, colors.accent_soft);
+    }
+    let color = if !enabled {
+        colors.ignored
+    } else if hovered {
+        colors.text
+    } else {
+        colors.text_dim
+    };
+    paint(ui.painter(), rect.shrink(rect.height() * 0.2), icon, color);
+    if !tooltip.is_empty() {
+        response.clone().on_hover_text(tooltip);
+    }
+    enabled && response.clicked()
 }

@@ -14,14 +14,19 @@
 
 mod actions;
 mod app;
+mod diffpane;
 mod editor;
+mod gitview;
 mod icons;
+mod kit;
+mod merge;
 mod project;
 mod scenario;
 mod search;
 mod status;
 mod tabs;
 mod terminal;
+mod testsview;
 mod texts;
 mod theme;
 mod tools;

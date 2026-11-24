@@ -61,14 +61,6 @@ impl BottomTool {
             BottomTool::Terminal => ActionId::ToggleTerminal,
         }
     }
-
-    pub fn empty_text(self) -> &'static str {
-        match self {
-            BottomTool::Git => t::TOOL_GIT_EMPTY,
-            BottomTool::Tests => t::TOOL_TESTS_EMPTY,
-            BottomTool::Search | BottomTool::Terminal => "",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -76,6 +68,8 @@ pub struct ToolWindows {
     pub project_open: bool,
     pub bottom_open: bool,
     pub bottom: BottomTool,
+    /// Fenêtre du bas agrandie (diff, fusion, tests : plus de place).
+    pub bottom_tall: bool,
 }
 
 impl Default for ToolWindows {
@@ -84,6 +78,7 @@ impl Default for ToolWindows {
             project_open: true,
             bottom_open: false,
             bottom: BottomTool::Git,
+            bottom_tall: false,
         }
     }
 }

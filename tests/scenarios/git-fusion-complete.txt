@@ -1,0 +1,30 @@
+# Parcours complet de la fusion sur un clone jetable de labmate_paper.
+# Préparer le clone : tests/fixtures/labmate-clone.sh   (écrit dans %TEMP%\jsessai-fusion)
+# Lancer depuis la racine de JulieStorm : target\debug\juliestorm.exe --scenario tests\scenarios\git-fusion-complete.txt
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-fusion
+action view.git
+action view.bottom_tall
+wait-idle
+screenshot target/essais/fusion/01-git-conflit.png
+state target/essais/fusion/01-git.json
+ui merge.open README.md
+wait-idle
+screenshot target/essais/fusion/02-fusion-avant.png
+state target/essais/fusion/02-fusion-avant.json
+ui merge.apply all
+screenshot target/essais/fusion/03-fusion-non-conflictuels-appliques.png
+ui merge.accept 0 left
+ui merge.accept 2 right
+screenshot target/essais/fusion/04-fusion-tout-resolu.png
+state target/essais/fusion/04-fusion-resolu.json
+ui merge.save
+wait-idle
+screenshot target/essais/fusion/05-git-apres-enregistrement.png
+state target/essais/fusion/05-git-apres.json
+ui git.commit
+wait-idle
+ui git.tab log
+wait-idle
+screenshot target/essais/fusion/06-journal-apres-fusion.png
+state target/essais/fusion/06-journal.json
+quit

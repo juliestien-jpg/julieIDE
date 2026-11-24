@@ -1,0 +1,13 @@
+# Vrais clics dans la fenêtre Git (1280x720, fenêtre du bas agrandie) : case d'un non suivi, sélection d'un fichier.
+# Préparer : tests/fixtures/labmate-changes.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+action view.bottom_tall
+wait-idle
+wait 300
+click 57 478
+wait 200
+click 150 500
+wait 400
+state target/essais/clics-git/01.json
+quit

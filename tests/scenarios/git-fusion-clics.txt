@@ -1,0 +1,20 @@
+# Vrais clics de souris dans le dialogue de fusion (coordonnées en 1280x720, 100 %) :
+# flèche « accepter » du bloc 1, bouton « Tous », puis croix « ignorer » côté droit du premier conflit.
+# Préparer : tests/fixtures/labmate-clone.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-fusion
+action view.git
+wait-idle
+ui merge.open README.md
+wait-idle
+wait 300
+click 405 129
+wait 200
+state target/essais/clics/01-apres-fleche.json
+click 400 73
+wait 200
+state target/essais/clics/02-apres-tous.json
+click 848 129
+wait 200
+state target/essais/clics/03-apres-croix-droite.json
+screenshot target/essais/clics/03.png
+quit

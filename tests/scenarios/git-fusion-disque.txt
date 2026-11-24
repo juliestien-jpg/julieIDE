@@ -1,0 +1,21 @@
+# Le fichier change sur le disque pendant la fusion : l'enregistrement demande d'écraser ou de revenir.
+# Préparer : tests/fixtures/conflits-varies.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-conflits
+action view.git
+wait-idle
+ui merge.open texte.txt
+wait-idle
+ui merge.apply all
+external-write texte.txt modifié ailleurs pendant la fusion\n
+ui merge.save
+ui confirm
+wait-idle
+screenshot target/essais/disque/01-ecraser.png
+state target/essais/disque/01-ecraser.json
+ui cancel
+ui merge.close
+screenshot target/essais/disque/02-abandon.png
+ui confirm
+wait-idle
+state target/essais/disque/03-ferme.json
+quit

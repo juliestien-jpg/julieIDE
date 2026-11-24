@@ -1,0 +1,42 @@
+# La fusion entièrement au clavier : F7, Alt+Gauche/Droite, Alt+Maj+…, Ctrl+Z, frappe, Ctrl+Entrée, Échap.
+# Préparer : tests/fixtures/conflits-varies.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-conflits
+action view.git
+wait-idle
+ui merge.open texte.txt
+wait-idle
+state target/essais/clavier/00-ouverture.json
+key Alt+Left
+state target/essais/clavier/01-accepter-gauche.json
+key F7
+key Alt+Right
+key F7
+screenshot target/essais/clavier/02-bloc-conflit-courant.png
+key Alt+Right
+key Ctrl+Z
+state target/essais/clavier/03-annuler.json
+key Alt+Shift+Left
+key Alt+Shift+Right
+state target/essais/clavier/04-ignorer-les-deux.json
+key Ctrl+Z
+key Ctrl+Z
+key Shift+F7
+state target/essais/clavier/05-bloc-precedent.json
+ui merge.focus 1
+type XYZ
+wait 200
+state target/essais/clavier/06-frappe.json
+key Ctrl+Z
+state target/essais/clavier/07-annuler-la-frappe.json
+key Ctrl+Enter
+wait 200
+screenshot target/essais/clavier/08-question-enregistrer.png
+key Escape
+key Escape
+wait 200
+screenshot target/essais/clavier/09-question-abandon.png
+state target/essais/clavier/09-question-abandon.json
+key Escape
+wait 200
+state target/essais/clavier/10-ferme.json
+quit

@@ -1,0 +1,34 @@
+# Vues Git et Tests en 1280x720 puis 1920x1080, échelle 100 % puis 150 %, thème clair.
+# Préparer : tests/fixtures/labmate-changes.sh et tests/fixtures/phpunit-copy.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+action view.bottom_tall
+ui git.select src/main.js
+wait-idle
+wait 400
+scale 1.5
+wait 500
+screenshot target/essais/echelles/01-git-1280x720-150.png
+scale 1.0
+theme light
+wait 300
+screenshot target/essais/echelles/02-git-1280x720-clair.png
+resize 1920 1080
+wait 500
+screenshot target/essais/echelles/03-git-1920x1080-clair.png
+theme dark
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-phpunit
+action view.tests
+wait-idle
+key Ctrl+Maj+F10
+wait-idle
+wait 400
+screenshot target/essais/echelles/04-tests-1920x1080.png
+resize 1280 720
+scale 1.5
+wait 600
+screenshot target/essais/echelles/05-tests-1280x720-150.png
+fullscreen on
+wait 800
+screenshot target/essais/echelles/06-tests-plein-ecran-150.png
+quit

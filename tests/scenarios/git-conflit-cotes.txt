@@ -1,0 +1,21 @@
+# Garder la nôtre / prendre la leur (avec confirmation), puis abandonner la fusion.
+# Préparer : tests/fixtures/labmate-clone.sh
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-fusion
+action view.git
+wait-idle
+ui git.keep theirs README.md
+screenshot target/essais/cotes/01-confirmer-leur.png
+ui cancel
+state target/essais/cotes/02-annule.json
+ui git.keep theirs README.md
+ui confirm
+wait-idle
+state target/essais/cotes/03-leur.json
+screenshot target/essais/cotes/03-apres-leur.png
+ui git.abort
+screenshot target/essais/cotes/04-confirmer-abandon.png
+ui confirm
+wait-idle
+state target/essais/cotes/05-abandonne.json
+screenshot target/essais/cotes/05-apres-abandon.png
+quit

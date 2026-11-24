@@ -30,6 +30,13 @@ pub enum ActionId {
     ToggleSearch,
     ToggleTerminal,
     ToggleTheme,
+    ToggleCommit,
+    BottomTall,
+    GitCommit,
+    GitRefresh,
+    TestsRun,
+    TestsStop,
+    TestsRerun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +44,8 @@ pub enum Menu {
     File,
     Navigate,
     View,
+    Git,
+    Tests,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +223,63 @@ impl Registry {
                     t::ACTION_TOGGLE_THEME,
                     Some(Menu::View),
                     None,
+                    false,
+                ),
+                a(
+                    ToggleCommit,
+                    "view.commit",
+                    t::ACTION_TOGGLE_COMMIT,
+                    Some(Menu::View),
+                    sc(ALT, Key::Num0),
+                    true,
+                ),
+                // Nôtre : pas de raccourci (absent de la table).
+                a(
+                    BottomTall,
+                    "view.bottom_tall",
+                    t::ACTION_BOTTOM_TALL,
+                    Some(Menu::View),
+                    None,
+                    false,
+                ),
+                a(
+                    GitCommit,
+                    "vcs.commit",
+                    t::ACTION_GIT_COMMIT,
+                    Some(Menu::Git),
+                    sc(CTRL, Key::K),
+                    false,
+                ),
+                a(
+                    GitRefresh,
+                    "vcs.refresh",
+                    t::ACTION_GIT_REFRESH,
+                    Some(Menu::Git),
+                    None,
+                    false,
+                ),
+                a(
+                    TestsRun,
+                    "tests.run",
+                    t::ACTION_TESTS_RUN,
+                    Some(Menu::Tests),
+                    sc(CTRL_SHIFT, Key::F10),
+                    false,
+                ),
+                a(
+                    TestsStop,
+                    "tests.stop",
+                    t::ACTION_TESTS_STOP,
+                    Some(Menu::Tests),
+                    sc(CTRL, Key::F2),
+                    false,
+                ),
+                a(
+                    TestsRerun,
+                    "tests.rerun",
+                    t::ACTION_TESTS_RERUN,
+                    Some(Menu::Tests),
+                    sc(CTRL, Key::F5),
                     false,
                 ),
             ],
