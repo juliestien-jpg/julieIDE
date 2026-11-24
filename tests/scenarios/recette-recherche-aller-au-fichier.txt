@@ -1,0 +1,62 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-search
+wait-idle
+state target/essais/recette/recherche/00.json
+action nav.goto_file
+type usct
+wait-idle
+state target/essais/recette/recherche/01-usct.json
+screenshot target/essais/recette/recherche/01-usct.png
+key Escape
+file index.php
+file app.js
+file src/Functions.php
+action nav.goto_file
+wait-idle
+state target/essais/recette/recherche/02-vide.json
+screenshot target/essais/recette/recherche/02-vide.png
+key Escape
+action nav.goto_file
+type index.php:12
+wait-idle
+state target/essais/recette/recherche/03-index12.json
+key Enter
+wait-idle
+state target/essais/recette/recherche/03b-ouvert.json
+action nav.goto_file
+type secret
+wait-idle
+state target/essais/recette/recherche/04-secret.json
+key Escape
+action nav.goto_file
+type lib
+wait-idle
+state target/essais/recette/recherche/05-lib.json
+key Escape
+action nav.goto_file
+type debug
+wait-idle
+state target/essais/recette/recherche/06-debug.json
+key Escape
+action nav.goto_file
+type new
+wait-idle
+state target/essais/recette/recherche/07-new.json
+key Escape
+action nav.goto_file
+type ctrl/user
+wait-idle
+state target/essais/recette/recherche/08-ctrluser.json
+key Escape
+action nav.goto_file
+type fichier
+wait-idle
+state target/essais/recette/recherche/09-accent.json
+key Escape
+action nav.goto_file
+type zzzzqq
+wait-idle
+state target/essais/recette/recherche/10-aucun.json
+screenshot target/essais/recette/recherche/10-aucun.png
+key Escape
+quit

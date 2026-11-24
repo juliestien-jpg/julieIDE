@@ -1,0 +1,14 @@
+# Outil de recette (hors espace de travail) : appelle julie_diff::merge sur des dossiers <cas>/{base,ours,theirs}
+# et écrit <cas>/out + « cas<TAB>nb_conflits » (SKIP si non UTF-8). Utilisé par tests/fixtures/fusion-reel.py.
+# Compiler à part, sans toucher au Cargo.lock du projet :
+#   cp Cargo.lock tests/fixtures/mergecli/ ; cd tests/fixtures/mergecli ; cargo build --offline -j 4
+[package]
+name = "mergecli"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+julie-diff = { path = "../../../crates/diff" }
+julie-core = { path = "../../../crates/core" }
+
+[workspace]

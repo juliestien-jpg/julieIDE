@@ -1,0 +1,49 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-search
+wait-idle
+action nav.find_in_files
+type function
+wait-idle
+state target/essais/recette/recherche/01-function.json
+screenshot target/essais/recette/recherche/01-function.png
+key Alt+W
+wait-idle
+state target/essais/recette/recherche/02-mots.json
+key Alt+W
+key Alt+C
+key Ctrl+A
+type Foo
+wait-idle
+state target/essais/recette/recherche/03-casse-Foo.json
+key Alt+C
+key Alt+X
+key Ctrl+A
+type \$\w+Id\b
+wait-idle
+state target/essais/recette/recherche/04-regex-Id.json
+screenshot target/essais/recette/recherche/04-regex-Id.png
+key Ctrl+A
+type (
+wait-idle
+state target/essais/recette/recherche/05-regex-invalide.json
+screenshot target/essais/recette/recherche/05-invalide.png
+key Ctrl+A
+type foo$
+wait-idle
+state target/essais/recette/recherche/06-dollar-crlf.json
+key Alt+X
+key Ctrl+A
+type foo
+wait-idle
+state target/essais/recette/recherche/07-foo.json
+key Ctrl+A
+type f
+wait-idle
+state target/essais/recette/recherche/08-un-car.json
+key Ctrl+A
+type foo
+key Ctrl+A
+type function
+wait-idle
+state target/essais/recette/recherche/09-rapide.json
+quit

@@ -1,0 +1,11 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai term (x86) é
+wait-idle
+key Alt+F12
+wait 2500
+key Ctrl+Shift+V
+wait 600
+key Enter
+wait 600
+screenshot target/essais/recette/terminal/01.png
+quit

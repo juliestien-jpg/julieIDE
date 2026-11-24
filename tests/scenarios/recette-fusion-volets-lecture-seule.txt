@@ -1,0 +1,18 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-conflits
+action view.git
+wait-idle
+ui merge.open texte.txt
+wait-idle
+click 200 250
+type GAUCHE
+key Delete
+click 1050 250
+type DROITE
+state target/essais/recette/fusion/01-apres-frappe-cotes.json
+screenshot target/essais/recette/fusion/01.png
+click 650 250
+type CENTRE
+state target/essais/recette/fusion/02-apres-frappe-centre.json
+screenshot target/essais/recette/fusion/02.png
+quit

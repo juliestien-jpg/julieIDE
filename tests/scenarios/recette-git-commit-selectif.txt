@@ -1,0 +1,28 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+action view.bottom_tall
+wait-idle
+screenshot target/essais/recette/git/git1-01.png
+state target/essais/recette/git/git1-01.json
+ui git.select README.md
+wait-idle
+screenshot target/essais/recette/git/git1-02-readme.png
+state target/essais/recette/git/git1-02.json
+ui git.uncheck LICENSE
+ui git.uncheck docs/essai-ajoute.md
+ui git.uncheck package.json
+ui git.check notes-essai.txt
+state target/essais/recette/git/git1-03-cases.json
+ui git.message Recette : deux modifiés plus un non suivi\n\nCorps du message avec accents éàü.
+ui git.commit
+wait-idle
+state target/essais/recette/git/git1-04-apres.json
+screenshot target/essais/recette/git/git1-04-apres.png
+ui git.tab log
+wait-idle
+state target/essais/recette/git/git1-05-journal.json
+screenshot target/essais/recette/git/git1-05-journal.png
+ui git.tab console
+state target/essais/recette/git/git1-06-console.json
+quit

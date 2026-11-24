@@ -1,0 +1,40 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai term (x86) é
+wait-idle
+key Alt+F12
+wait 2500
+type seq 1 200 > longfile.txt; less longfile.txt
+key Enter
+wait 800
+screenshot target/essais/recette/terminal/01-less.png
+type q
+wait 500
+type echo apres-less > less-out.txt
+key Enter
+wait 500
+type vim v.txt
+key Enter
+wait 1500
+screenshot target/essais/recette/terminal/02-vim.png
+type i
+type texte vim
+key Escape
+type :wq
+key Enter
+wait 800
+screenshot target/essais/recette/terminal/03-apres-vim.png
+type echo histo > hist-out.txt
+key Enter
+wait 300
+type rm hist-out.txt
+key Enter
+wait 300
+key Ctrl+R
+type echo histo
+key Enter
+wait 500
+key Ctrl+V
+key Enter
+wait 600
+screenshot target/essais/recette/terminal/04-colle.png
+quit

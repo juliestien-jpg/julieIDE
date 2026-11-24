@@ -1,0 +1,48 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-edit
+wait-idle
+state target/essais/recette/editeur/00.json
+file mix.php:1:1
+wait 500
+screenshot target/essais/recette/editeur/01-mix.png
+state target/essais/recette/editeur/01-mix.json
+type abc
+state target/essais/recette/editeur/02-abc.json
+key Ctrl+Z
+state target/essais/recette/editeur/03-undo.json
+key Ctrl+Shift+Z
+state target/essais/recette/editeur/04-redo.json
+key Ctrl+Z
+file same.txt:1:1
+key Ctrl+Y
+state target/essais/recette/editeur/05-ctrly.json
+file tab.js:1:1
+type MOD
+action file.close_tab
+state target/essais/recette/editeur/06-close-question.json
+screenshot target/essais/recette/editeur/06-close-question.png
+key Escape
+state target/essais/recette/editeur/07-apres-escape.json
+file ext.txt
+state target/essais/recette/editeur/08-ext-avant.json
+external-write ext.txt NOUVEAU\nligne b\n
+wait 500
+state target/essais/recette/editeur/09-t500.json
+wait 500
+state target/essais/recette/editeur/09-t1000.json
+wait 500
+state target/essais/recette/editeur/09-t1500.json
+wait 500
+state target/essais/recette/editeur/09-t2000.json
+wait 600
+state target/essais/recette/editeur/09-t2600.json
+file tab.js:1:1
+external-write tab.js changement externe\n
+wait 2600
+state target/essais/recette/editeur/10-modifie-externe.json
+screenshot target/essais/recette/editeur/10-modifie-externe.png
+file big.php:5000:1
+wait-idle
+state target/essais/recette/editeur/11-big.json
+screenshot target/essais/recette/editeur/11-big.png
+quit

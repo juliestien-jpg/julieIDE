@@ -1,0 +1,30 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-robust
+wait-idle
+state target/essais/recette/robustesse/20-ouvert.json
+screenshot target/essais/recette/robustesse/20-ouvert.png
+file bin.dat
+wait-idle
+state target/essais/recette/robustesse/21-bin.json
+screenshot target/essais/recette/robustesse/21-bin.png
+file longline.txt
+wait-idle
+state target/essais/recette/robustesse/22-longline.json
+screenshot target/essais/recette/robustesse/22-longline.png
+file million.txt:500000
+wait-idle
+state target/essais/recette/robustesse/23-million.json
+screenshot target/essais/recette/robustesse/23-million.png
+file huge.log
+wait 3000
+state target/essais/recette/robustesse/24-huge.json
+screenshot target/essais/recette/robustesse/24-huge.png
+file small.txt
+wait-idle
+state target/essais/recette/robustesse/25-small.json
+action nav.find_in_files
+type ligne 999999
+wait-idle
+state target/essais/recette/robustesse/26-find.json
+screenshot target/essais/recette/robustesse/26-find.png
+quit

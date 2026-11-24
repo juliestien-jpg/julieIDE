@@ -1,0 +1,33 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-edit
+wait-idle
+state target/essais/recette/editeur/00.json
+file crlf.txt:1:1
+type ZZ
+file lf-bom.txt:1:1
+type ZZ
+file mixed.txt:1:1
+type ZZ
+file nofinal.txt:3:99
+type Q
+file nofinal-crlf.txt:3:99
+type Q
+file latin1.txt:1:1
+type ZZ
+file latin1.txt:2:99
+type ç
+file empty.txt:1:1
+type x
+file tab.js:1:1
+type ZZ
+file same.txt
+file same.txt
+state target/essais/recette/editeur/01-ouverts.json
+screenshot target/essais/recette/editeur/01.png
+file ro.txt:1:1
+type ZZ
+key Ctrl+S
+wait-idle
+state target/essais/recette/editeur/02-apres-save.json
+screenshot target/essais/recette/editeur/02-apres-save.png
+quit

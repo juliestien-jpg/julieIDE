@@ -1,0 +1,23 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-search
+wait-idle
+action nav.find_in_files
+key Alt+X
+type (a
+wait-idle
+state target/essais/recette/recherche/01-invalide.json
+screenshot target/essais/recette/recherche/01-invalide.png
+key Ctrl+A
+type foo
+key Alt+X
+wait-idle
+click 305 120
+type *.js
+wait-idle
+state target/essais/recette/recherche/02-masque-js.json
+screenshot target/essais/recette/recherche/02-masque-js.png
+key Ctrl+A
+type *.php
+wait-idle
+state target/essais/recette/recherche/03-masque-php.json
+quit

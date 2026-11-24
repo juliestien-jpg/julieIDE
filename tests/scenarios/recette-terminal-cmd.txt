@@ -1,0 +1,46 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai term (x86) é
+wait-idle
+key Alt+F12
+wait 2500
+type tput cols > bash-cols1.txt
+key Enter
+wait 300
+click 352 458
+wait 300
+screenshot target/essais/recette/terminal/00-menu.png
+click 362 486
+wait 1500
+type %SystemRoot%\System32\mode.com con > mode1.txt
+key Enter
+wait 500
+type %SystemRoot%\System32\PING.EXE -t 127.0.0.1
+key Enter
+wait 1500
+screenshot target/essais/recette/terminal/01-ping.png
+key Ctrl+C
+wait 800
+type echo apres-ctrl-c > ctrlc.txt
+key Enter
+wait 600
+screenshot target/essais/recette/terminal/02-apres-ctrlc.png
+action view.bottom_tall
+wait 800
+type %SystemRoot%\System32\mode.com con > mode2.txt
+key Enter
+wait 800
+type echo é
+key Enter
+wait 500
+screenshot target/essais/recette/terminal/03-agrandi.png
+type exit 3
+key Enter
+wait 800
+screenshot target/essais/recette/terminal/04-exit3.png
+key Alt+F12
+wait 500
+screenshot target/essais/recette/terminal/05-replie.png
+key Alt+F12
+wait 500
+screenshot target/essais/recette/terminal/06-rouvert.png
+quit

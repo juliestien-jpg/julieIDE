@@ -1,0 +1,19 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+wait-idle
+state target/essais/recette/git/00.json
+external-write index.html modifié hors IDE\n
+wait 400
+state target/essais/recette/git/01-400.json
+wait 400
+state target/essais/recette/git/02-800.json
+wait 400
+state target/essais/recette/git/03-1200.json
+wait 400
+state target/essais/recette/git/04-1600.json
+wait 400
+state target/essais/recette/git/05-2000.json
+wait 600
+state target/essais/recette/git/06-2600.json
+quit

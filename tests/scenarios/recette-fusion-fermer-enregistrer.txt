@@ -1,0 +1,27 @@
+# Recette v0 : voir docs/recette-v0.md. Préparer avec tests/fixtures/recette-projets.py (ou fusion-corpus.py / labmate-*.sh selon le projet nommé).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-corpus
+action view.git
+action view.bottom_tall
+wait-idle
+ui merge.open 03-meme-ligne.txt
+wait-idle
+ui merge.accept 0 left
+ui merge.close
+state target/essais/recette/fusion/01-question-abandon.json
+screenshot target/essais/recette/fusion/01-question-abandon.png
+ui confirm
+state target/essais/recette/fusion/02-ferme.json
+ui merge.open 05-modif-identique-plus-conflit.txt
+wait-idle
+ui merge.apply all
+ui merge.save
+state target/essais/recette/fusion/03-save-pending.json
+screenshot target/essais/recette/fusion/03-save-pending.png
+ui cancel
+state target/essais/recette/fusion/04-revenir.json
+screenshot target/essais/recette/fusion/04-revenir.png
+ui merge.save
+ui confirm
+wait-idle
+state target/essais/recette/fusion/05-ecrit.json
+quit
