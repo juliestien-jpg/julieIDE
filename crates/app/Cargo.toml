@@ -1,0 +1,16 @@
+[package]
+name = "juliestorm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+julie-core.workspace = true
+julie-text.workspace = true
+julie-diff.workspace = true
+julie-vcs.workspace = true
+julie-index.workspace = true
+julie-phpunit.workspace = true
+julie-terminal.workspace = true
+eframe.workspace = true

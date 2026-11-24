@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+julie-core = { path = "crates/core" }
+julie-text = { path = "crates/text" }
+julie-diff = { path = "crates/diff" }
+julie-vcs = { path = "crates/vcs" }
+julie-index = { path = "crates/index" }
+julie-phpunit = { path = "crates/phpunit" }
+julie-terminal = { path = "crates/terminal" }
+eframe = "0.37"
+
+# Dépendances partagées par au moins deux crates : la version se fixe ici et nulle
+# part ailleurs (voir docs/contrats.md, « Dépendances »). Une dépendance propre à une
+# seule crate se déclare dans le Cargo.toml de cette crate.
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tempfile = "3"
+# Chaque crate active les fonctionnalités Win32 dont elle a besoin.
+windows-sys = "0.61"
+
+[profile.dev]
+# Débogage léger : compilation et édition de liens plus rapides sur cette machine partagée.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Les dépendances (egui, rendu) sont optimisées même en dev, sinon l'interface rame.
+opt-level = 2

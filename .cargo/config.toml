@@ -1,0 +1,3 @@
+# PC partagé à 8 cœurs : Cargo n'en prend que la moitié (voir CLAUDE.md).
+[build]
+jobs = 4
