@@ -7,3 +7,25 @@ publish.workspace = true
 
 [dependencies]
 julie-core.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+# Émulation VT éprouvée (celle d'Alacritty, reprise par Zed) : analyseur, grille,
+# historique, écran alternatif. On n'utilise pas son module `tty` : la
+# pseudo-console est la nôtre (objet « job » pour tuer tout l'arbre).
+alacritty_terminal = { version = "0.26", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

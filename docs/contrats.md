@@ -969,3 +969,104 @@ php, phpunit, configuration }`, chacun un `Result<_, Problem>` : PHP = réglage,
   est tolérant et testé sur des sorties écrites de mémoire, pas enregistrées.
 - Pas encore : découverte (gouttière), configurations nommées, relance des échecs
   ou d'un nœud, historique. `RunScope::Filter` est la place de la relance d'un nœud.
+
+## 13. `julie-terminal` et le composant terminal (dev-terminal, lot 4 de la v0)
+
+Détail et exemple en tête de `crates/terminal/src/lib.rs` et de
+`crates/app/src/terminal/mod.rs`. Spécification : `docs/specs/terminal.md`.
+Ne dépend que de `julie-core` (plus `alacritty_terminal` 0.26, sans ses
+fonctionnalités par défaut, pour l'émulation, et `windows-sys`). La pseudo-console
+est la nôtre (pas le module `tty` d'alacritty) : on tient l'arbre de processus
+dans un objet « job ».
+
+### Service et sessions (fil de l'interface, rien de bloquant)
+
+`Terminals::new(tasks, settings)` (`settings: TerminalSettings` = section
+`[terminal]` : `default_profile` (`"cmd"`, `"git-bash"`, `"powershell"`),
+`git_bash_path`, `cmd_path`, `scrollback` (10 000)).
+
+| Méthode | Clé de tâche | Événements (`TerminalEvent`, sous `Domain::Terminal`) |
+|---|---|---|
+| `detect_profiles()` | `terminal.profiles` | `Profiles(Profiles)` |
+| `open(SessionOptions { profile, cwd, columns, lines }) -> Session` | `terminal.session` (dure autant que la session) | `Started { session, pid }`, `Output { session }` (coalescé), `TitleChanged { session, title }`, `Bell`, `Clipboard { text }` (OSC 52), puis `Exited { session, code }` ou `Closed { session }`, ou `Failed { session, error }` |
+
+- `Session` (possédée par l'onglet ; la lâcher la ferme) : `id()`, `status()`
+  (`Starting`, `Running { pid }`, `Exited { code }`, `Closed`, `Failed`),
+  `title()`, `generation()`, `snapshot(&mut Screen)`, `resize(colonnes, lignes,
+  largeur_px, hauteur_px)`, `send_text`, `send_key(Key, Modifiers)`, `paste`,
+  `write`, `scroll(ScrollAction)`, `wheel(lignes)`, sélection
+  (`start_selection`, `extend_selection`, `clear_selection`, `selection_text`,
+  `has_selection`), `clear_history`, `running_programs()`, `pid()`,
+  `process_ids()`, `close()` ; **bloquants** (tests, fermeture de l'IDE) :
+  `wait(délai)`, `close_and_wait(délai)`.
+- **Débit** : la sortie est analysée dans le fil de lecture, sous verrou ; un
+  seul `Output` est en attente par session tant que l'écran n'a pas été relu
+  (`snapshot` réarme). L'interface ne redessine donc qu'une fois par paquet,
+  au plus une fois par image, et un onglet caché ne coûte rien.
+- La saisie part dans un canal ; un fil de contrôle par session écrit, applique
+  les redimensionnements (émulateur puis `ResizePseudoConsole`), surveille la
+  fin de l'interpréteur. La saisie faite avant le démarrage est gardée.
+- `Screen` : `columns`, `lines`, `cells: Vec<ScreenCell { ch, zerowidth, fg,
+  bg, flags }>`, `cursor: Option<ScreenCursor { line, column, shape }>`,
+  `display_offset`, `history_size`, `modes` (`app_cursor`, `bracketed_paste`,
+  `alt_screen`, `alternate_scroll`, `mouse`, `show_cursor`…). `Color` :
+  `Foreground`, `Background`, `Indexed(0..=255)`, `Rgb` — palette 0–15 et
+  défauts dans le thème de l'interface, `xterm_rgb` pour 16–255 ; une couleur
+  redéfinie par le programme (OSC 4/10/11) arrive en `Rgb`. `CellFlags` :
+  `BOLD`, `ITALIC`, `UNDERLINE`, `INVERSE`, `DIM`, `STRIKEOUT`, `HIDDEN`, `WIDE`,
+  `WIDE_SPACER`, `SELECTED`.
+- Pur et testable : `encode_key(Key, Modifiers, &Modes)`, `encode_paste(texte,
+  encadré)`, `control_byte`, `Emulator` (octets → écran, sans processus),
+  `detect_profiles` (accès disque), `profile(kind, &réglages)` (sans disque).
+- Erreurs : `TerminalError` (`Core`, `ShellNotFound(chemin)`,
+  `DirectoryNotFound`, `Os { call, code }`, `Unsupported`).
+
+### Processus
+
+- Lancement : `CreatePseudoConsole` + `CreateProcessW` **suspendu**, placé dans
+  un job `KILL_ON_JOB_CLOSE`, puis relâché : aucun descendant n'échappe au job.
+  Entrées-sorties standard nulles dans `STARTUPINFO` (sinon un IDE lancé depuis
+  une console y attacherait l'enfant). Environnement hérité + variables du
+  profil ; Git Bash : `--login -i`, `TERM=xterm-256color`, `COLORTERM=truecolor`,
+  `CHERE_INVOKING=1`. Dossier de départ donné tel quel (espaces et parenthèses
+  testés).
+- Fermeture (`close`, `Drop`) : `TerminateJobObject` tout de suite (non
+  bloquant), puis le fil de contrôle ferme la pseudo-console pendant que la
+  lecture vide encore la sortie (sinon `ClosePseudoConsole` peut attendre
+  conhost). Fin de l'interpréteur par lui-même : on attend 150 ms de silence
+  (2 s au plus), on tue ce qui reste dans le job, on ferme ; `Exited { code }`
+  arrive après toute la sortie.
+- IDE tué brutalement : Windows ferme le job (arbre tué) et conhost s'arrête
+  (vérifié par `host_killed_leaves_no_orphan`).
+
+### Composant (`crates/app/src/terminal`)
+
+- `TerminalView::new(id)`, `show(ui, &session)` / `show_in_rect` →
+  `TerminalOutput { response, intents, columns, lines }` ;
+  `TerminalIntent::OpenFile { path, line, column }` (Ctrl+clic sur
+  `chemin:ligne[:colonne]`, chemin tel qu'affiché : `resolve_path(cwd, path)`
+  le rend absolu, chemins MSYS `/c/…` compris). `TerminalTheme` (sombre, clair).
+- Raccourcis gardés par l'IDE quand le terminal a le focus : Alt+F12, Alt+0–9,
+  Ctrl+Maj+N/F/T, Ctrl+F4 ; tout le reste va au shell (Échap, Tab, flèches,
+  Ctrl+C/D/R/S…). La coquille ne consomme plus Ctrl+S quand le terminal a le
+  focus (`TerminalPanel::has_focus`).
+- Branchement (`panel.rs`, à rhabiller par dev-interface) : `TerminalPanel::new`,
+  `on_event`, `ui_global` (à chaque image : confirmation à la fermeture de l'IDE
+  si un programme tourne, presse-papiers OSC 52), `show` (onglet Terminal),
+  `has_focus`, `focus` (Alt+F12). Variable d'essai `JULIESTORM_TERMINAL=1` :
+  l'IDE s'ouvre sur l'onglet Terminal.
+
+### À savoir, pas fait
+
+- La tâche `terminal.session` reste « en cours » toute la vie de la session :
+  la barre d'état ne doit pas la compter comme un travail en attente.
+- Pas de projet dans la coquille : les shells partent du dossier courant de
+  l'IDE. À brancher sur `Project::root()` quand il existe.
+- Ctrl+clic ouvre le fichier mais ne saute pas encore à la ligne (la coquille
+  n'a pas de « aller à la ligne » après chargement).
+- Souris envoyée aux programmes (vim `mouse=a`) : non gérée, la souris reste à
+  la sélection. Pas de clignotement du curseur (pas d'image redessinée sans
+  raison). Pas de réagencement au redimensionnement côté conhost (hors v0).
+- Gras : tracé doublé (egui n'a pas de monospace gras par défaut).
+- Textes de l'interface regroupés dans des modules `texts` (panel.rs, view.rs)
+  en attendant le catalogue de `redacteur`.

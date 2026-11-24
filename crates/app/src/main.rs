@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod editor;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,16 +60,23 @@ enum BottomTool {
     Git,
     Tests,
     Search,
+    Terminal,
 }
 
 impl BottomTool {
-    const ALL: [BottomTool; 3] = [BottomTool::Git, BottomTool::Tests, BottomTool::Search];
+    const ALL: [BottomTool; 4] = [
+        BottomTool::Git,
+        BottomTool::Tests,
+        BottomTool::Search,
+        BottomTool::Terminal,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             BottomTool::Git => "Git",
             BottomTool::Tests => "Tests",
             BottomTool::Search => "Recherche",
+            BottomTool::Terminal => "Terminal",
         }
     }
 
@@ -79,6 +87,7 @@ impl BottomTool {
             }
             BottomTool::Tests => "Arbre des résultats PHPUnit : à venir (julie-phpunit).",
             BottomTool::Search => "Recherche dans les fichiers : à venir (julie-index).",
+            BottomTool::Terminal => "",
         }
     }
 }
@@ -101,6 +110,7 @@ struct JulieStormApp {
     /// Dernier message à montrer (échec d'ouverture, d'enregistrement…).
     message: Option<String>,
     window_focused: bool,
+    terminal: terminal::TerminalPanel,
 }
 
 impl JulieStormApp {
@@ -117,11 +127,21 @@ impl JulieStormApp {
         for path in &files {
             julie_text::spawn_load(&tasks, path.clone());
         }
+        // Pas encore de projet ouvert : les terminaux partent du dossier courant.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let terminal = terminal::TerminalPanel::new(tasks.clone(), cwd, Default::default());
+        // Essai (lot 4) : JULIESTORM_TERMINAL=1 ouvre l'IDE sur l'onglet Terminal.
+        let bottom_tool = if std::env::var_os("JULIESTORM_TERMINAL").is_some() {
+            BottomTool::Terminal
+        } else {
+            BottomTool::default()
+        };
         Self {
+            terminal,
             bus,
             tasks,
             waker,
-            bottom_tool: BottomTool::default(),
+            bottom_tool,
             editors: Vec::new(),
             requested: files,
             active: 0,
@@ -250,7 +270,32 @@ impl eframe::App for JulieStormApp {
                     if let Ok(event) = event.take::<TextEvent>() {
                         self.on_text_event(event);
                     }
+                } else if event.domain == Domain::Terminal {
+                    if let Some(event) = event.get::<julie_terminal::TerminalEvent>() {
+                        self.terminal.on_event(event);
+                    }
                 }
+            }
+        }
+        self.terminal.ui_global(ui);
+
+        // Alt+F12 : au terminal ; de nouveau depuis le terminal, retour à l'éditeur.
+        let alt_f12 = ui.ctx().input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::ALT,
+                egui::Key::F12,
+            ))
+        });
+        if alt_f12 {
+            if self.terminal.has_focus(ui.ctx()) {
+                if let Some(open) = self.editors.get_mut(self.active) {
+                    open.view.request_focus();
+                } else {
+                    ui.memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(egui::Id::NULL)));
+                }
+            } else {
+                self.bottom_tool = BottomTool::Terminal;
+                self.terminal.focus();
             }
         }
 
@@ -266,12 +311,14 @@ impl eframe::App for JulieStormApp {
         }
         self.window_focused = focused;
 
-        let save = ui.ctx().input_mut(|i| {
-            i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::S,
-            ))
-        });
+        // Ctrl+S va au shell quand le terminal a le focus.
+        let save = !self.terminal.has_focus(ui.ctx())
+            && ui.ctx().input_mut(|i| {
+                i.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::S,
+                ))
+            });
         if save {
             self.save_all();
         }
@@ -300,7 +347,16 @@ impl eframe::App for JulieStormApp {
                     }
                 });
                 ui.separator();
-                ui.weak(self.bottom_tool.placeholder());
+                if self.bottom_tool == BottomTool::Terminal {
+                    for intent in self.terminal.show(ui) {
+                        let terminal::TerminalIntent::OpenFile { path, .. } = intent;
+                        let path = terminal::resolve_path(self.terminal.cwd(), &path);
+                        self.requested.push(path.clone());
+                        julie_text::spawn_load(&self.tasks, path);
+                    }
+                } else {
+                    ui.weak(self.bottom_tool.placeholder());
+                }
             });
 
         egui::Panel::left("project_tree")
