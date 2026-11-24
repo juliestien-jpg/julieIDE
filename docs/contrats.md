@@ -626,3 +626,106 @@ Modules `julie_diff::resolve` (résolution automatique des conflits simples) et
 `julie_diff::patch` (diff unifié) : emplacements réservés, vides. Options
 « ignorer les espaces » dans la fusion. Affinage au mot dans les blocs de fusion
 (appeler `diff_lines` sur les textes d'un bloc en attendant).
+
+## 10. `julie-text` et le composant éditeur (dev-editeur, lot 3 de la v0)
+
+Détail en tête de `crates/text/src/lib.rs` et de `crates/app/src/editor/mod.rs`.
+`julie-text` ne dépend que de `julie-core` (plus `ropey`, `unicode-segmentation`,
+`tree-sitter` 0.25 et les grammaires PHP 0.24, HTML/CSS/JS/TS 0.23).
+
+### Tampon et document (fil de l'interface, synchrone)
+
+- `Buffer` : corde `ropey`, positions en **caractères** ; lignes séparées par
+  `\n`, `\r\n` ou `\r` (`line(n)` sans la fin de ligne). `apply(remplacements,
+  EditKind, avant, après, instant)` ; `undo`/`redo` rendent les sélections à
+  rétablir ; `state_id`/`is_modified`/`mark_saved` ; `version()` augmente à
+  chaque modification ; ancres : `map_offset_since(position, version, Bias)`
+  (journal des 4096 dernières modifications).
+- `Selections` / `Selection { anchor, head, goal_column }` : curseurs multiples
+  (modèle complet ; la v0 n'en montre qu'un, Alt+clic en ajoute).
+- `Document` = tampon + sélections + chemin + `TextFormat` + `DiskStamp` +
+  langage + coloration. Commandes : `insert_text` (frappe groupée), `paste`,
+  `insert_newline` (indentation reprise, cran de plus après `{[(`), `backspace`,
+  `delete_forward`, `delete_word_*`, `indent`/`outdent`, `delete_lines` (Ctrl+Y),
+  `duplicate`, `move_lines`, `toggle_line_comment`, `copy_text`/`cut` (ligne
+  entière sans sélection), `undo`/`redo`, `move_cursor(Motion, étendre)`,
+  `set_cursor`, `select_word_at`, `select_line`, `select_all`,
+  `matching_bracket`. Lecture seule : `set_read_only` ou fichier Windows-1252 à
+  octet non attribué (`ReadOnlyReason`).
+- Groupement de l'annulation : frappe continue = une étape ; close par un
+  déplacement, un saut de ligne, un collage, une pause > 1 s, un enregistrement.
+
+### Fichiers (accès disque : tâches `Domain::Text`)
+
+| Fonction | Clé de tâche | Événements (`TextEvent`) |
+|---|---|---|
+| `spawn_load(tasks, chemin)` | `text.load` | `Loaded(LoadedFile)` ou `LoadFailed { path, error }` |
+| `spawn_save(tasks, document.save_request()?)` | `text.save` | `Saved(SaveOutcome)` → `document.mark_saved(&outcome)`, ou `SaveFailed { path, error }` |
+| `spawn_check_disk(tasks, [(chemin, stamp)])` | `text.check_disk` | `DiskChecked(Vec<(PathBuf, DiskState)>)` (`Unchanged`, `Changed`, `Deleted`) |
+
+- Versions synchrones pour les tests et les tâches d'autres crates :
+  `load_file`, `Document::open`, `SaveRequest::execute`, `Document::save`,
+  `check_disk`.
+- Refus à l'ouverture : binaire (NUL dans les 8 premiers Kio,
+  `TextError::Binary`), plus de 50 Mio (`TooLarge`). Au-delà de 5 Mio : texte
+  brut, sans coloration.
+- Encodage et fins de ligne : ceux de `julie_core::file`, rendus à l'identique ;
+  en fichier `Mixed`, les lignes nouvelles prennent la fin de ligne dominante.
+  Refus d'encodage : `TextError::Core(Error::Unencodable { .. })`, le document
+  reste modifié ; `Document::set_encoding(Utf8)` pour convertir.
+- Recharger après un changement sur le disque : `Document::reload(LoadedFile)`
+  (historique vidé, curseur sur la même ligne). Fichier supprimé :
+  `mark_deleted_on_disk()`.
+
+### Coloration
+
+- `Language::from_path` (`.php .phtml .inc`, `.html .htm`, `.css`,
+  `.js .mjs .cjs .jsx`, `.ts`, `.tsx`). Zones imbriquées : HTML hors des
+  balises PHP (un seul document HTML sur toutes les zones), JS des `<script>`
+  (sauf `type` non JavaScript, par ex. gabarit AngularJS), CSS des `<style>`.
+- `Document::enable_syntax(Some(waker))` lance **un fil par document** (pas une
+  tâche du bus : l'analyse incrémentale garde ses arbres d'une frappe à l'autre,
+  et le résultat ne concerne que ce document). Le fil appelle `waker` (→
+  `request_repaint`) quand un résultat est prêt ; `poll_syntax()` le prend
+  (l'éditeur le fait à chaque image). En attendant, les plages sont recalées sur
+  les lignes ajoutées ou retirées.
+- Résultat : `highlights(ligne) -> &[HighlightSpan { start, end, kind }]`, en
+  **octets** du contenu de la ligne ; `HighlightKind` : `Keyword`, `String`,
+  `Number`, `Comment`, `Variable`, `Function`, `Type`, `Constant`, `Tag`,
+  `Attribute`, `Property`, `Selector`, `Operator`, `Punctuation`, `Escape`. Les
+  couleurs sont dans le thème de l'interface.
+- **Arbres partagés** (pour `dev-indexation-recherche`) :
+  `document.syntax()?.snapshot() -> &SyntaxSnapshot { version, language, tree,
+  injections: Vec<InjectedTree { language, tree, ranges }> }` ; cloner un
+  `tree_sitter::Tree` est en temps constant. `julie-text` réexporte
+  `tree_sitter`. **À trancher par l'architecte** : pour que `julie-index` lise ces
+  arbres sans dépendre de `julie-text`, monter `tree-sitter = "0.25"` (et les
+  grammaires) dans `[workspace.dependencies]` ; `app` passera alors le
+  `SyntaxSnapshot` (ou ses `Tree`) à l'index pour les fichiers ouverts.
+- `Highlighter` (synchrone) et `highlight_text(langage, texte)` pour colorer
+  sans fil.
+
+### Composant éditeur (`crates/app/src/editor`)
+
+- `EditorView::new(id)` garde l'état d'affichage ; `show(ui, &mut document,
+  &decorations)` ou `show_in_rect(ui, rect, …)` rend `EditorOutput { response,
+  changed, selection_changed, scrolled, intents, layout }`.
+- Entrées de l'hôte : `Decorations { lines: Vec<LineDecoration { lines, tone }>,
+  ranges: Vec<RangeDecoration { range: TextRange, tone }>, gutter:
+  Vec<GutterMark { line, shape, tone, id, tooltip }>, separators: Vec<(ligne,
+  Tone)> }`, chaque liste triée par ligne ; `Tone` : `Added`, `Removed`,
+  `Modified`, `Conflict`, `SearchMatch`, `CurrentSearchMatch`, `Occurrence`,
+  `Warning`, `Error`, `Info` ; `EditorOptions { read_only, … }` ;
+  `EditorTheme` (palette claire/sombre par défaut, remplaçable par
+  `view.theme`).
+- Sorties : `EditorIntent::GutterMarkClicked { line, id }`.
+- Volets synchronisés : `split_panes(rect, n, largeur_gouttière) -> (volets,
+  gouttières)`, `sync_scroll(&mut [vues], &[sorties], |de, vers, ligne_haut|
+  …)`, `set_top_line`, `set_scroll_y`, `center_line`, et
+  `EditorLayout { text_rect, gutter_rect, line_height, scroll_y, visible_lines,
+  line_count }` avec `line_top(l)`, `line_y_range(l)`, `lines_y_range(a..b)`,
+  `line_at(y)` pour dessiner les connecteurs.
+- Raccourcis pris par l'éditeur (focus) : ceux de la ligne « Éditeur » de
+  `docs/specs/raccourcis.md` sauf Ctrl+F4, Alt+Gauche/Droite et Ctrl+Tab
+  (onglets : à l'hôte), plus Ctrl+D, Ctrl+/, Alt+Maj+Haut/Bas. Ctrl+S est à
+  l'hôte.
