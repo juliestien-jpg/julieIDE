@@ -7,3 +7,13 @@ publish.workspace = true
 
 [dependencies]
 julie-core.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+# Parcours respectant .gitignore (même moteur que ripgrep), masques de fichiers.
+ignore = "0.4"
+globset = "0.4"
+regex = "1"
+memchr = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

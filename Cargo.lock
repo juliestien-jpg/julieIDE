@@ -1760,6 +1760,9 @@ name = "julie-phpunit"
 version = "0.0.1"
 dependencies = [
  "julie-core",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

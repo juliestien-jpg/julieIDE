@@ -729,3 +729,128 @@ Détail en tête de `crates/text/src/lib.rs` et de `crates/app/src/editor/mod.rs
   `docs/specs/raccourcis.md` sauf Ctrl+F4, Alt+Gauche/Droite et Ctrl+Tab
   (onglets : à l'hôte), plus Ctrl+D, Ctrl+/, Alt+Maj+Haut/Bas. Ctrl+S est à
   l'hôte.
+
+## 11. `julie-index` (dev-indexation-recherche, lot 3 de la v0)
+
+Détail et exemple en tête de `crates/index/src/lib.rs`. Ne dépend que de
+`julie-core` (plus `ignore`, `globset`, `regex`, `memchr`). Spécification :
+`docs/specs/recherche.md`. Rien n'est écrit sur le disque (pas de cache en v0).
+
+### Service (fil de l'interface)
+
+`IndexService::new(tasks, project, settings)` (`settings: IndexSettings` =
+section `[index]` : `excluded` (défaut `.git`, `.juliestorm`, `/target` ; un nom
+seul vaut à toute profondeur, `/nom` à la racine seulement), `libraries` (défaut
+`vendor`, `node_modules`), `max_file_size` (10 Mio), `threads` (4)). Chaque
+méthode lance une tâche `Domain::Index` et rend la main ; résultats en
+`IndexEvent` (`event.get::<julie_index::IndexEvent>()`, ou `take` pour les gros
+paquets).
+
+| Méthode | Clé de tâche | Événements publiés |
+|---|---|---|
+| `scan()` | `index.scan` | progression de tâche `Progress { done: fichiers, total: 0 }`, puis `ScanFinished(ScanSummary { files, library_files, elapsed })`. Annule un `scan` en cours. |
+| `update(chemins)` | `index.update` | `Updated(UpdateSummary { added, removed, files, full_rescan })`. Chemins absolus de `Event::FilesChangedOnDisk` (fichiers ou dossiers, créés, modifiés, supprimés ; un renommage = les deux chemins). Attend la fin d'un `scan`. |
+| `find_files(requête, récents)` | `index.find_files` | `Files(FileResults)`, un seul. Annule la demande précédente. |
+| `search_text(TextQuery, UnsavedFiles) -> Result<TaskHandle>` | `index.search_text` | `TextMatches(Vec<FileTextMatches>)` en flux (premier paquet dès la première occurrence, puis toutes les 50 ms au plus), puis `TextSearchFinished(TextSearchSummary)`. Annule la recherche précédente ; attend la fin d'un `scan`. |
+| `cancel_search()` | — | annule la recherche en cours (fenêtre fermée). |
+| `preview(chemin, ligne, contexte, Option<TextQuery>, Option<Arc<str>>) -> Result<TaskHandle>` | `index.preview` | `Preview(Preview)`. Annule l'aperçu précédent. |
+
+- `is_ready()` : l'indexation initiale est finie (sinon afficher « Indexation… »).
+  `with_index(|index| …)` peut bloquer quelques millisecondes : tests et tâches.
+- **Annulation** : chaque nouvelle demande `find_files`, `search_text` ou
+  `preview` annule la précédente du même genre. Côté `app`, ignorer tout
+  `DomainEvent` dont `task` n'est pas la demande courante (critère 12).
+  Une recherche annulée ne publie pas `TextSearchFinished`.
+- **Erreurs rendues tout de suite, sans tâche** : `IndexError::InvalidPattern {
+  message }` (regex invalide : message sous le champ), `InvalidMask { mask,
+  message }`, `OutsideProject(dossier)`. Le reste passe par `Failed` de la tâche.
+- Requête de moins de 2 caractères, délai de 300 ms après la frappe : à la
+  charge de l'interface (la crate cherche ce qu'on lui donne).
+
+### Aller au fichier
+
+- `FileResults { query, position: Option<TextPosition>, matches: Vec<FileMatch>,
+  total, index_complete }` : 100 résultats au plus (`DEFAULT_LIMIT`),
+  « et n autres » = `total - matches.len()` ; `index_complete == false` pendant
+  l'indexation (résultats partiels). `position` : suffixe `:12` ou `:12:7`,
+  **base zéro** (ligne 11, colonne 6).
+- `FileMatch { path (absolu), relative ('/'), name_start, positions, kind,
+  library, recent }` : `positions` = indices de **caractères** appariés dans
+  `relative`, croissants ; `relative[..name_start]` est le dossier (gris).
+- Requête vide : les `récents` fournis par l'appelant (chemins absolus, le plus
+  récent d'abord), présents dans l'index, 20 au plus (`kind == Recent`).
+- Classement : `MatchKind` (`ExactName` < `NamePrefix` < `InName` < `InPath`),
+  puis récent, puis projet avant bibliothèque, puis qualité (débuts de mots,
+  initiales CamelCase/snake_case, morceaux consécutifs), puis chemin le plus
+  court, puis alphabétique. `/` et `\` font correspondre les dossiers ; les
+  espaces séparent des morceaux à trouver dans l'ordre.
+- Synchrone : `FileIndex::find_files(requête, récents, limite, cancel)`,
+  `split_location(texte)`.
+
+### Recherche dans les fichiers
+
+- `TextQuery { pattern, regex, case_sensitive, whole_word, file_mask, scope:
+  SearchScope::Project | Directory(absolu), max_matches (10 000) }` ;
+  `TextQuery::new(motif)` : littéral, sans casse, tous fichiers, projet.
+- Regex : syntaxe du crate `regex` (pas de références arrière ni de
+  regards en arrière), ligne à ligne (pas de multiligne), `^`/`$` aux bornes de
+  la ligne, `$` avant un `\r`. Mot entier : ni lettre, ni chiffre, ni `_` de part
+  et d'autre (règle de `git grep -w`, `$id` compris). Correspondances vides
+  écartées.
+- Masque : `*.php, *.js`, sans casse ; sans `/` sur le nom, avec `/` sur le
+  chemin relatif ; `!*.min.js` exclut.
+- `UnsavedFiles = HashMap<PathBuf (absolu), Arc<str>>` : contenu des onglets
+  modifiés, cherché **à la place** du disque ; un fichier non enregistré absent
+  de l'index (nouveau) est cherché aussi s'il est dans la portée.
+- `FileTextMatches { path, relative, lines: Vec<LineMatch>, unsaved }`, un
+  fichier en une fois, fichiers dans un ordre quelconque (l'interface trie ou
+  groupe). `LineMatch { line, matches: Vec<TextRange>, snippet, snippet_start,
+  line_length }` : `matches` en colonnes de **caractères** de la ligne entière
+  (à passer telles quelles à l'éditeur pour sélectionner) ; une ligne de plus de
+  400 caractères est rendue en extrait (`snippet`) qui commence 80 caractères
+  avant la première occurrence (`snippet_start`).
+- `TextSearchSummary { matches, lines, files_with_matches, files_searched,
+  skipped_binary, skipped_too_large, unreadable, limit_reached, elapsed }` :
+  « n occurrences dans m fichiers » = `matches` / `files_with_matches` ;
+  « 2 fichiers trop gros ignorés » = `skipped_too_large` ; « Plus de 10 000
+  résultats » = `limit_reached`.
+- Binaire : octet NUL dans les 8 000 premiers octets (comme Git). Au-delà de
+  `max_file_size` : ignoré et compté. Encodage : décodé comme l'éditeur
+  (`julie_core::file::decode` : UTF-8, BOM, repli Windows-1252) ; colonnes sans
+  la BOM.
+- Aperçu : `Preview { path, line, lines: Vec<PreviewLine { line, text, matches }>,
+  line_count }`. Synchrone : `preview_file(chemin, non_enregistré, ligne, avant,
+  après, Option<&Matcher>)`, `preview_text(…)`.
+- Synchrone : `Matcher::new(&query)?`, `FileMask::parse(masque)?`,
+  `files_to_search(&index, &query, &mask, &unsaved)?`,
+  `search_files(&fichiers, &matcher, &SearchOptions::new(&query, &settings),
+  cancel, &mut |paquet| …)?`.
+
+### Index des fichiers
+
+- Parcours parallèle (`ignore`, 4 fils) : `.gitignore` à toute profondeur
+  (appliqué aussi hors dépôt Git), `.git/info/exclude`, exclusion globale de
+  Git ; fichiers cachés inclus (`.htaccess`) ; liens symboliques ignorés.
+  `vendor`, `node_modules` : indexés seulement s'ils ne sont pas ignorés par Git,
+  marqués `is_library()`.
+- `FileIndex` : `scan(racine, réglages, cancel)`, `update(&chemins, cancel)`,
+  `entries()`, `get(relatif)`, `contains`, `absolute`, `relative`, `len`,
+  `from_relative_paths(…)` (sans disque). `FileEntry` : `relative()`, `name()`,
+  `directory()`, `name_start()`, `is_library()`.
+- Mise à jour : un `.gitignore` changé fait revoir son dossier ; celui de la
+  racine, tout le projet (`full_rescan`). `.git/info/exclude` ou l'exclusion
+  globale changés : relancer `scan()`.
+
+### Mesures (24/11/2026, `lab`, lecture seule, compilation `--release`)
+
+`cargo run -p julie-index --release --example mesure -- <projet>` : indexation
+de 23 389 fichiers en 170–185 ms ; « aller au fichier » 1–5 ms (médiane) sur
+`lab`, 10–24 ms sur 70 000 chemins ; recherche d'un texte absent sur 18 736
+fichiers 0,7–0,9 s à chaud (`git grep` : 1,1–1,4 s), premier paquet en 20–30 ms.
+
+### Prévu, pas livré (v1)
+
+Index des symboles (attend la décision sur `tree-sitter` dans
+`[workspace.dependencies]`, section 10), recherche partout à onglets,
+remplacement, aller à la définition, usages, cache disque dans
+`.juliestorm/index/`, proximité du fichier courant dans le classement.
