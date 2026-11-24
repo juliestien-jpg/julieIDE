@@ -1,0 +1,15 @@
+PHPUnit 9.6.34 by Sebastian Bergmann and contributors.
+
+
+##teamcity[testCount count='3' flowId='26252']
+
+##teamcity[testSuiteStarted name='crash' flowId='26252']
+
+##teamcity[testSuiteStarted name='Fixture\Tests\CrashTest' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Crash\CrashTest.php::\Fixture\Tests\CrashTest' flowId='26252']
+
+##teamcity[testStarted name='testBeforeTheCrash' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Crash\CrashTest.php::\Fixture\Tests\CrashTest::testBeforeTheCrash' flowId='26252']
+
+##teamcity[testFinished name='testBeforeTheCrash' duration='34' flowId='26252']
+
+##teamcity[testStarted name='testExitsTheProcess' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Crash\CrashTest.php::\Fixture\Tests\CrashTest::testExitsTheProcess' flowId='26252']
+avant exit

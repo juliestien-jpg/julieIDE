@@ -854,3 +854,118 @@ Index des symboles (attend la décision sur `tree-sitter` dans
 `[workspace.dependencies]`, section 10), recherche partout à onglets,
 remplacement, aller à la définition, usages, cache disque dans
 `.juliestorm/index/`, proximité du fichier courant dans le classement.
+
+## 12. `julie-phpunit` (dev-phpunit, lot 4 de la v0)
+
+Détail et exemple d'assemblage en tête de `crates/phpunit/src/lib.rs`. Ne dépend que
+de `julie-core` (plus `serde`, `thiserror`). Spécification : `docs/specs/phpunit.md`.
+
+### Service (fil de l'interface)
+
+`PhpUnit::new(tasks, project, settings)` (`settings: PhpUnitSettings` = section
+`[phpunit]` : `php_path`, `phpunit_path`, `configuration`, `timeout_seconds`, tous
+facultatifs ; `PhpUnitSettings::from_settings(&Settings)`). Chaque méthode rend un
+`TaskHandle` tout de suite ; le résultat arrive en `PhpUnitEvent`
+(`event.get::<julie_phpunit::PhpUnitEvent>()`, domaine `Domain::PhpUnit`, `event.task`
+= identifiant de la tâche lancée).
+
+| Méthode | Clé de tâche | Événements publiés |
+|---|---|---|
+| `detect()` | `phpunit.detect` | `Detected(Box<Detection>)` (versions sondées : deux processus) |
+| `run(RunRequest)` | `phpunit.run` | `RunStarted(Box<RunStart>)`, des `Events(Vec<TestEvent>)`, `RunFinished(Box<RunSummary>)` ; ou `LaunchFailed(Problem)` seul |
+| `stop(TaskId)` | | PHP et ses descendants tués ; `RunFinished` (`Stopped`) puis tâche `Cancelled` |
+
+- `RunRequest::all()` (v0). Déjà prêts pour la v1 : `RunRequest::test_suite(nom)`,
+  `RunRequest::filter(regex)`, `extra_args`, `env`, `working_dir`, `timeout`.
+- Commande : `php <phpunit> --configuration <xml> --teamcity [--testsuite|--filter ..]
+  [extra_args]`, dossier de travail = racine du projet. `RunStart::command_line` la
+  donne telle qu'elle s'écrit en tête de la console (aussi dans le premier lot, en
+  `TestEvent::Command`).
+- `RunFinished` est le dernier événement de toute exécution lancée. `RunSummary {
+  outcome, exit_code, counts, duration, reported }` ; `outcome` : `Completed` (même
+  avec des échecs), `Aborted { exit_code }` (PHP s'est arrêté avant la fin du
+  rapport : `exit()`, erreur fatale, config illisible), `Stopped`, `TimedOut`
+  (réglage `timeout_seconds`, tâche `Done`). `is_green()` ; « Aucun test exécuté » =
+  `counts.started == 0` ; un code de sortie non nul n'est pas un échec en soi.
+- `LaunchFailed(Problem)` : `PhpNotFound`, `PhpPathInvalid(chemin)`,
+  `PhpNotRunnable`, `PhpUnitNotFound`, `PhpUnitPathInvalid`, `NoConfiguration`,
+  `ConfigurationPathInvalid`. Aucun test lancé ; la tâche finit `Failed`. Les
+  textes viennent du catalogue d'après la variante.
+- **Lots** : premier lot immédiat, puis toutes les 100 ms ou à 500 événements,
+  expédiés par un fil de surveillance même pendant un long test (un nœud apparaît
+  dès `testStarted`). Annulation, délai et lots en retard : un seul fil.
+- Version synchrone sans bus, pour les tests : `julie_phpunit::execute(&project,
+  &settings, &request, &cancel, &|event| ..)`.
+
+### Côté `app` : l'arbre se remplit en direct
+
+```rust
+PhpUnitEvent::RunStarted(start) => view = RunView { tree: ResultTree::new(project.root()), start, summary: None },
+PhpUnitEvent::Events(events)    => view.tree.apply_all(events),   // un lot par image au plus
+PhpUnitEvent::RunFinished(sum)  => view.summary = Some(sum),
+PhpUnitEvent::LaunchFailed(p)   => show_problem(p),
+PhpUnitEvent::Detected(d)       => self.detection = d,
+```
+
+Écarter tout événement dont `event.task` n'est pas la dernière exécution lancée.
+
+### Modèle de résultats (`ResultTree`)
+
+- Arbre à plat, `NodeId` stable ; `tree.root()`, `node(id)`, `children(id)`,
+  `path_of(id)`, `iter()`, `counts()`, `command()`, `phpunit_version()`,
+  `reported_summary()`, `version()` (change à chaque événement : clé de cache),
+  `is_ended()`.
+- `TestNode` : `kind` (`Root`, `Suite`, `Class`, `Method`, `DataSet` ; une méthode
+  à fournisseur de données est un `Method` dont les enfants sont des `DataSet`),
+  `name`, `label` (nom à afficher), `state` (`TestState` : `Pending`, `Running`,
+  `Passed`, `Skipped`, `Incomplete`, `Risky`, `Interrupted`, `Failed`, `Error` ;
+  gravité croissante dans cet ordre sauf `Pending`/`Running`), `worst`, `duration`
+  (somme pour un conteneur), `console`, `diagnostic`, `source`, `is_test`,
+  `finished`. Un conteneur est `Running` jusqu'à sa fin puis prend l'état le plus
+  grave de ses enfants.
+- `Counts { total: Option<usize>, started, running, passed, failed, errors,
+  skipped, incomplete, risky, interrupted }` + `finished()`, `ignored()`,
+  `failures()`. `total == None` : afficher « sur ? ».
+- **Sortie** : la sortie non reconnue (avertissement PHP, `echo`, messages inconnus)
+  est rattachée au test en cours (`node.console`), sinon à la racine ; la console
+  de la racine contient **toute** la sortie non TeamCity, dans l'ordre. Une ligne
+  vide juste avant un message TeamCity est du cadrage de PHPUnit 9 et n'est pas
+  gardée. `console_text()` ; `console_truncated` au-delà de 1 Mio par nœud.
+- **Échec** : `diagnostic { message, trace: Vec<TraceEntry { text, location:
+  Option<julie_core::Location> }>, comparison: Option<Comparison>, cause }`. Les
+  lignes PHP (1-based) sont converties en `TextPosition` 0-based. `cause` =
+  `ProcessExited { exit_code }` pour le test emporté par un arrêt brutal (message
+  = fin de la sortie d'erreur, éventuellement vide ; l'interface écrit le texte).
+  `Comparison::expected_text()` / `actual_text()` : texte prêt pour
+  `julie_diff::diff_lines` (apostrophes et `\n` d'export retirés pour une chaîne).
+- **Liens dans la console** : `julie_phpunit::find_links(texte, racine, |p| existe)`
+  rend les plages `chemin:ligne` à souligner (chemins avec espaces et lettre de
+  lecteur compris ; `exists` est au choix de l'appelant, avec cache).
+- Double-clic sur un test : `node.jump_location()` (début du fichier : le
+  `locationHint` de PHPUnit ne donne pas de ligne) ; `node.source.method` permet
+  d'affiner avec l'index des symboles.
+- Exécution interrompue : le test en cours passe en `Error` (arrêt brutal) ou
+  `Interrupted` (arrêt demandé, délai) ; les tests jamais commencés ne sont pas
+  inventés ; la racine prend `Error` / `Interrupted` même sans test en cours.
+
+### Détection
+
+`julie_phpunit::detect(root, &settings, probe_versions, &cancel)` -> `Detection {
+php, phpunit, configuration }`, chacun un `Result<_, Problem>` : PHP = réglage, sinon
+`php` du `PATH`, sinon `C:\Program Files (x86)\AgileBio\LabCollector\php\php.exe`
+(un réglage invalide n'est jamais contourné) ; PHPUnit = réglage, `vendor/bin/phpunit`,
+`vendor/phpunit/phpunit/phpunit`, phar ; on lance toujours `php <script>`, jamais le
+`.bat` ; configuration = réglage, `phpunit.xml`, `phpunit.xml.dist`.
+`Detection::plan()` -> `LaunchPlan` ou le premier `Problem`.
+
+### Limites connues (à lire avant de s'en servir)
+
+- PHPUnit 9 émet erreur, échec et test risqué sous le même `testFailed`, et ignoré /
+  incomplet sous le même `testIgnored` : la crate les distingue par le message
+  (`Classe : message` = erreur ; `This test ...` = risqué) et par la ligne de code
+  de la trace (`markTestIncomplete`). Heuristique, vérifiée sur PHPUnit 9.6
+  seulement ; en cas de doute un test est « échoué » ou « ignoré ».
+- PHPUnit 10, 11 et 12 n'ont pas été exécutés (absents de la machine) : l'analyseur
+  est tolérant et testé sur des sorties écrites de mémoire, pas enregistrées.
+- Pas encore : découverte (gouttière), configurations nommées, relance des échecs
+  ou d'un nœud, historique. `RunScope::Filter` est la place de la relance d'un nœud.

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Petit projet d'essai de julie-phpunit.
+  - « main » : la suite lancée par défaut (réussites, échecs, erreur, ignoré, incomplet,
+    risqué, fournisseur de données, sortie, test de 1 s).
+  - « crash » : un test appelle exit(1)  ; à lancer seule.
+  - « slow » : un test qui dort 30 s, pour essayer l'arrêt.
+-->
+<phpunit colors="false" defaultTestSuite="main" cacheResult="false">
+  <testsuites>
+    <testsuite name="main">
+      <directory suffix="Test.php">tests/Main</directory>
+    </testsuite>
+    <testsuite name="crash">
+      <directory suffix="Test.php">tests/Crash</directory>
+    </testsuite>
+    <testsuite name="slow">
+      <directory suffix="Test.php">tests/Slow</directory>
+    </testsuite>
+  </testsuites>
+</phpunit>

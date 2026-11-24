@@ -1,0 +1,27 @@
+PHPUnit 10.5.9 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.3.1
+Configuration: C:\proj\phpunit.xml
+
+##teamcity[testCount count='5' flowId='4242']
+##teamcity[testSuiteStarted name='main' flowId='4242']
+##teamcity[testSuiteStarted name='App\Tests\ThingTest' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest' flowId='4242']
+##teamcity[testStarted name='testPasses' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest::testPasses' flowId='4242']
+##teamcity[testFinished name='testPasses' duration='3' flowId='4242']
+##teamcity[testStarted name='testFails' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest::testFails' flowId='4242']
+##teamcity[testFailed name='testFails' message='Failed asserting that two strings are equal.' details='C:\proj\tests\ThingTest.php:20|n' type='comparisonFailure' actual='|'b|'' expected='|'a|'' flowId='4242']
+##teamcity[testFinished name='testFails' duration='2' flowId='4242']
+##teamcity[testSuiteStarted name='App\Tests\ThingTest::testProvided' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest::testProvided' flowId='4242']
+##teamcity[testStarted name='testProvided with data set #0' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest::testProvided with data set #0' flowId='4242']
+##teamcity[testFinished name='testProvided with data set #0' duration='1' flowId='4242']
+##teamcity[testStarted name='testProvided with data set "deux"' locationHint='php_qn://C:\proj\tests\ThingTest.php::\App\Tests\ThingTest::testProvided with data set "deux"' flowId='4242']
+##teamcity[testIgnored name='testProvided with data set "deux"' message='pas ici' details='C:\proj\tests\ThingTest.php:31|n' flowId='4242']
+##teamcity[testFinished name='testProvided with data set "deux"' duration='0' flowId='4242']
+##teamcity[testSuiteFinished name='App\Tests\ThingTest::testProvided' flowId='4242']
+##teamcity[testSuiteFinished name='App\Tests\ThingTest' flowId='4242']
+##teamcity[testSuiteFinished name='main' flowId='4242']
+
+Time: 00:00.012, Memory: 8.00 MB
+
+FAILURES!
+Tests: 4, Assertions: 3, Failures: 1, Skipped: 1.

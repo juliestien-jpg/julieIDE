@@ -1,0 +1,90 @@
+PHPUnit 9.6.34 by Sebastian Bergmann and contributors.
+
+
+##teamcity[testCount count='13' flowId='20048']
+
+##teamcity[testSuiteStarted name='main' flowId='20048']
+
+##teamcity[testSuiteStarted name='Fixture\Tests\CalculatorTest' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest' flowId='20048']
+
+##teamcity[testStarted name='testAdditionPasses' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testAdditionPasses' flowId='20048']
+
+##teamcity[testFinished name='testAdditionPasses' duration='34' flowId='20048']
+
+##teamcity[testStarted name='testSecondAssertionPasses' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testSecondAssertionPasses' flowId='20048']
+
+##teamcity[testFinished name='testSecondAssertionPasses' duration='11' flowId='20048']
+
+##teamcity[testStarted name='testEqualsFailsWithExpectedAndActual' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testEqualsFailsWithExpectedAndActual' flowId='20048']
+
+##teamcity[testFailed name='testEqualsFailsWithExpectedAndActual' message='Failed asserting that two strings are equal.' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:25|n ' duration='13' type='comparisonFailure' actual='|'obtenu|'' expected='|'attendu|'' flowId='20048']
+
+##teamcity[testFinished name='testEqualsFailsWithExpectedAndActual' duration='13' flowId='20048']
+
+##teamcity[testStarted name='testMultilineEqualsFails' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testMultilineEqualsFails' flowId='20048']
+
+##teamcity[testFailed name='testMultilineEqualsFails' message='Failed asserting that two strings are equal.' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:30|n ' duration='0' type='comparisonFailure' actual='|'ligne 1\n|nligne deux\n|nligne 3|'' expected='|'ligne 1\n|nligne 2\n|nligne 3|'' flowId='20048']
+
+##teamcity[testFinished name='testMultilineEqualsFails' duration='0' flowId='20048']
+
+##teamcity[testStarted name='testThrowsAnException' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testThrowsAnException' flowId='20048']
+
+##teamcity[testFailed name='testThrowsAnException' message='RuntimeException : boum || avec |'apostrophes|' et |[crochets|]' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:35|n ' duration='2' flowId='20048']
+
+##teamcity[testFinished name='testThrowsAnException' duration='2' flowId='20048']
+
+##teamcity[testStarted name='testIsSkipped' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testIsSkipped' flowId='20048']
+
+##teamcity[testIgnored name='testIsSkipped' message='pas sur cette machine' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:40|n ' duration='6' flowId='20048']
+
+##teamcity[testFinished name='testIsSkipped' duration='6' flowId='20048']
+
+##teamcity[testStarted name='testIsIncomplete' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testIsIncomplete' flowId='20048']
+
+##teamcity[testIgnored name='testIsIncomplete' message='à finir' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:45|n ' duration='6' flowId='20048']
+
+##teamcity[testFinished name='testIsIncomplete' duration='6' flowId='20048']
+
+##teamcity[testStarted name='testIsRisky' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testIsRisky' flowId='20048']
+
+##teamcity[testFailed name='testIsRisky' message='This test did not perform any assertions|n|nC:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:48' details=' ' duration='0' flowId='20048']
+
+##teamcity[testFinished name='testIsRisky' duration='0' flowId='20048']
+
+##teamcity[testSuiteStarted name='testAdditionWithDataSet' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testAdditionWithDataSet' flowId='20048']
+
+##teamcity[testStarted name='testAdditionWithDataSet with data set "zéro plus zéro"' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testAdditionWithDataSet with data set "zéro plus zéro"' flowId='20048']
+
+##teamcity[testFinished name='testAdditionWithDataSet with data set "zéro plus zéro"' duration='0' flowId='20048']
+
+##teamcity[testStarted name='testAdditionWithDataSet with data set "l|'apostrophe || la barre |[et|] les crochets"' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testAdditionWithDataSet with data set "l|'apostrophe || la barre |[et|] les crochets"' flowId='20048']
+
+##teamcity[testFinished name='testAdditionWithDataSet with data set "l|'apostrophe || la barre |[et|] les crochets"' duration='0' flowId='20048']
+
+##teamcity[testStarted name='testAdditionWithDataSet with data set "échoue"' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testAdditionWithDataSet with data set "échoue"' flowId='20048']
+
+##teamcity[testFailed name='testAdditionWithDataSet with data set "échoue"' message='Failed asserting that 3 is identical to 4.' details=' C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php:59|n ' duration='0' flowId='20048']
+
+##teamcity[testFinished name='testAdditionWithDataSet with data set "échoue"' duration='0' flowId='20048']
+
+##teamcity[testSuiteFinished name='testAdditionWithDataSet' flowId='20048']
+
+##teamcity[testStarted name='testWritesOnOutput' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testWritesOnOutput' flowId='20048']
+texte écrit par le test
+
+##teamcity[testFinished name='testWritesOnOutput' duration='1' flowId='20048']
+
+##teamcity[testStarted name='testIsSlow' locationHint='php_qn://C:\Program Files (x86)\AgileBio\LabCollector\www\JulieStorm\tests\fixtures\phpunit\tests\Main\CalculatorTest.php::\Fixture\Tests\CalculatorTest::testIsSlow' flowId='20048']
+
+##teamcity[testFinished name='testIsSlow' duration='1011' flowId='20048']
+
+##teamcity[testSuiteFinished name='Fixture\Tests\CalculatorTest' flowId='20048']
+
+##teamcity[testSuiteFinished name='main' flowId='20048']
+
+
+Time: 00:01.189, Memory: 6.00 MB
+
+
+ERRORS!
+Tests: 13, Assertions: 10, Errors: 1, Failures: 3, Skipped: 1, Incomplete: 1, Risky: 1.

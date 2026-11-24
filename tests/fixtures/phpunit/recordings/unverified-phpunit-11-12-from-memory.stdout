@@ -1,0 +1,23 @@
+PHPUnit 12.0.1 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.4.2
+Configuration: C:\proj\phpunit.xml
+
+##teamcity[testCount count='3' flowId='7']
+##teamcity[testSuiteStarted name='main' flowId='7']
+##teamcity[testSuiteStarted name='App\Tests\OtherTest' locationHint='php_qn://C:\proj\tests\OtherTest.php::\App\Tests\OtherTest' flowId='7']
+##teamcity[testStarted name='App\Tests\OtherTest::testWorks' locationHint='php_qn://C:\proj\tests\OtherTest.php::\App\Tests\OtherTest::testWorks' flowId='7']
+##teamcity[testFinished name='App\Tests\OtherTest::testWorks' duration='1.25' flowId='7']
+##teamcity[testStarted name='App\Tests\OtherTest::testRisky' locationHint='php_qn://C:\proj\tests\OtherTest.php::\App\Tests\OtherTest::testRisky' flowId='7']
+##teamcity[testFailed name='App\Tests\OtherTest::testRisky' message='This test did not perform any assertions' details='C:\proj\tests\OtherTest.php:15|n' flowId='7']
+##teamcity[testFinished name='App\Tests\OtherTest::testRisky' duration='0' flowId='7']
+##teamcity[testStarted name='App\Tests\OtherTest::testBoom' locationHint='php_qn://C:\proj\tests\OtherTest.php::\App\Tests\OtherTest::testBoom' flowId='7']
+##teamcity[testFailed name='App\Tests\OtherTest::testBoom' message='InvalidArgumentException : nope' details='C:\proj\src\Thing.php:9|nC:\proj\tests\OtherTest.php:22|n' flowId='7']
+##teamcity[testFinished name='App\Tests\OtherTest::testBoom' duration='4' flowId='7']
+##teamcity[testSuiteFinished name='App\Tests\OtherTest' flowId='7']
+##teamcity[testSuiteFinished name='main' flowId='7']
+
+Time: 00:00.008, Memory: 10.00 MB
+
+ERRORS!
+Tests: 3, Assertions: 1, Errors: 1, Risky: 1, PHPUnit Deprecations: 1.
