@@ -1,0 +1,26 @@
+# « Basculer et rebaser sur main » : conflit au commit 2 sur 3, résoudre puis Continuer (critère 17).
+# Avant : branches.sh <dossier>
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui branches.open
+wait-idle
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout_rebase
+wait-idle
+wait 500
+screenshot target/essais/branches/14-rebase-conflit.png
+state target/essais/branches/14-rebase-conflit.json
+ui git.keep ours a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+screenshot target/essais/branches/14-rebase-resolu.png
+ui op.continue
+wait-idle
+wait 600
+state target/essais/branches/14-rebase-fini.json
+screenshot target/essais/branches/14-rebase-fini.png
+quit

@@ -1,0 +1,28 @@
+# Basculer sur une branche distante seule (locale créée avec amont) et basculer avec un changement
+# local que Git laisse suivre (critères 4 et 6).
+# Avant : branches.sh <dossier> distante-seule
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+action vcs.fetch
+wait-idle
+ui branches.open
+wait-idle
+ui branches.select origin/feature/remote-only
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 500
+state target/essais/branches/23-distante.json
+external-write LISEZMOI.md # modifié localement\n
+wait 1500
+ui branches.open
+wait-idle
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 500
+state target/essais/branches/23-changement-suit.json
+screenshot target/essais/branches/23-changement-suit.png
+quit

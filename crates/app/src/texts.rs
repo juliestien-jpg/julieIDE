@@ -309,6 +309,22 @@ pub fn task_label(kind: &'static str) -> &'static str {
         "phpunit.detect" => "Détection de PHPUnit",
         "vcs.commit" => "Commit",
         "vcs.log" => "Lecture du journal Git",
+        "vcs.branches" => "Lecture des branches",
+        "vcs.fetch" => "Récupération (fetch)",
+        "vcs.push" => "Envoi (push)",
+        "vcs.update" => "Mise à jour du projet",
+        "vcs.pull" => "Récupération et intégration (pull)",
+        "vcs.switch" => "Bascule de branche",
+        "vcs.branch_create" => "Création de la branche",
+        "vcs.branch_update" => "Avance de la branche",
+        "vcs.remote_branch_delete" => "Suppression de la branche distante",
+        "vcs.merge" => "Fusion",
+        "vcs.rebase" => "Rebase",
+        "vcs.cherry_pick" => "Cherry-pick",
+        "vcs.revert" => "Revert",
+        "vcs.reset" => "Réinitialisation de la branche",
+        "vcs.stage" | "vcs.unstage" => "Mise à jour de l'index",
+        "vcs.discard" => "Annulation des modifications",
         "terminal.profiles" => "Détection des terminaux",
         "phpunit.run" => "Exécution des tests",
         other => other,
@@ -455,13 +471,9 @@ pub const COMMIT_AMEND: &str = "Amender le dernier commit";
 pub const COMMIT_FAILED: &str = "La validation a échoué";
 pub const COMMIT_FAILED_DETAIL: &str =
     "Rien n'a été validé, votre message est conservé. Sortie de Git :";
-pub const OPERATION_DONE: &str = "Fusion terminée.";
 pub const OPERATION_RESOLVED: &str = "Tous les conflits sont résolus, vous pouvez valider.";
 pub const OPERATION_RESOLVE: &str = "Résoudre";
-pub const OPERATION_ABORT: &str = "Abandonner";
 pub const CONFIRM_YES: &str = "Confirmer";
-pub const CONFIRM_ABORT_DETAIL: &str =
-    "Les fichiers reviennent à l'état d'avant, et ce qui a été résolu est perdu.";
 
 pub fn commit_done(subject: &str) -> String {
     format!("1 commit : {subject}")

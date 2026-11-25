@@ -27,6 +27,7 @@ const IGNORED_KINDS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub struct TaskInfo {
+    pub id: TaskId,
     pub kind: &'static str,
     pub started: Instant,
     pub progress: Option<(u64, u64)>,
@@ -44,6 +45,7 @@ impl TaskTracker {
                 self.running.insert(
                     event.id,
                     TaskInfo {
+                        id: event.id,
                         kind: event.kind,
                         started: Instant::now(),
                         progress: None,
@@ -90,6 +92,15 @@ impl TaskTracker {
             .min()
     }
 
+    /// Les tâches en cours dont le genre satisfait `pred` (annulation des opérations réseau).
+    pub fn running_of(&self, pred: impl Fn(&str) -> bool) -> Vec<TaskId> {
+        self.running
+            .iter()
+            .filter(|(_, info)| pred(info.kind))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn kinds(&self) -> Vec<&'static str> {
         let mut kinds: Vec<&'static str> = self.counted().map(|i| i.kind).collect();
         kinds.sort_unstable();
@@ -111,6 +122,27 @@ pub struct StatusModel {
     pub message: Option<(String, bool)>,
     /// Opération Git en cours et fichiers en conflit (pastille de la barre).
     pub operation: Option<String>,
+    /// Ligne de progression d'une opération réseau (« Réception : 45 % »).
+    pub progress_text: Option<String>,
+    /// Libellé du bouton de la notification (« Restaurer »…).
+    pub message_action: Option<String>,
+}
+
+/// Ce que l'utilisatrice a fait dans la barre d'état à cette image.
+#[derive(Default)]
+pub struct StatusOut {
+    /// Annuler cette tâche réseau.
+    pub cancel: Option<TaskId>,
+    /// Le bouton de la notification a été pressé.
+    pub message_action: bool,
+}
+
+/// Les tâches réseau se laissent annuler (Git et ses descendants sont tués).
+pub fn cancellable(kind: &str) -> bool {
+    matches!(
+        kind,
+        "vcs.fetch" | "vcs.push" | "vcs.update" | "vcs.pull" | "vcs.remote_branch_delete"
+    )
 }
 
 impl StatusModel {
@@ -127,16 +159,24 @@ impl StatusModel {
             "tasks": self.tasks.iter().map(|t| t::task_label(t.kind)).collect::<Vec<_>>(),
             "message": self.message.as_ref().map(|(m, _)| m),
             "operation": self.operation,
+            "progress": self.progress_text,
+            "message_action": self.message_action,
         })
     }
 }
 
-pub fn show(ui: &mut Ui, p: &Palette, model: &StatusModel) {
+pub fn show(ui: &mut Ui, p: &Palette, model: &StatusModel) -> StatusOut {
+    let mut out = StatusOut::default();
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
         // À gauche : message, sinon le fichier.
         if let Some((message, is_error)) = &model.message {
             ui.colored_label(if *is_error { p.error } else { p.warn }, message);
+            if let Some(label) = &model.message_action {
+                if ui.small_button(label).clicked() {
+                    out.message_action = true;
+                }
+            }
         } else if let Some(file) = &model.file {
             ui.label(
                 egui::RichText::new(format!("{file}{}", if model.modified { " ●" } else { "" }))
@@ -151,7 +191,9 @@ pub fn show(ui: &mut Ui, p: &Palette, model: &StatusModel) {
             );
         }
         for task in &model.tasks {
-            task_widget(ui, p, task);
+            if task_widget(ui, p, task, model.progress_text.as_deref()) {
+                out.cancel = Some(task.id);
+            }
         }
         if let Some(operation) = &model.operation {
             ui.label(
@@ -209,10 +251,17 @@ pub fn show(ui: &mut Ui, p: &Palette, model: &StatusModel) {
             }
         });
     });
+    out
 }
 
-fn task_widget(ui: &mut Ui, p: &Palette, task: &TaskInfo) {
+/// Rend `true` si la croix d'annulation est cliquée.
+fn task_widget(ui: &mut Ui, p: &Palette, task: &TaskInfo, progress_text: Option<&str>) -> bool {
     let mut label = t::task_label(task.kind).to_owned();
+    if cancellable(task.kind) {
+        if let Some(text) = progress_text {
+            label.push_str(&format!(" — {text}"));
+        }
+    }
     if let Some((done, total)) = task.progress {
         if total > 0 {
             label.push_str(&format!(" {}/{}", done, total));
@@ -230,4 +279,19 @@ fn task_widget(ui: &mut Ui, p: &Palette, task: &TaskInfo) {
         None => egui::ProgressBar::new(0.0).animate(true),
     };
     ui.add(bar.desired_width(90.0).desired_height(6.0).corner_radius(3));
+    if !cancellable(task.kind) {
+        return false;
+    }
+    let cancel_rect = ui
+        .allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover())
+        .0;
+    icons::tool_button(
+        ui,
+        cancel_rect,
+        egui::Id::unique(("annuler-tache", task.id)),
+        Icon::Close,
+        p,
+        crate::texts_v1::TIP_CANCEL_TASK,
+        true,
+    )
 }

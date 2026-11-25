@@ -1,0 +1,17 @@
+# Fetch ralenti : progression et croix d'annulation dans la barre d'état ; l'éditeur reste utilisable
+# (critère 27). Avant : branches.sh <dossier> lent
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+file a.txt
+wait-idle
+action vcs.fetch
+wait 2000
+screenshot target/essais/branches/60-fetch-lent.png
+state target/essais/branches/60-fetch-lent.json
+type x
+ui net.cancel
+wait 1500
+state target/essais/branches/61-annule.json
+screenshot target/essais/branches/61-annule.png
+quit

@@ -1,0 +1,17 @@
+# Push refusé (le distant a des commits) puis « Rebaser puis pousser » (critère 13).
+# Avant : branches.sh <dossier> retard avance
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+key Ctrl+Maj+K
+wait 600
+ui dialog.choose push
+wait-idle
+wait 500
+screenshot target/essais/branches/16-push-refuse.png
+state target/essais/branches/16-push-refuse.json
+ui dialog.choose rebase_push
+wait-idle
+wait 800
+state target/essais/branches/16-apres-rebase-push.json
+quit

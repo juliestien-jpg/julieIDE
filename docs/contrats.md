@@ -4,7 +4,8 @@ Tenu par `architecte-technique`. Ce document décrit ce que `julie-core` fournit
 les règles que toutes les crates suivent. Si quelque chose manque à `julie-core`,
 on le demande à l'architecte dans son rapport : on ne modifie pas le noyau soi-même.
 
-État : lot 1 de la v0 (24/11/2026).
+État : lot 1 de la v0 (24/11/2026) ; réglages en écriture, corbeille et copies de
+sécurité : v1 (25/11/2026).
 
 ## 1. Qui dépend de qui
 
@@ -24,7 +25,8 @@ app (juliestorm) ──> text, diff, vcs, index, phpunit, terminal ──> julie
    calcul de plus de quelques millisecondes.** Tout cela passe par `Tasks::spawn`.
 2. Les fonctions de `julie-core` marquées « bloquant » ou « accès disque » dans
    leur documentation (`process::Command::run*`, `file::*`, `Project::open`,
-   `Project::ensure_data_dir`, `Settings::load`, `TaskHandle::join`,
+   `Project::ensure_data_dir`, `Settings::load`, tout `SettingsFiles` sauf
+   `path`, `trash::move_to_trash`, tout `backup::*`, `TaskHandle::join`,
    `Bus::recv_timeout`) ne s'appellent **jamais** depuis le fil de l'interface.
 3. Une tâche de fond ne touche pas à l'état de l'interface : elle **publie** ses
    résultats sur le bus. L'interface vide le bus une fois par image
@@ -71,8 +73,12 @@ pub enum Event {
     FilesChangedOnDisk(Vec<PathBuf>),
     Task(TaskEvent),        // cycle de vie d'une tâche de fond
     Domain(DomainEvent),    // résultat d'une crate métier
+    SettingsChanged(SettingsChanged),   // réglages lus ou relus (v1, voir 3.6)
 }
 ```
+
+`Event::SettingsChanged` est nouveau en v1 : un `match` exhaustif sur `Event` doit
+gagner une branche (dans ce dépôt : `crates/app/src/app.rs` seulement).
 
 - `Bus::new()`, `bus.publisher()`, `bus.drain()`, `bus.set_waker(f)`,
   `bus.recv_timeout(d)` (tests).
@@ -212,11 +218,22 @@ file::write_atomic(&path, &bytes)?;       // toute autre écriture de l'IDE
   `ensure_data_dir()?` (le crée, avec un `.gitignore` qui ignore tout son
   contenu), `settings_path()`. `Project` se clone et se passe par valeur aux tâches.
 - Dans `.juliestorm/`, chaque crate écrit dans **son** sous-dossier
-  (`.juliestorm/index/…`) et par `write_atomic`.
-- `Settings::load(Some(&project))?` fusionne
-  `%APPDATA%\JulieStorm\settings.toml` puis `<racine>/.juliestorm/settings.toml`
-  (le projet l'emporte, clé par clé). Fichier absent = vide ; fichier mal formé =
-  `Error::Settings`.
+  (`.juliestorm/index/…`) et par `write_atomic`. Le noyau y tient `settings.toml`
+  et `annulations/` (3.8).
+- `project::ALWAYS_EXCLUDED` = `[".git", ".juliestorm"]` : noms que la recherche
+  et l'indexation excluent **toujours**, à toute profondeur, quoi que dise
+  `[index] excluded`. `julie-index` les applique en plus de la liste réglée ;
+  l'interface les affiche en tête de la liste, grisés, non retirables, et ne les
+  écrit jamais dans le fichier.
+
+#### Lire
+
+- Deux portées (`settings::Scope`) : `User` = `%APPDATA%\JulieStorm\settings.toml`
+  (« Tous mes projets »), `Project` = `<racine>\.juliestorm\settings.toml` (« Ce
+  projet », local à la machine : décision n° 6). Priorité **clé par clé** :
+  défaut < utilisateur < projet. Les tables fusionnent en profondeur
+  (`[phpunit.env]` fusionne par nom de variable) ; toute autre valeur, tableaux
+  compris, est remplacée en bloc (`extra_args`, `excluded`).
 - Une table TOML par crate, du nom de la crate sans préfixe (`[vcs]`, `[index]`,
   `[phpunit]`, `[terminal]`, `[text]`, `[diff]`, `[app]`). La crate déclare sa
   structure et la lit :
@@ -229,7 +246,232 @@ pub struct PhpUnitSettings { pub php_path: Option<PathBuf>, pub phpunit_path: Op
 let settings: PhpUnitSettings = settings.section("phpunit")?;   // section absente -> Default
 ```
 
-- Lecture seule pour l'instant. `Settings` se clone et se passe aux tâches.
+- `Settings` (immuable, se clone, se passe aux tâches) :
+
+| Appel | Rend |
+|---|---|
+| `section::<T>("phpunit")?` | la section fusionnée ; clé de mauvais type : `Error::Settings` pour **cette** section, les autres restent lisibles |
+| `get(&["phpunit", "php_path"])` | la valeur effective (`Option<&settings::Value>`, le `toml::Value` réexporté), `None` si aucun fichier ne la règle |
+| `get_in(Scope::Project, chemin)` | la valeur écrite **à cette portée**, sans héritage |
+| `origin(chemin)` | `Origin::Project`, `User` ou `Default` (aucun fichier : valeur par défaut **ou** détection automatique, la crate propriétaire sait laquelle) |
+| `inherited(Scope::Project)` | les réglages tels qu'ils seraient si le fichier de cette portée était vide (pour le projet : ceux de l'utilisateur ; pour l'utilisateur : rien) |
+
+  Un chemin de clé commence par la section : `["phpunit", "env", "APP_ENV"]`.
+- `Settings::load(Some(&project))?` et `Settings::load_files` restent (lecture
+  stricte : fichier mal formé = `Error::Settings`). Marque d'ordre des octets et
+  CRLF acceptés ; un fichier qui n'est pas de l'UTF-8 est refusé.
+
+Ce que la fenêtre de réglages fait d'un champ (page PHPUnit, portée « Ce projet ») :
+
+```rust
+let chemin = ["phpunit", "php_path"];
+let effectif = PhpUnitSettings::from_settings(&settings)?;            // valeur effective
+let origine  = settings.origin(&chemin);                              // « réglé pour ce projet »…
+let regle_ici = settings.get_in(Scope::Project, &chemin).is_some();   // bouton « Revenir à la valeur héritée »
+let herite = PhpUnitSettings::from_settings(&settings.inherited(Scope::Project))?;  // texte grisé
+// Portée « Tous mes projets » : `settings.origin(&chemin) == Origin::Project`
+// => « ce projet utilise sa propre valeur ».
+```
+
+#### Écrire (`settings::SettingsFiles`)
+
+```rust
+let files = SettingsFiles::locate(Some(&project));        // fichiers réels (APPDATA + projet)
+// Tests : SettingsFiles::new(Some(dossier_jetable.join("settings.toml")), Some(project))
+//         — jamais `locate` dans un test, qui écrirait dans le vrai %APPDATA%.
+
+// « Appliquer » : toutes les clés modifiées d'une portée en UNE écriture atomique.
+files.apply(Scope::Project, &[
+    SettingsEdit::set(&["phpunit", "phpunit_path"], SettingValue::Path("outils\\phpunit.phar".into())),
+    SettingsEdit::set(&["phpunit", "extra_args"], SettingValue::List(vec!["--group".into(), "très lent".into()])),
+    SettingsEdit::set(&["phpunit", "env", "APP_ENV"], SettingValue::Text("test".into())),
+    SettingsEdit::unset(&["phpunit", "php_path"]),          // « Revenir à la valeur héritée »
+])?;
+files.set(Scope::User, &["app", "theme"], SettingValue::Text("clair".into()))?;   // une clé
+files.unset(Scope::Project, &["vcs", "update_method"])?;
+let chemin = files.ensure_file(Scope::Project)?;           // « Ouvrir le fichier de réglages »
+watcher.check_now();                                       // effet immédiat (voir plus bas)
+```
+
+- `SettingValue` : `Text`, `Path`, `Bool`, `Integer`, `List(Vec<String>)`. Un
+  `Path` s'écrit en chaîne littérale (`'C:\Program Files (x86)\…'`, barres non
+  doublées) sauf s'il contient une apostrophe. Un tableau de plus de 80 colonnes
+  s'écrit un élément par ligne.
+- **Seules les clés demandées changent.** Commentaires (en tête, en fin de ligne,
+  au-dessus d'une clé), ordre, espaces, clés et tables inconnues, BOM, fins de
+  ligne et absence de fin de ligne finale sont rendus octet pour octet. Une valeur
+  déjà égale n'est pas réécrite (la façon dont elle a été tapée est gardée) ; sans
+  changement réel, le fichier n'est pas touché du tout.
+- Le fichier est **relu juste avant** l'écriture : les clés qu'une autre instance
+  vient d'écrire sont conservées (il reste une fenêtre de quelques millisecondes
+  entre lecture et renommage ; pas de verrou).
+- Retirer une clé la **supprime** (pas de valeur vide). Le commentaire placé
+  au-dessus d'elle reste à sa place. Une table devenue vide est retirée, **sauf si
+  elle porte un commentaire** (on ne sait pas distinguer une table créée par l'IDE
+  d'une table tapée à la main : le commentaire tranche). Retirer une clé absente,
+  ou d'un fichier absent, ne fait rien et ne crée rien.
+- Fichier absent : créé à la première clé écrite, avec son dossier
+  (`%APPDATA%\JulieStorm\`, ou `.juliestorm/` et son `.gitignore`), une ligne de
+  commentaire en tête, UTF-8 sans BOM, CRLF. Le texte de cette ligne est dans
+  `settings/files.rs` (`USER_HEADER`, `PROJECT_HEADER`) : à relire par `redacteur`.
+- **Refus** (rien n'est écrit, le fichier ne change pas d'un octet) :
+  - fichier mal formé ou pas en UTF-8 : `Error::SettingsUnreadable { path, line,
+    message }` (`line` à partir de un) ;
+  - fichier en lecture seule, dossier sans droit : `Error::Io { path, .. }` ;
+  - chemin de clé de moins de deux éléments, clé parente qui n'est pas une table,
+    valeur écrite là où se trouve une table, pas de projet ouvert pour
+    `Scope::Project` : `Error::Invalid`.
+- `files.load()?` : lecture stricte. `files.load_lenient()` : `(Settings,
+  Vec<SettingsProblem>)`, un fichier illisible compte pour vide et est signalé.
+
+#### Relire à chaud (`settings::SettingsWatcher`, `Event::SettingsChanged`)
+
+```rust
+// app, à l'ouverture d'un projet (et une fois au démarrage, sans projet) :
+let watcher = SettingsWatcher::start(SettingsFiles::locate(Some(&project)), bus.publisher());
+// Lâcher `watcher` arrête la surveillance : un par projet ouvert.
+
+// app, en vidant le bus :
+Event::SettingsChanged(change) => {
+    self.settings = change.settings.clone();                // derniers réglages valides
+    for problem in &change.problems { /* notification « Réglages illisibles : <fichier>, ligne n : <raison> » */ }
+    if change.concerns("phpunit") { /* nouveau PhpUnitSettings pour la prochaine exécution */ }
+    if change.concerns("vcs")     { /* nouveau VcsSettings, rouvrir le dépôt */ }
+    if change.concerns("index")   { /* relancer l'indexation */ }
+    if change.concerns("terminal"){ /* les prochains onglets */ }
+    if change.concerns("app")     { /* thème */ }
+}
+```
+
+- Un fil dédié regarde taille et date des deux fichiers toutes les 500 ms
+  (`POLL_INTERVAL`) et ne relit que ce qui a changé : une modification à la main,
+  dans l'IDE ou ailleurs, est prise en compte en moins d'une seconde.
+  `watcher.check_now()` (non bloquant) force une relecture immédiate après
+  `apply`. `watcher.current()` rend les derniers réglages publiés sans accès disque.
+- `SettingsChanged { settings, changed_sections, problems }` :
+  - le **premier** événement est toujours publié (même sans aucun fichier) : c'est
+    lui qui donne les réglages initiaux ; `changed_sections` y liste toutes les
+    sections présentes ;
+  - ensuite, un événement seulement si les réglages effectifs ou la liste des
+    problèmes changent (un commentaire ajouté ne publie rien) ;
+  - `changed_sections` : sections dont le contenu **effectif** a changé, triées ;
+  - `problems: Vec<SettingsProblem { scope, path, line: Option<u32>, message }>` :
+    fichiers actuellement illisibles. Tant qu'un fichier est illisible, **sa
+    dernière version valide reste en vigueur** (vide s'il n'a jamais été lisible)
+    et `apply` refuse d'y écrire. `problems` vide après un problème = réparé.
+- Chaque service reçoit ses nouveaux réglages **de `app`** (les crates métier ne
+  s'abonnent pas au bus). Une exécution, une session de terminal ou une commande
+  Git **en cours** n'est pas touchée : la suivante prend les nouveaux réglages.
+
+#### Clés connues
+
+Le noyau ne valide pas le contenu des sections ; cette table est l'inventaire.
+
+| Section | Clés | Propriétaire |
+|---|---|---|
+| `[app]` | `theme` = `"sombre"` (défaut) ou `"clair"` ; portée utilisateur | dev-interface |
+| `[vcs]` | `git_path`, `update_method` = `"fusion"` ou `"rebase"` (absent : demander ; portée projet), `protected_branches` (défaut `["main", "master"]`, motif `préfixe*`) | dev-git (§ 8) |
+| `[index]` | `excluded` (motifs en plus d'`ALWAYS_EXCLUDED`, qui s'applique toujours), `libraries`, `max_file_size`, `threads` | dev-indexation-recherche (§ 11) |
+| `[phpunit]` | `php_path`, `phpunit_path`, `configuration`, `extra_args` (tableau, remplacé en bloc par la portée la plus forte), `timeout_seconds` ; `[phpunit.env]` (table nom = valeur, fusionnée par nom) | dev-phpunit (§ 12) |
+| `[terminal]` | `default_profile`, `git_bash_path`, `cmd_path`, `scrollback` | dev-terminal (§ 13) |
+
+### 3.7 Corbeille (`julie_core::trash`)
+
+```rust
+// Dans une tâche de fond. Chemins absolus ; fichiers ou dossiers (avec leur contenu).
+match julie_core::trash::move_to_trash(&paths) {
+    Ok(()) => { /* tout est dans la corbeille Windows, restaurable */ }
+    Err(Error::TrashUnavailable { remaining }) => {
+        // Lecteur réseau, corbeille désactivée… RIEN n'a été supprimé définitivement.
+        // Seconde confirmation « Suppression définitive : ne pourra pas être annulée »
+        // (bouton par défaut : Annuler), puis app supprime elle-même `remaining`
+        // (std::fs, dans une tâche).
+    }
+    Err(Error::TrashFailed { remaining, code }) => {
+        // Fichier verrouillé par un autre programme, droits… : message, `remaining`
+        // est toujours sur le disque. `code` (HRESULT) va au journal.
+    }
+    Err(other) => { /* Error::Io : un chemin n'existe pas — rien n'a été supprimé */ }
+}
+```
+
+- Sert à « Supprimer… » (arbre du projet, non suivis des changements) et aux
+  fichiers ajoutés que « Annuler les modifications » retire quand la case
+  « Supprimer aussi les fichiers ajoutés (vers la corbeille) » est cochée.
+- **Jamais de suppression définitive** : avant chaque élément, Windows annonce
+  s'il ira à la corbeille ; sinon l'élément est refusé et rien n'est supprimé.
+- Aucune fenêtre de Windows (ni confirmation, ni progression, ni erreur) : les
+  confirmations sont celles de l'IDE, **avant** l'appel.
+- Tous les chemins sont vérifiés avant la première suppression (inexistant :
+  `Error::Io` ; relatif : `Error::Invalid`). L'opération s'arrête au premier
+  échec : ce qui précède est déjà à la corbeille, `remaining` dit ce qui reste.
+- Bloquant, sans annulation ni progression. Hors Windows : `TrashUnavailable`.
+- Réalisation : `IFileOperation` du shell, dans un fil à lui. `SHFileOperationW`
+  est écartée : sans fenêtre, elle supprime définitivement ce que la corbeille ne
+  peut pas recevoir.
+- Essais réels (ils remplissent la vraie corbeille, donc à la demande
+  seulement) : `cargo test -p julie-core --lib -- --ignored corbeille`. Essayés
+  le 25/11/2026 : fichier et dossier (espaces, accents) ; fichier verrouillé ;
+  partage réseau sans corbeille (`\\localhost\C$`). **Non essayé** : élément plus
+  gros que la corbeille, corbeille désactivée dans les propriétés de Windows.
+
+### 3.8 Copies de sécurité (`julie_core::backup`)
+
+Décision n° 3 de la v1 : avant « Annuler les modifications » ou une bascule forcée,
+les fichiers qui vont être écrasés sont copiés ; « Rétablir » les remet.
+
+```
+<racine>/.juliestorm/annulations/
+    20261125-143012.toml               manifeste (écrit en dernier : il valide la copie)
+    20261125-143012/src/Vue/Liste.php  les fichiers, à leur chemin relatif au projet
+```
+
+```rust
+// Dans la tâche qui va détruire, AVANT de détruire :
+let copie = julie_core::backup::create(&project, "vcs.discard", &fichiers)?;   // Err => on renonce
+git_restore(&fichiers)?;
+ctx.publish(VcsEvent::Discarded { backup: Some(copie.id.clone()), .. });       // nom indicatif
+
+// « Rétablir » (notification, pendant la session) :
+let rapport = julie_core::backup::restore(&project, &copie.id)?;
+// rapport.restored, rapport.unchanged, rapport.failed (chemin, raison), rapport.safety_backup
+
+// À l'ouverture du projet :
+julie_core::backup::purge_expired(&project)?;            // copies de plus de 7 jours
+// Lister :
+for copie in julie_core::backup::list(&project)? { /* id, created, reason, files */ }
+```
+
+- `create(&project, raison, &fichiers)` : chemins **absolus de fichiers du
+  projet**. Copie octet pour octet (aucun décodage), écriture atomique. Un fichier
+  absent est noté `present: false` sans erreur. Dossier, chemin hors du projet,
+  `..`, liste vide : `Error::Invalid`, rien n'est créé. En cas d'échec en cours de
+  route, la copie partielle est retirée. **Règle : pas de copie, pas d'opération
+  destructive.**
+- `raison` : clé stable (`"vcs.discard"`, `"vcs.checkout"`…), jamais un texte ;
+  l'interface en tire le libellé.
+- `Backup { id, created, reason, files: Vec<BackupFile { path, present, size }> }`.
+  `id` = horodatage **local** `AAAAMMJJ-HHMMSS` (`-2`, `-3`… dans la même
+  seconde) ; c'est aussi le nom du dossier. `backup::copy_path(&project, id,
+  &fichier)` rend le chemin de la copie d'un fichier (pour l'ouvrir ou la comparer).
+- `restore(&project, id)` : remet chaque fichier copié dans l'état de la copie.
+  Un fichier déjà identique n'est pas touché ; un fichier `present: false` non
+  plus (**rétablir ne supprime jamais**). Avant d'écraser, les fichiers concernés
+  sont eux-mêmes copiés (raison `backup::RESTORE_REASON`, identifiant dans
+  `safety_backup`) : rétablir se défait aussi. Un fichier en lecture seule ou
+  verrouillé va dans `failed`, les autres sont rétablis. La copie reste en place.
+- `list(&project)` : de la plus récente à la plus ancienne ; une copie sans
+  manifeste lisible est ignorée. `purge_expired` / `purge_older_than(&project,
+  durée, maintenant)` : retire ce qui a plus de `backup::RETENTION` (7 jours),
+  restes de copies interrompues compris ; rend le nombre de copies retirées.
+- Chemins avec espaces, parenthèses, apostrophes et accents : essayés.
+- Un manifeste retouché à la main ne peut pas faire écrire hors du projet (chemin
+  relatif sans `..` exigé, sinon la copie est ignorée).
+- `.juliestorm/` étant ignoré par Git, les copies n'apparaissent pas dans les
+  changements locaux ; `ALWAYS_EXCLUDED` les tient hors de la recherche.
+- Pas d'événement : ce sont des fonctions synchrones, à appeler dans la tâche de
+  la crate qui détruit, laquelle publie l'identifiant de la copie dans **son**
+  événement.
 
 ## 4. Comment une crate métier s'expose à `app`
 
@@ -353,7 +595,10 @@ tasks.spawn(Domain::Terminal, "terminal.session", move |ctx| {
 
 - Le noyau a un type : `julie_core::Error` (et `julie_core::Result<T>`), variantes
   `Io { path, source }`, `Cancelled`, `ProcessSpawn`, `ProcessFailed { program,
-  code, stderr }`, `Unencodable`, `Settings`, `Invalid(String)`.
+  code, stderr }`, `Unencodable`, `Settings`, `SettingsUnreadable { path, line,
+  message }`, `TrashUnavailable { remaining }`, `TrashFailed { remaining, code }`,
+  `Invalid(String)`. Des variantes peuvent s'ajouter : pas de `match` exhaustif
+  sur `julie_core::Error` hors du noyau.
 - **Chaque crate métier a sa propre énumération d'erreurs**, écrite avec
   `thiserror`, qui enveloppe celle du noyau :
 
@@ -388,7 +633,8 @@ Versions fixées dans `[workspace.dependencies]` du `Cargo.toml` racine ; une cr
 |---|---|---|
 | `thiserror` | 2 | énumérations d'erreurs de toutes les crates |
 | `serde` (avec `derive`) | 1 | sections de réglages, caches sur disque |
-| `toml` | 0.9 | réglages (dans le noyau ; les crates n'en ont en principe pas besoin) |
+| `toml` | 0.9 | réglages (dans le noyau ; les crates n'en ont en principe pas besoin : `julie_core::settings::Value` est réexporté) |
+| `toml_edit` | 0.25 | écriture des réglages sans perdre commentaires ni mise en forme ; **noyau seul**, déclarée dans `crates/core/Cargo.toml` |
 | `tempfile` | 3 | **tests uniquement** (`[dev-dependencies]`) : dossiers et dépôts jetables |
 | `windows-sys` | 0.61 | appels Win32 ; chaque crate active ses `features` |
 | `eframe` | 0.37 | `app` seulement |
@@ -404,8 +650,13 @@ Versions fixées dans `[workspace.dependencies]` du `Cargo.toml` racine ; une cr
 
 - Surveillance du disque (`Event::FilesChangedOnDisk` existe, rien ne le publie
   encore) et détection d'un fichier modifié hors de l'IDE avant enregistrement.
+  Seuls les deux fichiers de réglages sont surveillés (3.6).
 - Liste des fichiers ouverts dans le modèle de projet (pour l'instant dans `app`).
-- Écriture des réglages.
+- Réglages : verrou entre deux instances de l'IDE qui écrivent le même fichier
+  au même instant.
+- Corbeille : progression et annulation d'une très grosse suppression ; « annuler
+  la suppression » depuis l'IDE (aujourd'hui : restaurer depuis la corbeille).
+- Copies de sécurité : plafond de taille, copie de dossiers entiers.
 - Journal d'exécution (fichier de log) commun.
 - UTF-16 et détection des fichiers binaires à la lecture.
 - Plafond du nombre de tâches simultanées, si la mesure en montre le besoin.

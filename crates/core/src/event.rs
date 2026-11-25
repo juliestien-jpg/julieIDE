@@ -10,6 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::settings::SettingsChanged;
 use crate::task::{TaskEvent, TaskId};
 
 /// Ce que les fils de fond publient pour l'interface.
@@ -23,6 +24,10 @@ pub enum Event {
     Task(TaskEvent),
     /// Résultat publié par une crate métier.
     Domain(DomainEvent),
+    /// Les réglages ont été lus ou relus (fichier modifié sur le disque, par l'IDE
+    /// ou à la main) : chaque service concerné se reconfigure à chaud. Publié par
+    /// [`crate::settings::SettingsWatcher`].
+    SettingsChanged(SettingsChanged),
 }
 
 /// Les domaines métier : un par crate. Sert à aiguiller les événements vers la

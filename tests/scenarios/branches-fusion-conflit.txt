@@ -1,0 +1,27 @@
+# Fusionner feature/login dans main : conflit, bandeau, résolution, validation (critère 16).
+# Avant : branches.sh <dossier>
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui branches.open
+wait-idle
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 500
+screenshot target/essais/branches/13-fusion-conflit.png
+state target/essais/branches/13-fusion-conflit.json
+# La résolution passe par le dialogue de fusion existant ; ici « garder la nôtre » pour aller vite.
+ui git.keep ours a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+screenshot target/essais/branches/13-fusion-resolue.png
+state target/essais/branches/13-fusion-resolue.json
+ui git.commit
+wait-idle
+wait 500
+state target/essais/branches/13-fusion-validee.json
+quit

@@ -39,6 +39,8 @@ pub enum Step {
     Key(Combo),
     /// `click <x> <y>` en points de la fenêtre.
     Click(f32, f32),
+    /// `rclick <x> <y>` : clic droit (menus contextuels).
+    RClick(f32, f32),
     /// `wait <ms>`
     Wait(u64),
     /// `wait-idle` : plus de tâche de fond, index prêt, résultats arrivés.
@@ -199,6 +201,12 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
                 let y = number_arg(parts.next().unwrap_or(""))?;
                 Step::Click(x, y)
             }
+            "rclick" => {
+                let mut parts = rest.split_whitespace();
+                let x = number_arg(parts.next().unwrap_or(""))?;
+                let y = number_arg(parts.next().unwrap_or(""))?;
+                Step::RClick(x, y)
+            }
             "wait" => Step::Wait(
                 rest.parse::<u64>()
                     .map_err(|_| fail("durée en millisecondes attendue"))?,
@@ -250,13 +258,22 @@ pub struct Injection {
 
 impl Injection {
     pub fn click(pos: Pos2) -> Vec<Injection> {
+        Self::click_with(pos, PointerButton::Primary)
+    }
+
+    pub fn click_with(pos: Pos2, which: PointerButton) -> Vec<Injection> {
         let button = |pressed| Event::PointerButton {
             pos,
-            button: PointerButton::Primary,
+            button: which,
             pressed,
             modifiers: Modifiers::NONE,
         };
+        // Deux déplacements : egui ne sait ce qui est survolé qu'à l'image suivante, et le
+        // premier clic d'une session tombait à côté sans ce délai.
         vec![
+            Injection {
+                events: vec![Event::PointerMoved(pos)],
+            },
             Injection {
                 events: vec![Event::PointerMoved(pos)],
             },

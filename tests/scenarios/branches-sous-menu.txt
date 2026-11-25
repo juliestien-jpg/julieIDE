@@ -1,0 +1,23 @@
+# Récupérer, fenêtre des branches, recherche floue, sous-menu d'une branche
+# (branches.md, critères 1, 2 et 25). Avant : branches.sh <dossier> tout
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+action vcs.fetch
+wait-idle
+state target/essais/branches/03-apres-fetch.json
+screenshot target/essais/branches/03-apres-fetch.png
+ui branches.open
+wait-idle
+ui branches.query fe/se
+wait 300
+screenshot target/essais/branches/04-recherche-floue.png
+state target/essais/branches/04-recherche-floue.json
+ui branches.query
+wait 300
+ui branches.select feature/login
+ui branches.menu
+wait 300
+screenshot target/essais/branches/05-sous-menu.png
+state target/essais/branches/05-sous-menu.json
+quit

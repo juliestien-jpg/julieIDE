@@ -1,0 +1,51 @@
+# Journal : arbre des branches, graphe en couloirs avec fusions, filtres, menu d'un commit de
+# fusion (cherry-pick grisé), historique d'un fichier (critères 20, 21, 28).
+# Avant : branches.sh <dossier>
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+# Deux fusions pour dessiner des couloirs : feature/login (conflit, « garder la nôtre »), feature/search.
+ui branches.open
+wait-idle
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+ui git.keep ours a.txt
+wait 300
+ui confirm
+wait-idle
+ui git.commit
+wait-idle
+wait 500
+ui branches.open
+wait-idle
+ui branches.select feature/search
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 500
+action view.bottom_tall
+ui git.tab log
+wait-idle
+wait 700
+screenshot target/essais/branches/25-graphe-fusions.png
+state target/essais/branches/25-graphe-fusions.json
+# Menu du commit de fusion tout en haut : cherry-pick et revert grisés avec la raison.
+ui menu.open log 1
+wait 300
+screenshot target/essais/branches/26-menu-commit-fusion.png
+state target/essais/branches/26-menu-commit-fusion.json
+ui menu.close
+# Filtres : texte, puis historique d'un fichier.
+ui git.log-filter text Recherche
+wait 900
+state target/essais/branches/27-filtre-texte.json
+screenshot target/essais/branches/27-filtre-texte.png
+ui git.log-filter clear
+wait 300
+ui git.file-history a.txt
+wait 900
+state target/essais/branches/27-historique-fichier.json
+screenshot target/essais/branches/27-historique-fichier.png
+quit

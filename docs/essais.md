@@ -45,6 +45,7 @@ espaces des chemins sont donc permis).
 | `type <texte>` | Saisit le texte dans le champ qui a le focus (éditeur, champ d'une fenêtre flottante, terminal). Le texte est celui de la ligne, après le premier espace. |
 | `key <combinaison>` | Appuie sur une touche : `Enter`, `Escape`, `Tab`, `Down`/`Up`/`Left`/`Right` (ou `Bas`, `Haut`, `Gauche`, `Droite`), `F4`…, une lettre, un chiffre ; avec `Ctrl+`, `Alt+`, `Shift+` (ou `Maj+`). Ex. `key Ctrl+Maj+N`, `key Alt+Right`, `key Ctrl+A`. |
 | `click <x> <y>` | Clic gauche aux coordonnées (points, origine en haut à gauche de la fenêtre). |
+| `rclick <x> <y>` | Clic droit aux coordonnées : ouvre le menu contextuel de ce qui est dessous (arbre, changements, onglets, journal). C'est le vrai chemin de la souris. |
 | `wait <ms>` | Attend. |
 | `wait-idle` | Attend que plus rien ne travaille : aucune tâche de fond (sauf sessions de terminal), index prêt, état Git connu, résultats de recherche et d'« aller au fichier » arrivés, fichiers chargés, dossiers de l'arbre listés. Quatre images calmes de suite. |
 | `screenshot <fichier.png>` | Capture la fenêtre (PNG, taille réelle en pixels : 1280×720 à 100 %). |
@@ -117,6 +118,31 @@ l'état, à partir de 0), les côtés par `left` / `right` (ou `gauche` / `droit
 | `tests.compare` | Ouvre attendu / obtenu du nœud en diff côte à côte. |
 | `tests.link <n>` | Clique le n-ième lien `fichier:ligne` de la console affichée (saut dans l'éditeur). |
 
+### Commandes `ui` des branches, des menus contextuels et des dialogues (v1)
+
+Elles s'ajoutent aux précédentes. Les branches se désignent par leur nom complet
+(`feature/login`, `origin/feature/login`), les actions par leur **identifiant de
+registre** (`vcs.add`, `branch.checkout`, `log.reset`…, la liste est dans
+`crates/app/src/actions.rs`).
+
+| Commande | Effet |
+|---|---|
+| `branches.open` / `branches.close` | Ouvre la fenêtre surgissante des branches (clic sur le widget de la barre du haut) / la ferme (ferme aussi le sous-menu). |
+| `branches.query <texte>` | Tape dans le champ de recherche (correspondance floue : `fe/se`). Sans texte : efface. |
+| `branches.select <branche>` | Choisit la ligne de cette branche (visible dans la liste filtrée). |
+| `branches.menu [branche]` | Ouvre le sous-menu de la branche choisie (Droite / Entrée au clavier). |
+| `menu.open <zone> <élément>` | Ouvre un menu contextuel : `tree <chemin relatif ou .>`, `changes <fichier>[,<fichier>…]` (chemins Git), `tab <numéro ou fragment de chemin>`, `log <n>` (commit n du journal, base 1), `branch <nom>`. Échec si aucune entrée n'a de sens. |
+| `menu.expand <clé>` | Ouvre un sous-menu (`sub.git`, `sub.copy`, `sub.ignore`). |
+| `menu.choose <clé d'action>` | Choisit l'entrée (sous-menus compris) comme un clic. **Échec avec la raison du grisé** si l'entrée est grisée. |
+| `menu.close` | Ferme le menu (Échap). |
+| `dialog.set <champ> <valeur>` | Règle un champ du dialogue Git ouvert : `name` (créer, renommer), `switch`, `remember`, `remote`, `branch`, `follow_tags`, `commit`, `also_remote`, `stash_first`, `mode` (`soft`, `mixed`, `hard`). |
+| `dialog.choose <clé>` | Presse un bouton : `create`, `rename`, `stash`, `force`, `force_confirm`, `merge`, `rebase`, `push`, `merge_push`, `rebase_push`, `delete`, `force_delete`, `delete_remote`, `reset`, `discard`, `checkout`, `use_suggestion`, `terminal`, `push_new`, `back`, `cancel`, `close`. Échec si le bouton n'existe pas ou est grisé. |
+| `toast.action` | Presse le bouton de la notification (« Restaurer » une branche supprimée ou une copie de sécurité). |
+| `op.continue` / `op.skip` | « Continuer » (rebase, cherry-pick, revert ; échoue s'il reste des conflits) / « Passer ce commit » (ouvre la confirmation). `git.abort` abandonne. |
+| `net.cancel` | La croix d'annulation de la barre d'état : annule l'opération réseau en cours. |
+| `git.file-history <chemin relatif>` | « Historique du fichier » : journal filtré sur ce chemin. |
+| `git.log-filter <champ> <valeur>` | Filtre du journal : `text`, `author`, `since`, `until` (`AAAA-MM-JJ`), `branch`, `clear`. |
+
 Raccourcis réels jouables par `key` : `Ctrl+K` (valider), `Alt+0`, `Ctrl+Maj+F10`,
 `Ctrl+F2`, `Ctrl+F5`, et dans la fusion `F7`, `Maj+F7`, `Alt+Left`, `Alt+Right`,
 `Alt+Shift+Left`, `Alt+Shift+Right`, `Ctrl+Enter`, `Ctrl+Z`, `Escape`. Actions de
@@ -176,6 +202,27 @@ Clés principales (toutes les listes sont en ordre d'affichage) :
   l'arbre avec `depth`, `label`, `state`, `duration_ms`, `selected`, et `selected` = le
   nœud choisi avec `message`, `has_comparison`, `console_head`, `links`).
 - `tools.bottom_tall` : fenêtre du bas agrandie.
+
+Ajouts de la v1 :
+
+- `branch_widget` : ce qu'affiche le widget de la barre du haut (`text`, `ahead`, `behind`,
+  `kind` : `Normal`, `Unborn`, `Detached`, `Operation`, `NoRepository`).
+- `branches` : `current`, `detached_at`, `unborn`, `local` et `remote` (par branche : `name`,
+  `current`, `upstream`, `ahead`, `behind`, `gone`, `subject`), `recent`, `remotes`.
+- `branch_popup` (nul si fermée) : `query`, `selected` et `rows` (libellés dans l'ordre : `# Actions`,
+  `Mettre à jour le projet…`, `# Récentes`, `feature/` pour un dossier, `main *` pour la courante,
+  `[origin/x ↑1 ↓2]` pour l'amont).
+- `context_menu` (nul si fermé) : `zone`, `target`, `open_sub`, `entries` (par entrée : `key`,
+  `label`, `shortcut`, `enabled`, `reason` = la raison du grisé, `destructive`, `children`).
+- `git_dialog` (nul si aucun) : `kind`, `title`, `fields` (propres au dialogue : `name`, `problem`,
+  `suggestion`, `files`, `outgoing`, `remote_only`, `commits_leaving`…), `buttons` (`key`, `label`,
+  `enabled`, `primary`, `danger`, `tip`).
+- `toast` : la notification de la barre d'état (`text`, `error`, `action`).
+- `update_method_session` (choix fusion / rebase mémorisé pour la session), `safety_copy` (dossier
+  de la dernière copie de sécurité), `net_progress`.
+- `git.log.filters` et `git.log.graph` (`lanes`, `rows`, `merge_rows`, `first` : couloir du point et
+  nombre de segments des 8 premières lignes) ; `status.progress` (ligne de progression réseau) et
+  `status.message_action` (libellé du bouton de la notification).
 
 Le fichier ne contient **jamais** le contenu des fichiers, seulement la première ligne
 de chaque onglet ; exceptions pour la vérification des fusions : `merge.result_text`
@@ -256,6 +303,7 @@ dans `%TEMP%`, que l'on supprime après l'essai. Les scripts sont des scripts ba
 | `conflit-gros.sh` | un fichier de 10 000 lignes, 400 blocs non conflictuels et 10 conflits | `%TEMP%\jsessai-gros` |
 | `many-commits.sh` | 1 200 commits (journal paginé par 500) | `%TEMP%\jsessai-journal` |
 | `phpunit-copy.sh` | copie de `tests/fixtures/phpunit` avec le réglage `phpunit_path` vers le PHPUnit 9.6 de `lab` | `%TEMP%\jsessai-phpunit` |
+| `branches.sh <dossier> [options]` | dépôt nu **local** `distant.git` (le seul distant), clone `A` à ouvrir dans l'IDE, clone `B` (la collègue) ; options : `retard`, `avance`, `distante-seule`, `amont-supprime`, `non-fusionnee`, `stash-conflit`, `crochet`, `lent`, `tout` (voir l'en-tête du script) | `%TEMP%\jsessai-branches` |
 
 Les scénarios écrivent leurs captures et états dans `target\essais\<nom>\` (dossier ignoré
 par Git) et le dossier de projet est écrit en dur dans la première ligne `project` :
@@ -286,6 +334,40 @@ tête de fichier quel script lancer avant.
 | `ecarts-m6-messages.txt` | messages de la barre d'état : expiration (6 s / 12 s), effacés à l'ouverture d'un autre projet ou d'un fichier réussie |
 | `ecarts-arbre-dossier-vide.txt` | un dossier vide n'est pas grisé, un dossier ignoré l'est |
 
+### Scénarios de la v1 (branches, menus contextuels)
+
+Tous sur le décor `branches.sh` ; chaque scénario dit en tête quelles options lui donner. Le dossier
+de projet est écrit en dur (`C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A`) : le
+script se lance avec `bash tests/fixtures/branches.sh "$TEMP/jsessai-ui-branches" <options>`, et se
+**relance entre deux scénarios** (ils écrivent dans `A` et dans `distant.git`).
+
+| Scénario | Options du décor | Ce qu'il joue |
+|---|---|---|
+| `branches-widget.txt` | `tout` | widget `main ↑1`, fenêtre surgissante (actions, récentes, locales, dossiers, amont) |
+| `branches-sous-menu.txt` | `tout` | Récupérer (↓2, « amont supprimé »), recherche floue `fe/se`, sous-menu d'une branche |
+| `branches-basculer.txt` | `tout` | bascule refusée par un changement local : dialogue, « Forcer » (confirmation, Annuler), « Mettre de côté et basculer » avec remise en conflit |
+| `branches-basculer-distante.txt` | `distante-seule` | bascule sur une distante seule (locale créée avec amont), changement local qui suit |
+| `branches-creer.txt` | (aucune) | nouvelle branche : nom vérifié à la frappe (espaces, dossier d'une branche, casse), création |
+| `branches-mise-a-jour-push.txt` | `retard avance` | Ctrl+T (fusion ou rebase, choix mémorisé pour la session), Ctrl+Maj+K, journal linéaire |
+| `branches-push-refuse.txt` | `retard avance` | push refusé (le distant a des commits), « Rebaser puis pousser » |
+| `branches-push-crochet.txt` | `avance crochet` | crochet `pre-push` : sa sortie est montrée |
+| `branches-push-nouvelle-force.txt` | `avance` | nouvelle branche poussée (amont posé), réinitialisation, « Forcer avec bail » |
+| `branches-fusion-conflit.txt` | (aucune) | fusion en conflit, bandeau, validation (commit à deux parents) |
+| `branches-rebase-continuer.txt` | (aucune) | « Basculer et rebaser » : conflit au commit 2 sur 3, résoudre, Continuer |
+| `branches-rebase-abandonner.txt` | (aucune) | même rebase, « Abandonner le rebase » : la branche revient à son sommet |
+| `branches-supprimer.txt` | `non-fusionnee` | suppression non fusionnée (commits perdus), Restaurer, branche distante (confirmation forte) |
+| `branches-reseau-annulation.txt` | `lent` | fetch ralenti : progression dans la barre d'état, croix d'annulation |
+| `journal-graphe.txt` | `tout` | journal : arbre des branches, graphe en couloirs avec fusions, filtres, historique d'un fichier |
+| `menus-arbre.txt` | (aucune) | clic droit dans l'arbre sur un non suivi : Git ▸ Ajouter à Git, Retirer de l'index, entrées grisées avec raison |
+| `menus-changements.txt` | (aucune) | clic droit dans la liste des changements : ajouter, annuler (confirmation, copie de sécurité, Restaurer), .gitignore |
+| `menus-onglets-journal.txt` | `tout` | clic droit sur un onglet et sur un commit (cherry-pick grisé sur une fusion, copier le hash) |
+| `branches-ecrans.txt` | `tout` | widget, fenêtre et dialogues en 1280×720, 1920×1080, 100 % et 150 %, thème clair |
+
+Copie de sécurité : « Annuler les modifications » et la bascule forcée copient d'abord les fichiers
+touchés dans `<projet>/.juliestorm/annulations/AAAAMMJJ-HHMMSS/` (7 jours) ; « Restaurer » les
+remet. **Solution provisoire côté `app`** (`crates/app/src/safety.rs`) : la fonction viendra dans
+`julie-core`.
+
 Les couleurs des blocs et des connecteurs viennent du thème de l'éditeur
 (`theme::editor_theme`) : ajouter / supprimer / modifier / conflit ; un bloc traité
 s'estompe. Les mises en couleur syntaxique arrivent d'un fil à part : mettre un `wait 300`
@@ -295,8 +377,9 @@ avant une capture où elles comptent.
 
 - Le **sélecteur de dossiers du système** (`file.open_folder`) : fenêtre native, hors
   de la fenêtre egui. Le reste du chemin (`project <dossier>`) est identique.
-- Le glisser-déposer, le clic droit, la molette, les infobulles (survol) : pas
-  d'étape correspondante. `click` couvre le clic gauche. Le défilement des listes se
+- Le glisser-déposer, la molette, les infobulles (survol) : pas d'étape
+  correspondante. `click` couvre le clic gauche, `rclick` le clic droit (les raisons des entrées
+  grisées, normalement en infobulle, se lisent dans `context_menu.entries[].reason`). Le défilement des listes se
   joue au clavier (Fin, Début, pages dans le journal) et celui de la fusion par
   `merge.focus <ligne>` ou F7.
 - Les clics sur les boutons des gouttières de la fusion, les cases à cocher et les

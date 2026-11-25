@@ -15,6 +15,7 @@ use julie_text::{DiskState, Document, LoadedFile, SaveOutcome};
 
 use crate::editor::{Decorations, EditorView};
 use crate::icons::{self, Icon};
+use crate::target::{FileRef, MenuRequest, Target, Zone};
 use crate::texts as t;
 use crate::theme::{self, Palette};
 
@@ -70,6 +71,8 @@ pub struct Editors {
     reveal_active: bool,
     /// Fichiers ouverts récemment, le plus récent en premier.
     pub recent: Vec<PathBuf>,
+    /// Menu contextuel demandé à cette image (clic droit sur un onglet).
+    pub menu_request: Option<MenuRequest>,
 }
 
 impl Editors {
@@ -388,6 +391,7 @@ impl Editors {
     ) -> Vec<TabIntent> {
         let titles = self.titles();
         let mut intents = Vec::new();
+        let mut menu: Option<MenuRequest> = None;
         let reveal = std::mem::take(&mut self.reveal_active);
         let (active, items) = (self.active, &self.items);
         let strip = ui.available_rect_before_wrap();
@@ -456,6 +460,24 @@ impl Editors {
                         if reveal && is_active {
                             ui.scroll_to_rect(rect, None);
                         }
+                        if response.secondary_clicked() {
+                            intents.push(TabIntent::Activate(i));
+                            if let Some(path) = editor.path() {
+                                menu = Some(MenuRequest {
+                                    target: Target::Files {
+                                        zone: Zone::Tab,
+                                        files: vec![FileRef {
+                                            path: path.to_path_buf(),
+                                            is_dir: false,
+                                        }],
+                                    },
+                                    pos: response
+                                        .interact_pointer_pos()
+                                        .unwrap_or(rect.left_bottom()),
+                                    by_keyboard: false,
+                                });
+                            }
+                        }
                         if close.clicked() || response.middle_clicked() {
                             intents.push(TabIntent::Close(i));
                         } else if response.clicked() {
@@ -467,6 +489,9 @@ impl Editors {
                     }
                 });
             });
+        if menu.is_some() {
+            self.menu_request = menu;
+        }
         intents
     }
 

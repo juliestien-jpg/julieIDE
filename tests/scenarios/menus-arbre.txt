@@ -1,0 +1,41 @@
+# Clic droit dans l'arbre du projet : Git > Ajouter à Git, Retirer de l'index, entrées grisées
+# avec leur raison (menus-contextuels.md, critères 1, 3, 4, 18).
+# Avant : branches.sh <dossier>
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+external-write nouveau.php <?php\necho 1;\n
+action file.reload_from_disk
+wait-idle
+wait 1600
+screenshot target/essais/branches/30-arbre-avant.png
+state target/essais/branches/30-arbre-avant.json
+rclick 120 149
+wait 400
+screenshot target/essais/branches/31-menu-arbre.png
+state target/essais/branches/31-menu-arbre.json
+ui menu.expand sub.git
+wait 300
+screenshot target/essais/branches/31-menu-arbre-git.png
+ui menu.choose vcs.add
+wait-idle
+wait 1500
+state target/essais/branches/32-apres-ajout.json
+screenshot target/essais/branches/32-apres-ajout.png
+# Maintenant « Retirer de l'index » est actif et « Ajouter à Git » grisé.
+rclick 120 149
+wait 300
+ui menu.expand sub.git
+state target/essais/branches/33-menu-apres-ajout.json
+ui menu.choose vcs.unstage
+wait-idle
+wait 1500
+state target/essais/branches/33-apres-retrait.json
+# Un fichier suivi et inchangé : Annuler les modifications grisé.
+rclick 120 123
+wait 300
+ui menu.expand sub.git
+wait 300
+screenshot target/essais/branches/34-menu-fichier-propre.png
+state target/essais/branches/34-menu-fichier-propre.json
+quit

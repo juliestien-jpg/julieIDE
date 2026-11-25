@@ -1,0 +1,15 @@
+# Widget de branche et fenêtre surgissante (branches.md, critères 1 à 3).
+# Avant : bash tests/fixtures/branches.sh "%TEMP%\jsessai-ui-branches" tout
+# (adapter le nom d'utilisateur dans la ligne project)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui git.tab changes
+screenshot target/essais/branches/01-avant-fetch.png
+state target/essais/branches/01-avant-fetch.json
+ui branches.open
+wait 300
+wait-idle
+screenshot target/essais/branches/02-fenetre.png
+state target/essais/branches/02-fenetre.json
+quit

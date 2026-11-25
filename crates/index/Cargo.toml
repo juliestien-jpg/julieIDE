@@ -14,6 +14,12 @@ ignore = "0.4"
 globset = "0.4"
 regex = "1"
 memchr = "2"
+# Index des symboles et navigation : chaque crate analyse elle-même (pas de
+# dépendance vers julie-text), mêmes versions que lui (espace de travail).
+tree-sitter.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

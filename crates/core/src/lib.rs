@@ -1,9 +1,11 @@
 //! Noyau de JulieStorm : types communs, bus d'événements, tâches de fond,
-//! processus externes, fichiers texte, projet et réglages.
+//! processus externes, fichiers texte, projet, réglages, corbeille et copies de
+//! sécurité.
 //!
 //! Toutes les crates métier dépendent de celle-ci et d'aucune autre.
 //! Propriétaire : architecte-technique. Contrats décrits dans `docs/contrats.md`.
 
+pub mod backup;
 pub mod bus;
 pub mod error;
 pub mod event;
@@ -12,6 +14,7 @@ pub mod process;
 pub mod project;
 pub mod settings;
 pub mod task;
+pub mod trash;
 
 use std::path::PathBuf;
 
@@ -19,7 +22,7 @@ pub use bus::{Bus, Publisher};
 pub use error::{Error, Result};
 pub use event::{Domain, DomainEvent, Event};
 pub use project::Project;
-pub use settings::Settings;
+pub use settings::{Settings, SettingsChanged, SettingsFiles, SettingsWatcher};
 pub use task::{
     CancelToken, TaskContext, TaskEvent, TaskHandle, TaskId, TaskOutcome, TaskResult, TaskState,
     Tasks,

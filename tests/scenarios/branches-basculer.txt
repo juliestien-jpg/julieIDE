@@ -1,0 +1,32 @@
+# Basculer avec un changement local qui serait écrasé (branches.md, critères 6, 7, 8).
+# Avant : branches.sh <dossier> tout  (a.txt est modifié et en conflit avec feature/login)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui branches.open
+wait-idle
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+screenshot target/essais/branches/06-dialogue-bascule.png
+state target/essais/branches/06-dialogue-bascule.json
+ui dialog.choose force
+wait 300
+screenshot target/essais/branches/07-forcer-confirmation.png
+ui dialog.choose cancel
+wait 300
+state target/essais/branches/07-apres-annulation.json
+# Mettre de côté et basculer : la remise de a.txt entre en conflit avec feature/login.
+ui branches.open
+wait-idle
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+ui dialog.choose stash
+wait-idle
+wait 500
+screenshot target/essais/branches/08-stash-conflit.png
+state target/essais/branches/08-stash-conflit.json
+quit

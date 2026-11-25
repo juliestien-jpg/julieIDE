@@ -1,0 +1,13 @@
+# Un crochet pre-push refuse : sa sortie est montrée, le distant n'a pas bougé (critère 15).
+# Avant : branches.sh <dossier> avance crochet
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+key Ctrl+Maj+K
+wait 600
+ui dialog.choose push
+wait-idle
+wait 500
+screenshot target/essais/branches/17-push-crochet.png
+state target/essais/branches/17-push-crochet.json
+quit

@@ -1,0 +1,39 @@
+# Clic droit dans la liste des changements : annuler les modifications (confirmation, copie de
+# sécurité, Restaurer) et .gitignore (menus-contextuels.md, critères 5, 6, 7).
+# Avant : branches.sh <dossier>
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+external-write a.txt un\ndeux modifié\ntrois\nquatre\n
+external-write nouveau.php <?php\necho 1;\n
+wait 1800
+ui git.tab changes
+wait-idle
+screenshot target/essais/branches/40-liste.png
+rclick 150 510
+wait 400
+screenshot target/essais/branches/41-menu-changements.png
+state target/essais/branches/41-menu-changements.json
+ui menu.choose vcs.discard
+wait 400
+screenshot target/essais/branches/42-annuler-confirmation.png
+state target/essais/branches/42-annuler-confirmation.json
+ui dialog.choose discard
+wait-idle
+wait 1500
+state target/essais/branches/43-annule.json
+screenshot target/essais/branches/43-annule.png
+ui toast.action
+wait 1800
+state target/essais/branches/44-restaure.json
+# .gitignore : tous les *.php.
+ui menu.open changes nouveau.php
+wait 300
+ui menu.expand sub.ignore
+wait 300
+screenshot target/essais/branches/45-menu-gitignore.png
+ui menu.choose vcs.ignore_extension
+wait-idle
+wait 1500
+state target/essais/branches/45-apres-gitignore.json
+quit

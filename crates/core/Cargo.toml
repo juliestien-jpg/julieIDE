@@ -9,12 +9,19 @@ publish.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 toml.workspace = true
+# Écriture des réglages en conservant commentaires et mise en forme. Utilisée par
+# le noyau seul : la version se fixe ici (voir docs/contrats.md, « Dépendances »).
+toml_edit = "0.25"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
+    # Corbeille (IFileOperation) et heure locale des copies de sécurité.
+    "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Shell",
 ] }
 
 [dev-dependencies]

@@ -14,20 +14,27 @@
 
 mod actions;
 mod app;
+mod branchui;
+mod ctxmenu;
 mod diffpane;
 mod editor;
+mod gitdialogs;
 mod gitview;
 mod icons;
 mod kit;
+mod logview;
 mod merge;
 mod project;
+mod safety;
 mod scenario;
 mod search;
 mod status;
 mod tabs;
+mod target;
 mod terminal;
 mod testsview;
 mod texts;
+mod texts_v1;
 mod theme;
 mod tools;
 mod tree;

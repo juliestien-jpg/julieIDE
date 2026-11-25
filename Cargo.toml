@@ -27,6 +27,14 @@ toml = "0.9"
 tempfile = "3"
 # Chaque crate active les fonctionnalités Win32 dont elle a besoin.
 windows-sys = "0.61"
+# Analyse syntaxique : coloration (julie-text) et index des symboles (julie-index).
+# Une seule version pour tout l'espace de travail : les arbres sont compatibles.
+tree-sitter = "0.25"
+tree-sitter-php = "0.24"
+tree-sitter-html = "0.23"
+tree-sitter-css = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
 
 [profile.dev]
 # Débogage léger : compilation et édition de liens plus rapides sur cette machine partagée.

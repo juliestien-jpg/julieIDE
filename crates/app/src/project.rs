@@ -15,6 +15,8 @@ use julie_core::{Project, Settings};
 use julie_index::IndexService;
 use julie_vcs::{Repository, Status, Vcs};
 
+use crate::safety::{self, AfterCopy};
+
 /// Réponses des fils d'aide, lues une fois par image.
 pub enum Msg {
     ProjectReady {
@@ -32,6 +34,16 @@ pub enum Msg {
     DirListed {
         dir: PathBuf,
         entries: Vec<TreeEntry>,
+    },
+    /// La copie de sécurité est faite : l'opération destructive peut partir.
+    SafetyCopied {
+        then: AfterCopy,
+        result: Result<Option<String>, String>,
+    },
+    /// Une information (ou une erreur) à montrer dans la barre d'état.
+    Notice {
+        text: String,
+        error: bool,
     },
 }
 
@@ -216,4 +228,23 @@ fn list_dir(dir: &Path, root: &Path, index: &IndexService) -> Vec<TreeEntry> {
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     entries
+}
+
+/// Copie de sécurité dans un fil, puis `Msg::SafetyCopied`.
+pub fn spawn_safety_copy(root: PathBuf, files: Vec<PathBuf>, then: AfterCopy, channel: Channel) {
+    std::thread::spawn(move || {
+        let result = safety::copy(&root, then.reason(), &files);
+        channel.send(Msg::SafetyCopied { then, result });
+    });
+}
+
+/// Rétablit une copie de sécurité dans un fil, puis `Msg::Notice`.
+pub fn spawn_restore_copy(root: PathBuf, id: String, channel: Channel) {
+    std::thread::spawn(move || {
+        let (text, error) = match safety::restore(&root, &id) {
+            Ok(n) => (crate::texts_v1::restored_files(n), false),
+            Err(e) => (crate::texts_v1::restore_failed(&e), true),
+        };
+        channel.send(Msg::Notice { text, error });
+    });
 }

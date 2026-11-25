@@ -1,0 +1,34 @@
+# Widget, fenêtre des branches et dialogue de bascule : 1280x720, 1920x1080, 150 %, thème clair.
+# Avant : branches.sh <dossier> tout
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui branches.open
+wait-idle
+screenshot target/essais/branches/70-fenetre-1280.png
+ui branches.close
+resize 1920 1080
+wait 500
+ui branches.open
+wait-idle
+screenshot target/essais/branches/71-fenetre-1920.png
+ui branches.select feature/login
+ui branches.menu
+wait 300
+screenshot target/essais/branches/72-sous-menu-1920.png
+ui menu.choose branch.checkout
+wait 500
+screenshot target/essais/branches/73-dialogue-1920.png
+ui dialog.choose cancel
+resize 1280 720
+scale 1.5
+theme light
+wait 500
+ui branches.open
+wait-idle
+screenshot target/essais/branches/74-fenetre-150-clair.png
+ui branches.select feature/login
+ui branches.menu
+wait 300
+screenshot target/essais/branches/75-sous-menu-150-clair.png
+quit

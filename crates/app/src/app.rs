@@ -22,28 +22,39 @@ use julie_index::{IndexEvent, IndexService, IndexSettings};
 use julie_phpunit::{PhpUnit, PhpUnitEvent, PhpUnitSettings, RunRequest};
 use julie_terminal::{TerminalEvent, TerminalSettings};
 use julie_text::{TextError, TextEvent};
-use julie_vcs::{ConflictSide, ConflictVersions, DiffSides, Vcs, VcsEvent, VcsSettings};
+use julie_vcs::{
+    BranchList, ConflictSide, ConflictVersions, DiffSides, IntegrationMethod, PushRequest, Vcs,
+    VcsEvent, VcsSettings,
+};
 
+use self::gitflow::{Pending, ToastAction};
 use crate::actions::{ActionId, Menu, Registry};
+use crate::branchui::{self, BranchPopup};
+use crate::ctxmenu::ContextMenu;
 use crate::diffpane::{self, DiffPane};
+use crate::gitdialogs::Dialog as GitDialog;
 use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, MergeCheck, RepoState};
 use crate::icons::{self, Icon};
 use crate::merge::{self, MergeDialog, MergeIntent};
 use crate::project::{self, Channel, GitInfo, Msg, ProjectState};
+use crate::safety;
 use crate::scenario::{self, Injection, Scenario, Step};
 use crate::search::find_in_files::{self, FindInFiles};
 use crate::search::goto_file::{self, GotoFile};
 use crate::search::palette::{self, ActionPalette};
 use crate::status::{self, StatusModel, TaskTracker};
 use crate::tabs::{BannerIntent, Editors, Goto, TabIntent};
+use crate::target::Target;
 use crate::terminal::{TerminalIntent, TerminalPanel};
 use crate::testsview::{TestsIntent, TestsView};
 use crate::texts as t;
+use crate::texts_v1 as tv;
 use crate::theme::{self, Palette};
 use crate::tools::{self, BottomTool, ToolWindows};
 use crate::tree::ProjectTree;
 
-/// Ce que la ligne de commande demande.
+mod gitflow;
+mod menus;
 mod scenario_ui;
 
 pub struct Options {
@@ -56,12 +67,16 @@ enum Dialog {
     CloseTab(PathBuf),
     /// Quitter avec des onglets modifiés.
     Quit(Vec<PathBuf>),
+    /// Fermer plusieurs onglets dont certains sont modifiés (une seule question).
+    CloseMany(Vec<PathBuf>),
 }
 
 struct Message {
     text: String,
     error: bool,
     at: Instant,
+    /// Bouton de la notification (« Restaurer »).
+    action: Option<ToastAction>,
 }
 
 impl Message {
@@ -149,6 +164,29 @@ pub struct JulieStormApp {
     merge: Option<MergeDialog>,
     diff_window: Option<DiffWindow>,
     last_status_poll: Instant,
+    // ----- v1 : branches, menus contextuels, dialogues Git -----------------------
+    branches: Option<BranchList>,
+    /// Empreinte des branches et de leurs sommets : le journal est relu quand elle change.
+    branch_sig: Vec<(String, String)>,
+    branch_popup: Option<BranchPopup>,
+    /// Rectangle du widget de branche (ancre de la fenêtre surgissante).
+    branch_widget: Option<egui::Rect>,
+    ctx_menu: Option<ContextMenu>,
+    ctx_target: Option<Target>,
+    git_dialog: Option<GitDialog>,
+    pending_switch: Option<Pending>,
+    /// Un push à rejouer après « Fusionner / Rebaser puis pousser ».
+    after_update_push: Option<PushRequest>,
+    last_push: Option<PushRequest>,
+    /// Suppression de la branche distante demandée avec celle de la locale.
+    delete_remote_after: Option<(String, String)>,
+    /// Méthode de mise à jour mémorisée **pour la session** (le noyau ne sait pas
+    /// encore écrire les réglages).
+    update_method: Option<IntegrationMethod>,
+    net_progress: Option<String>,
+    last_fetch: Option<Instant>,
+    /// Dossier de la dernière copie de sécurité (« Restaurer »).
+    last_copy: Option<String>,
 }
 
 impl JulieStormApp {
@@ -208,6 +246,21 @@ impl JulieStormApp {
             merge: None,
             diff_window: None,
             last_status_poll: Instant::now(),
+            branches: None,
+            branch_sig: Vec::new(),
+            branch_popup: None,
+            branch_widget: None,
+            ctx_menu: None,
+            ctx_target: None,
+            git_dialog: None,
+            pending_switch: None,
+            after_update_push: None,
+            last_push: None,
+            delete_remote_after: None,
+            update_method: None,
+            net_progress: None,
+            last_fetch: None,
+            last_copy: None,
         };
 
         if let Some(file) = &options.scenario {
@@ -245,6 +298,7 @@ impl JulieStormApp {
             text,
             error,
             at: Instant::now(),
+            action: None,
         });
     }
 
@@ -283,6 +337,8 @@ impl JulieStormApp {
                 }
                 Msg::LastProject(None) => {}
                 Msg::DirListed { dir, entries } => self.tree.set_listing(dir, entries),
+                Msg::SafetyCopied { then, result } => self.on_safety_copied(then, result),
+                Msg::Notice { text, error } => self.say(text, error),
             }
         }
     }
@@ -331,6 +387,18 @@ impl JulieStormApp {
             terminal_settings,
         ));
         self.git = GitView::new(self.dark);
+        self.branches = None;
+        self.branch_sig.clear();
+        self.branch_popup = None;
+        self.ctx_menu = None;
+        self.git_dialog = None;
+        self.pending_switch = None;
+        self.after_update_push = None;
+        self.update_method = vcs_settings.update_method;
+        {
+            let root = root.clone();
+            std::thread::spawn(move || safety::purge(&root));
+        }
         self.merge = None;
         self.diff_window = None;
         self.tests = TestsView::new(
@@ -367,7 +435,11 @@ impl JulieStormApp {
             match event {
                 Event::Task(task) => self.tracker.on_event(&task),
                 Event::Domain(event) => self.on_domain(event),
-                Event::ProjectOpened(_) | Event::FilesChangedOnDisk(_) => {}
+                // Les réglages changés (`SettingsChanged`, ajout du noyau) n'ont pas encore de
+                // consommateur dans l'interface : la fenêtre de réglages viendra.
+                Event::ProjectOpened(_)
+                | Event::FilesChangedOnDisk(_)
+                | Event::SettingsChanged(_) => {}
             }
         }
     }
@@ -691,6 +763,10 @@ impl JulieStormApp {
                         dialog.on_save_failed(&failure.error);
                     }
                 }
+                if self.v1_failure(failure) {
+                    self.run_git_intents(intents);
+                    return;
+                }
                 let text = match failure.action {
                     julie_vcs::Action::Commit | julie_vcs::Action::Continue => {
                         t::COMMIT_FAILED.to_owned()
@@ -701,6 +777,7 @@ impl JulieStormApp {
             }
             _ => {}
         }
+        self.on_vcs_v1(event);
         self.run_git_intents(intents);
     }
 
@@ -742,6 +819,9 @@ impl JulieStormApp {
                 }
                 GitIntent::AbortOperation => {
                     vcs.abort_operation(&repo);
+                }
+                GitIntent::SkipOperation => {
+                    vcs.skip_operation(&repo);
                 }
                 GitIntent::AcceptSide { paths, side } => {
                     vcs.accept_side(&repo, paths, side);
@@ -858,7 +938,17 @@ impl JulieStormApp {
             ActionId::TestsRun => self.tests.service.is_some(),
             ActionId::TestsStop => self.tests.is_running(),
             ActionId::TestsRerun => self.tests.service.is_some() && self.tests.has_run(),
-            _ => true,
+            ActionId::OpenFolder
+            | ActionId::Quit
+            | ActionId::ActionPalette
+            | ActionId::ToggleProject
+            | ActionId::ToggleGit
+            | ActionId::ToggleTests
+            | ActionId::ToggleSearch
+            | ActionId::ToggleTerminal
+            | ActionId::ToggleTheme
+            | ActionId::BottomTall => true,
+            other => self.v1_action_enabled(other),
         }
     }
 
@@ -979,6 +1069,7 @@ impl JulieStormApp {
             ActionId::TestsRun => self.run_tests(false),
             ActionId::TestsRerun => self.run_tests(false),
             ActionId::TestsStop => self.stop_tests(),
+            other => self.run_v1_action(other, None),
         }
         ctx.request_repaint();
     }
@@ -1056,7 +1147,11 @@ impl JulieStormApp {
     }
 
     fn dispatch_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.dialog.is_some() || self.merge.is_some() || self.diff_window.is_some() {
+        if self.dialog.is_some()
+            || self.merge.is_some()
+            || self.diff_window.is_some()
+            || self.git_dialog.is_some()
+        {
             return;
         }
         let terminal_focus = self
@@ -1195,6 +1290,15 @@ impl JulieStormApp {
             tasks: self.tracker.visible(),
             message: self.message.as_ref().map(|m| (m.text.clone(), m.error)),
             operation: None,
+            progress_text: self
+                .net_progress
+                .clone()
+                .filter(|_| !self.tracker.running_of(status::cancellable).is_empty()),
+            message_action: self
+                .message
+                .as_ref()
+                .and_then(|m| m.action.as_ref())
+                .map(|_| tv::BTN_RESTORE.to_owned()),
         };
         if let Some(project) = &self.project {
             if let GitInfo::Repository(status) = &project.git {
@@ -1236,6 +1340,8 @@ impl JulieStormApp {
 
     fn draw_menu(&mut self, ui: &mut egui::Ui, p: &Palette) -> Option<ActionId> {
         let mut chosen = None;
+        let widget = self.widget_info();
+        let widget_tip = self.widget_tooltip();
         let title = self.project.as_ref().map(|project| {
             (
                 project.project.name(),
@@ -1281,13 +1387,21 @@ impl JulieStormApp {
                         });
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some((name, branch, root)) = &title {
-                            let text = match branch {
-                                Some(branch) => format!("{name}  ·  {branch}"),
-                                None => name.clone(),
-                            };
-                            ui.label(egui::RichText::new(text).color(p.text_dim))
+                        if let Some((name, _, root)) = &title {
+                            ui.label(egui::RichText::new(name).color(p.text_dim))
                                 .on_hover_text(root);
+                        }
+                        // Le widget de branche : nom, avance et retard ; un clic ouvre la fenêtre.
+                        if let Some(info) = &widget {
+                            let response =
+                                branchui::widget(ui, p, info, self.branch_popup.is_some());
+                            self.branch_widget = Some(response.rect);
+                            if response.clicked() {
+                                chosen = Some(ActionId::BranchesPopup);
+                            }
+                            response.on_hover_text(widget_tip.as_str());
+                        } else {
+                            self.branch_widget = None;
                         }
                     });
                 });
@@ -1363,7 +1477,13 @@ impl JulieStormApp {
                         }
                     }
                     BottomTool::Git => {
-                        git_intents = self.git.show(ui, p, repo_state, &commit_shortcut);
+                        git_intents = self.git.show(
+                            ui,
+                            p,
+                            repo_state,
+                            &commit_shortcut,
+                            self.branches.as_ref(),
+                        );
                     }
                     BottomTool::Tests => {
                         tests_intents = self.tests.show(ui, p, &run_shortcut, &stop_shortcut);
@@ -1563,28 +1683,13 @@ impl JulieStormApp {
             }
         }
         // Palette d'actions.
-        if let Some(palette) = &mut self.palette {
+        if let Some(mut palette) = self.palette.take() {
             let outcome = {
-                let enabled = |id: ActionId| match id {
-                    ActionId::SaveAll => self.editors.any_modified(),
-                    ActionId::CloseTab | ActionId::LastTab => !self.editors.items.is_empty(),
-                    ActionId::NextTab | ActionId::PreviousTab => self.editors.items.len() > 1,
-                    ActionId::GotoFile | ActionId::FindInFiles => self.project.is_some(),
-                    ActionId::GitCommit | ActionId::ToggleCommit | ActionId::GitRefresh => {
-                        matches!(
-                            self.project.as_ref().map(|p| &p.git),
-                            Some(GitInfo::Repository(_))
-                        )
-                    }
-                    ActionId::TestsRun => self.tests.service.is_some(),
-                    ActionId::TestsStop => self.tests.is_running(),
-                    ActionId::TestsRerun => self.tests.service.is_some() && self.tests.has_run(),
-                    _ => true,
-                };
+                let enabled = |id: ActionId| self.action_enabled(id);
                 palette.show(ctx, p, &self.registry, &enabled)
             };
             match outcome {
-                palette::Outcome::Pending => {}
+                palette::Outcome::Pending => self.palette = Some(palette),
                 palette::Outcome::Close => {
                     self.palette = None;
                     self.focus_editor();
@@ -1622,6 +1727,13 @@ impl JulieStormApp {
             Cancel,
         }
         let (title, detail) = match dialog {
+            Dialog::CloseMany(paths) => (
+                tv::close_many_title(paths.len()),
+                paths.iter().map(|p| file_name(p)).collect::<Vec<_>>().join(
+                    "
+",
+                ),
+            ),
             Dialog::CloseTab(path) => (t::dialog_save_one(&file_name(path)), String::new()),
             Dialog::Quit(paths) => (
                 t::DIALOG_SAVE_MANY.to_owned(),
@@ -1632,7 +1744,7 @@ impl JulieStormApp {
                     .join("\n"),
             ),
         };
-        let quitting = matches!(dialog, Dialog::Quit(_));
+        let quitting = matches!(dialog, Dialog::Quit(_) | Dialog::CloseMany(_));
         let mut answer = None;
         let modal = egui::Modal::new(Id::unique("julie-dialog")).show(ctx, |ui| {
             ui.set_width(380.0);
@@ -1700,6 +1812,23 @@ impl JulieStormApp {
             (Answer::Discard, Some(Dialog::Quit(_))) => {
                 self.force_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            (Answer::Save, Some(Dialog::CloseMany(paths))) => {
+                let errors = self.editors.save_paths(&self.tasks, &paths);
+                if errors.is_empty() {
+                    self.editors.close_after_save.extend(paths);
+                } else {
+                    for error in errors {
+                        self.say(error, true);
+                    }
+                }
+            }
+            (Answer::Discard, Some(Dialog::CloseMany(paths))) => {
+                for path in paths {
+                    if let Some(index) = self.editors.index_of(&path) {
+                        self.editors.close(index);
+                    }
+                }
             }
             (_, None) => {}
         }
@@ -1859,6 +1988,13 @@ impl JulieStormApp {
                 self.injected.extend(Injection::click(egui::pos2(x, y)));
                 sc.settle = 5;
             }
+            Step::RClick(x, y) => {
+                self.injected.extend(Injection::click_with(
+                    egui::pos2(x, y),
+                    egui::PointerButton::Secondary,
+                ));
+                sc.settle = 5;
+            }
             Step::Wait(ms) => sc.wait_ms(ms),
             Step::WaitIdle => sc.start_idle_wait(),
             Step::Screenshot(path) => {
@@ -1980,7 +2116,7 @@ impl JulieStormApp {
                 })
             })
             .collect();
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "title": self.last_title,
             "dark": self.dark,
             "pixels_per_point": ctx.pixels_per_point(),
@@ -2026,10 +2162,17 @@ impl JulieStormApp {
             "dialog": self.dialog.as_ref().map(|d| match d {
                 Dialog::CloseTab(p) => format!("close_tab:{}", p.display()),
                 Dialog::Quit(p) => format!("quit:{}", p.len()),
+                Dialog::CloseMany(p) => format!("close_many:{}", p.len()),
             }),
             "status": self.status_model().to_json(),
             "tasks_busy": self.tracker.kinds(),
-        })
+        });
+        if let (serde_json::Value::Object(map), serde_json::Value::Object(extra)) =
+            (&mut value, self.v1_state())
+        {
+            map.extend(extra);
+        }
+        value
     }
 }
 
@@ -2170,6 +2313,7 @@ impl eframe::App for JulieStormApp {
 
         let p = self.palette();
         let mut actions = Vec::new();
+        let mut status_out = status::StatusOut::default();
         actions.extend(self.draw_menu(ui, &p));
 
         egui::Panel::bottom("status_bar")
@@ -2181,8 +2325,14 @@ impl eframe::App for JulieStormApp {
             )
             .show(ui, |ui| {
                 let model = self.status_model();
-                status::show(ui, &p, &model);
+                status_out = status::show(ui, &p, &model);
             });
+        if let Some(task) = status_out.cancel {
+            self.tasks.cancel(task);
+        }
+        if status_out.message_action {
+            self.toast_action();
+        }
 
         actions.extend(self.draw_left(ui, &p));
         self.draw_bottom(ui, &p);
@@ -2196,12 +2346,16 @@ impl eframe::App for JulieStormApp {
             self.focus_editor();
         }
 
+        self.collect_menu_requests();
         self.draw_overlays(&ctx, &p);
+        self.draw_branch_popup(&ctx, &p);
+        self.draw_ctx_menu(&ctx, &p);
         if let Some(terminal) = &mut self.terminal {
             terminal.ui_global(ui);
         }
         self.draw_modals(&ctx, &p);
         self.draw_dialog(&ctx, &p);
+        self.draw_git_dialog(&ctx, &p);
 
         for id in actions {
             self.run_action(id);

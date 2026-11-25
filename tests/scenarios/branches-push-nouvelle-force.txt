@@ -1,0 +1,49 @@
+# Pousser une nouvelle branche (amont posé), puis la réécrire et « Forcer avec bail » (critères 12 et 14).
+# Avant : branches.sh <dossier> avance
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+action vcs.new_branch
+wait 300
+type feature/x
+wait 600
+ui dialog.choose create
+wait-idle
+wait 400
+key Ctrl+Maj+K
+wait 700
+screenshot target/essais/branches/18-push-nouvelle.png
+state target/essais/branches/18-push-nouvelle.json
+ui dialog.choose push
+wait-idle
+wait 600
+state target/essais/branches/18-pousse.json
+# Réécriture locale : réinitialiser sur le commit précédent (mixte), puis un autre commit.
+ui git.tab log
+wait-idle
+ui menu.open log 2
+ui menu.choose log.reset
+wait 500
+screenshot target/essais/branches/19-reinitialiser.png
+state target/essais/branches/19-reinitialiser.json
+ui dialog.choose reset
+wait-idle
+wait 600
+ui git.tab changes
+wait-idle
+ui git.check local.txt
+ui git.message Réécrit
+ui git.commit
+wait-idle
+wait 600
+key Ctrl+Maj+K
+wait 700
+ui dialog.choose force
+wait 400
+screenshot target/essais/branches/20-forcer-bail.png
+state target/essais/branches/20-forcer-bail.json
+ui dialog.choose force_confirm
+wait-idle
+wait 700
+state target/essais/branches/20-force.json
+quit

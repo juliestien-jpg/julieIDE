@@ -239,7 +239,10 @@ impl JulieStormApp {
                     .ok_or_else(|| format!("lien {arg} absent de la console"))?;
                 self.run_tests_intents(vec![TestsIntent::Open(location)]);
             }
-            other => return Err(format!("commande ui inconnue : « {other} »")),
+            other => match self.ui_command_v1(other, arg) {
+                Some(result) => return result,
+                None => return Err(format!("commande ui inconnue : « {other} »")),
+            },
         }
         Ok(())
     }

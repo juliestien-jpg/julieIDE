@@ -1,0 +1,24 @@
+# Créer une branche : nom vérifié à la frappe (branches.md, critère 5).
+# Avant : branches.sh <dossier>   (sans option : main, feature/login…)
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+action vcs.new_branch
+wait 300
+type ma branche
+wait 600
+screenshot target/essais/branches/09-nom-invalide.png
+state target/essais/branches/09-nom-invalide.json
+ui dialog.set name feature
+wait 600
+state target/essais/branches/09-nom-dossier.json
+ui dialog.set name Main
+wait 600
+state target/essais/branches/09-nom-casse.json
+ui dialog.set name ma-branche
+wait 600
+ui dialog.choose create
+wait-idle
+state target/essais/branches/09-creee.json
+screenshot target/essais/branches/09-creee.png
+quit

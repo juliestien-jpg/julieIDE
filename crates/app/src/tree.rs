@@ -11,6 +11,7 @@ use julie_vcs::{FileKind, Status};
 
 use crate::icons::{self, Icon};
 use crate::project::{self, Channel, TreeEntry};
+use crate::target::{FileRef, MenuRequest, Target, Zone};
 use crate::theme::Palette;
 
 const ROW_HEIGHT: f32 = 22.0;
@@ -38,6 +39,8 @@ pub struct ProjectTree {
     listings: HashMap<PathBuf, Listing>,
     expanded: HashSet<PathBuf>,
     pub selected: Option<PathBuf>,
+    /// Menu contextuel demandé à cette image (clic droit).
+    pub menu_request: Option<MenuRequest>,
     changes: HashMap<PathBuf, FileKind>,
     dirs_with_changes: HashSet<PathBuf>,
     focus_requested: bool,
@@ -55,6 +58,7 @@ impl ProjectTree {
             listings: HashMap::new(),
             expanded: HashSet::new(),
             selected: None,
+            menu_request: None,
             changes: HashMap::new(),
             dirs_with_changes: HashSet::new(),
             focus_requested: false,
@@ -219,6 +223,16 @@ impl ProjectTree {
         }
     }
 
+    /// La ligne sélectionnée : chemin et dossier ou non (menu au clavier).
+    pub fn selected_ref(&self) -> Option<FileRef> {
+        let selected = self.selected.clone()?;
+        let is_dir = self.rows().iter().find(|r| r.path == selected)?.is_dir;
+        Some(FileRef {
+            path: selected,
+            is_dir,
+        })
+    }
+
     /// Noms (avec indentation) des lignes visibles : pour l'état du mode scénario.
     pub fn visible_names(&self) -> Vec<String> {
         self.rows()
@@ -278,6 +292,7 @@ impl ProjectTree {
         let mut to_open: Option<PathBuf> = None;
         let mut toggle: Option<PathBuf> = None;
         let mut select: Option<PathBuf> = None;
+        let mut menu: Option<MenuRequest> = None;
 
         if self.focus_requested {
             self.focus_requested = false;
@@ -435,6 +450,23 @@ impl ProjectTree {
                         toggle = Some(row.path.clone());
                     }
                 }
+                if response.secondary_clicked() {
+                    select = Some(row.path.clone());
+                    ui.memory_mut(|m| m.request_focus(self.id));
+                    menu = Some(MenuRequest {
+                        target: Target::Files {
+                            zone: Zone::Tree,
+                            files: vec![FileRef {
+                                path: row.path.clone(),
+                                is_dir: row.is_dir,
+                            }],
+                        },
+                        pos: response
+                            .interact_pointer_pos()
+                            .unwrap_or(rect.left_bottom()),
+                        by_keyboard: false,
+                    });
+                }
                 if response.double_clicked() {
                     if row.is_dir {
                         if row.depth > 0 {
@@ -456,6 +488,9 @@ impl ProjectTree {
         self.last_offset = output.state.clamped_offset().y;
         self.last_viewport = output.inner_rect.height();
 
+        if menu.is_some() {
+            self.menu_request = menu;
+        }
         if let Some(path) = select {
             self.selected = Some(path);
         }

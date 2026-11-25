@@ -15,16 +15,19 @@ use eframe::egui::{
 };
 use julie_core::TaskId;
 use julie_vcs::{
-    Change, CommandRecord, CommandResult, CommitDetails, CommitFile, CommitRequest, CommitSummary,
-    ConflictKind, ConflictSide, DiffRequest, FileKind, FileStatus, Group, LogPage, LogQuery,
-    OperationKind, RefKind, Status, VcsError, VcsEvent,
+    BranchList, CommandRecord, CommandResult, CommitRequest, ConflictKind, ConflictSide,
+    DiffRequest, FileKind, FileStatus, Group, IndexState, LogQuery, OperationKind, Status,
+    VcsError, VcsEvent,
 };
 
 use crate::diffpane::DiffPane;
 use crate::icons::{self, Icon};
 use crate::kit;
+use crate::logview::{Filters, LogView};
 use crate::merge::Ineligible;
+use crate::target::{FileRef, MenuRequest, Target, Zone};
 use crate::texts as t;
+use crate::texts_v1 as tv;
 use crate::theme::Palette;
 
 const ROW: f32 = 22.0;
@@ -88,6 +91,7 @@ pub enum GitIntent {
     Commit(CommitRequest),
     ContinueOperation(Option<String>),
     AbortOperation,
+    SkipOperation,
     AcceptSide {
         paths: Vec<PathBuf>,
         side: ConflictSide,
@@ -106,6 +110,7 @@ pub enum Confirm {
         files: Vec<(PathBuf, bool)>,
     },
     AbortOperation(OperationKind),
+    SkipOperation(OperationKind),
 }
 
 /// Ce que l'application sait du dépôt.
@@ -114,18 +119,6 @@ pub enum RepoState {
     Unknown,
     NoRepository,
     Ready,
-}
-
-#[derive(Default)]
-struct LogState {
-    commits: Vec<CommitSummary>,
-    has_more: bool,
-    loading: bool,
-    requested: bool,
-    selected: Option<usize>,
-    details: Option<CommitDetails>,
-    details_for: Option<String>,
-    file_selected: Option<usize>,
 }
 
 /// Ce que l'on sait d'avance d'un fichier en conflit pour le bouton « Fusionner… ».
@@ -160,16 +153,16 @@ pub struct GitView {
     preview_token: u64,
     preview_dirty: bool,
     jobs: HashMap<TaskId, DiffJob>,
-    log: LogState,
+    pub log: LogView,
     console: Vec<CommandRecord>,
     console_open: HashSet<u64>,
     pub confirm: Option<Confirm>,
+    /// Menu contextuel demandé à cette image (liste des changements, journal).
+    pub menu_request: Option<MenuRequest>,
     list_focus: Id,
     message_id: Id,
     /// Fichier dont la fusion se prépare (chargement des versions).
     pub merge_loading: Option<PathBuf>,
-    /// Le journal prend le focus clavier à la prochaine image.
-    log_focus_request: bool,
     /// Vérification d'avance de « Fusionner… », par fichier en conflit.
     merge_checks: HashMap<PathBuf, MergeCheck>,
     /// Tâches `vcs.conflict` lancées pour cette vérification (et non pour ouvrir le dialogue).
@@ -194,14 +187,14 @@ impl GitView {
             preview_token: 0,
             preview_dirty: false,
             jobs: HashMap::new(),
-            log: LogState::default(),
+            log: LogView::default(),
             console: Vec::new(),
             console_open: HashSet::new(),
             confirm: None,
+            menu_request: None,
             list_focus: Id::unique("git-liste"),
             message_id: Id::unique("git-message"),
             merge_loading: None,
-            log_focus_request: false,
             merge_checks: HashMap::new(),
             check_tasks: HashMap::new(),
         }
@@ -362,7 +355,7 @@ impl GitView {
                     self.console.remove(0);
                 }
             }
-            VcsEvent::Log(page) => self.on_log(page),
+            VcsEvent::Log(page) => self.log.on_page(page),
             VcsEvent::CommitDetails(details) => {
                 if self.log.details_for.as_deref() == Some(details.summary.id.as_str()) {
                     self.log.details = Some(details.clone());
@@ -374,7 +367,7 @@ impl GitView {
                 self.commit_error = None;
                 self.message.clear();
                 self.amend = false;
-                self.reset_log();
+                self.log.reset();
                 out.push(GitIntent::Notify(t::commit_done(&outcome.subject)));
             }
             VcsEvent::OperationContinued(outcome) => {
@@ -382,14 +375,14 @@ impl GitView {
                 if outcome.finished {
                     self.message.clear();
                     self.merge_prefilled = false;
-                    self.reset_log();
-                    out.push(GitIntent::Notify(t::OPERATION_DONE.to_owned()));
+                    self.log.reset();
+                    out.push(GitIntent::Notify(tv::operation_done(outcome.kind)));
                 }
             }
             VcsEvent::OperationAborted(_) => {
                 self.message.clear();
                 self.merge_prefilled = false;
-                self.reset_log();
+                self.log.reset();
             }
             VcsEvent::Failed(failure) => match failure.action {
                 julie_vcs::Action::Commit | julie_vcs::Action::Continue => {
@@ -401,25 +394,6 @@ impl GitView {
                 _ => {}
             },
             _ => {}
-        }
-    }
-
-    fn reset_log(&mut self) {
-        self.log.commits.clear();
-        self.log.selected = None;
-        self.log.details = None;
-        self.log.requested = false;
-        self.log.loading = false;
-    }
-
-    fn on_log(&mut self, page: &LogPage) {
-        self.log.loading = false;
-        if page.query.skip == 0 {
-            self.log.commits.clear();
-        }
-        if page.query.skip == self.log.commits.len() {
-            self.log.commits.extend(page.commits.iter().cloned());
-            self.log.has_more = page.has_more;
         }
     }
 
@@ -591,6 +565,32 @@ impl GitView {
         }
     }
 
+    pub fn ask_skip(&mut self) -> bool {
+        match self.status.as_ref().and_then(|s| s.operation.as_ref()) {
+            Some(operation) if operation.kind != OperationKind::Merge => {
+                self.confirm = Some(Confirm::SkipOperation(operation.kind));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// « Continuer » (rebase, cherry-pick, revert) : rend l'intention, ou la raison du refus.
+    pub fn continue_intent(&self) -> Result<GitIntent, String> {
+        let status = self.status.as_ref().ok_or("état Git inconnu")?;
+        let operation = status
+            .operation
+            .as_ref()
+            .ok_or("aucune opération en cours")?;
+        if operation.kind == OperationKind::Merge {
+            return Err("une fusion se conclut par « Valider » (git.commit)".to_owned());
+        }
+        if status.conflicts().next().is_some() {
+            return Err("il reste des fichiers en conflit".to_owned());
+        }
+        Ok(GitIntent::ContinueOperation(None))
+    }
+
     pub fn answer_confirm(&mut self, yes: bool, out: &mut Vec<GitIntent>) {
         let Some(confirm) = self.confirm.take() else {
             return;
@@ -604,6 +604,7 @@ impl GitView {
                 side,
             }),
             Confirm::AbortOperation(_) => out.push(GitIntent::AbortOperation),
+            Confirm::SkipOperation(_) => out.push(GitIntent::SkipOperation),
         }
     }
 
@@ -612,34 +613,44 @@ impl GitView {
     }
 
     pub fn select_log(&mut self, index: usize, out: &mut Vec<GitIntent>) -> bool {
-        let Some(commit) = self.log.commits.get(index) else {
-            return false;
-        };
-        let id = commit.id.clone();
-        self.log.selected = Some(index);
-        self.log_focus_request = true;
-        self.log.details = None;
-        self.log.file_selected = None;
-        self.log.details_for = Some(id.clone());
-        out.push(GitIntent::LoadCommit(id));
-        true
+        self.log.select(index, out)
     }
 
     pub fn open_commit_file(&mut self, index: usize, out: &mut Vec<GitIntent>) -> bool {
-        let Some(details) = &self.log.details else {
-            return false;
-        };
-        let Some(file) = details.files.get(index) else {
+        let Some((id, file)) = self.log.open_commit_file(index) else {
             return false;
         };
         out.push(GitIntent::RequestDiff {
-            request: DiffRequest::commit_file(&details.summary.id, file),
+            request: DiffRequest::commit_file(&id, &file),
             job: DiffJob {
                 target: DiffTarget::Window,
                 token: 0,
             },
         });
         true
+    }
+
+    /// « Historique du fichier » : le journal filtré sur ce chemin.
+    pub fn show_file_history(&mut self, path: PathBuf) {
+        self.tab = GitTab::Log;
+        self.log.set_filters(Filters {
+            path: Some(path),
+            ..Filters::default()
+        });
+    }
+
+    /// Le journal montre ces commits (comparaison de branches : `C..X`).
+    pub fn show_log_range(&mut self, branch: String) {
+        self.tab = GitTab::Log;
+        self.log.set_filters(Filters {
+            branch: Some(branch),
+            ..Filters::default()
+        });
+    }
+
+    /// Le journal repart de zéro (après une opération qui change l'historique).
+    pub fn reset_log_now(&mut self) {
+        self.log.reset();
     }
 
     // ----- Affichage -------------------------------------------------------------
@@ -650,6 +661,7 @@ impl GitView {
         p: &Palette,
         state: RepoState,
         commit_shortcut: &str,
+        branches: Option<&BranchList>,
     ) -> Vec<GitIntent> {
         let mut out = Vec::new();
         let rect = ui.available_rect_before_wrap();
@@ -687,11 +699,18 @@ impl GitView {
         let body = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max);
         match self.tab {
             GitTab::Changes => self.show_changes(ui, body, p, commit_shortcut, &mut out),
-            GitTab::Log => self.show_log(ui, body, p, &mut out),
+            GitTab::Log => self.log.show(ui, body, p, branches, &mut out),
             GitTab::Console => self.show_console(ui, body, p),
         }
         self.show_modals(ui.ctx(), p, &mut out);
+        if let Some(request) = self.log.menu_request.take() {
+            self.menu_request = Some(request);
+        }
         out
+    }
+
+    pub fn list_has_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| m.has_focus(self.list_focus))
     }
 
     fn show_banner(
@@ -710,10 +729,18 @@ impl GitView {
             p.ok.gamma_multiply(0.22)
         };
         ui.painter().rect_filled(rect, 0.0, fill);
+        let step = status.operation.as_ref().and_then(|o| o.step);
         let text = if conflicts > 0 {
-            t::operation_conflicts(kind, conflicts)
-        } else {
+            match step {
+                Some(step) if kind == OperationKind::Rebase => {
+                    tv::rebase_conflicts(step, conflicts)
+                }
+                _ => t::operation_conflicts(kind, conflicts),
+            }
+        } else if kind == OperationKind::Merge {
             t::OPERATION_RESOLVED.to_owned()
+        } else {
+            tv::operation_resolved_continue(kind)
         };
         icons::paint(
             ui.painter(),
@@ -732,10 +759,27 @@ impl GitView {
             FontId::proportional(14.0),
             p.text,
         );
+        let rebase_like = kind != OperationKind::Merge;
         kit::child(ui, rect.shrink2(vec2(10.0, 4.0)), |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if kit::button(ui, p, t::OPERATION_ABORT, false, true).clicked() {
+                if kit::button(ui, p, tv::operation_abort_label(kind), false, true).clicked() {
                     self.ask_abort();
+                }
+                if rebase_like {
+                    if kit::button(ui, p, tv::BTN_SKIP_COMMIT, false, true).clicked() {
+                        self.ask_skip();
+                    }
+                    let can = conflicts == 0;
+                    let response = kit::button(ui, p, tv::BTN_CONTINUE_OP, true, can);
+                    if can && response.clicked() {
+                        out.push(GitIntent::ContinueOperation(None));
+                    } else if !can {
+                        response.on_disabled_hover_text(tv::TIP_CONFLICTS_REMAIN);
+                    }
+                } else if conflicts == 0
+                    && kit::button(ui, p, tv::BTN_VALIDATE_MERGE, true, true).clicked()
+                {
+                    self.show_changes_for_commit();
                 }
                 if conflicts > 0 && kit::button(ui, p, t::OPERATION_RESOLVE, true, true).clicked() {
                     self.tab = GitTab::Changes;
@@ -745,7 +789,6 @@ impl GitView {
                 }
             });
         });
-        let _ = out;
     }
 
     fn show_tab_bar(&mut self, ui: &mut Ui, rect: Rect, p: &Palette, out: &mut Vec<GitIntent>) {
@@ -811,7 +854,7 @@ impl GitView {
             out.push(GitIntent::Refresh);
             self.preview_dirty = true;
             if self.tab == GitTab::Log {
-                self.reset_log();
+                self.log.reset();
             }
         }
     }
@@ -917,6 +960,7 @@ impl GitView {
         let mut toggled: Vec<(PathBuf, bool)> = Vec::new();
         let mut merge_request: Option<PathBuf> = None;
         let mut keep: Option<(ConflictSide, PathBuf)> = None;
+        let mut menu_for: Option<(Vec<PathBuf>, egui::Pos2)> = None;
         kit::child(ui, rect, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             egui::ScrollArea::vertical()
@@ -953,6 +997,14 @@ impl GitView {
                             }
                             x += 24.0;
                         }
+                        if response.secondary_clicked() && group != Group::Conflicted {
+                            menu_for = Some((
+                                files.iter().map(|f| f.path.clone()).collect(),
+                                response
+                                    .interact_pointer_pos()
+                                    .unwrap_or(header.left_bottom()),
+                            ));
+                        }
                         let color = if group == Group::Conflicted {
                             p.error
                         } else {
@@ -979,7 +1031,10 @@ impl GitView {
                                 let checked = checkable.then(|| self.checked.contains(&file.path));
                                 let selected = self.selected.as_ref() == Some(&file.path);
                                 let row = file_row(ui, p, file, selected, checked);
-                                if row.toggled {
+                                if row.secondary {
+                                    menu_for = Some((vec![file.path.clone()], row.pos));
+                                    clicked = Some(file.path.clone());
+                                } else if row.toggled {
                                     toggled.push((file.path.clone(), !checked.unwrap_or(false)));
                                 } else if row.double {
                                     double = Some(file.path.clone());
@@ -991,6 +1046,22 @@ impl GitView {
                     }
                 });
         });
+        if let Some((paths, pos)) = menu_for {
+            self.menu_request = Some(MenuRequest {
+                target: Target::Files {
+                    zone: Zone::Changes,
+                    files: paths
+                        .into_iter()
+                        .map(|path| FileRef {
+                            path,
+                            is_dir: false,
+                        })
+                        .collect(),
+                },
+                pos,
+                by_keyboard: false,
+            });
+        }
         for (path, value) in toggled {
             if value {
                 self.checked.insert(path);
@@ -1233,191 +1304,6 @@ impl GitView {
 
     // ----- Onglet Journal --------------------------------------------------------
 
-    fn show_log(&mut self, ui: &mut Ui, rect: Rect, p: &Palette, out: &mut Vec<GitIntent>) {
-        if !self.log.requested {
-            self.log.requested = true;
-            self.log.loading = true;
-            out.push(GitIntent::LoadLog(LogQuery::default()));
-        }
-        if self.log.commits.is_empty() {
-            let text = if self.log.loading {
-                t::GIT_LOADING
-            } else {
-                t::LOG_EMPTY
-            };
-            kit::centered_note(ui, rect, text, p);
-            return;
-        }
-        let left_width = (rect.width() * 0.62).max(300.0).min(rect.width() - 160.0);
-        let left = Rect::from_min_size(rect.min, vec2(left_width, rect.height()));
-        let right = Rect::from_min_max(pos2(left.right() + 1.0, rect.top()), rect.max);
-        ui.painter().vline(
-            left.right(),
-            rect.y_range(),
-            egui::Stroke::new(1.0, p.border),
-        );
-
-        let count = self.log.commits.len();
-        let mut clicked = None;
-        let mut want_more = false;
-        // Clavier : la liste garde le focus après un clic ; flèches, pages, Début, Fin.
-        let focus = Id::unique("git-journal-focus");
-        ui.interact(left, focus, Sense::click());
-        if std::mem::take(&mut self.log_focus_request) {
-            ui.memory_mut(|m| m.request_focus(focus));
-        }
-        let mut scroll_to: Option<usize> = None;
-        if ui.memory(|m| m.has_focus(focus)) {
-            ui.memory_mut(|m| {
-                m.set_focus_lock_filter(
-                    focus,
-                    EventFilter {
-                        vertical_arrows: true,
-                        ..Default::default()
-                    },
-                )
-            });
-            let page = ((left.height() / ROW) as usize).max(2) - 1;
-            let current = self.log.selected;
-            let step =
-                |ui: &mut Ui, key: Key| ui.input_mut(|i| i.consume_key(Modifiers::NONE, key));
-            let target = if step(ui, Key::ArrowDown) {
-                Some(current.map_or(0, |c| (c + 1).min(count - 1)))
-            } else if step(ui, Key::ArrowUp) {
-                Some(current.map_or(0, |c| c.saturating_sub(1)))
-            } else if step(ui, Key::PageDown) {
-                Some(current.map_or(0, |c| (c + page).min(count - 1)))
-            } else if step(ui, Key::PageUp) {
-                Some(current.map_or(0, |c| c.saturating_sub(page)))
-            } else if step(ui, Key::Home) {
-                Some(0)
-            } else if step(ui, Key::End) {
-                Some(count - 1)
-            } else {
-                None
-            };
-            if let Some(i) = target {
-                clicked = Some(i);
-                scroll_to = Some(i);
-            }
-        }
-        let view_height = left.height();
-        kit::child(ui, left, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let mut area = egui::ScrollArea::vertical()
-                .id_salt("git-journal")
-                .auto_shrink([false, false]);
-            if let Some(i) = scroll_to {
-                area = area.vertical_scroll_offset((i as f32 * ROW - view_height / 2.0).max(0.0));
-            }
-            area.show_rows(ui, ROW, count, |ui, range| {
-                if range.end + 20 >= count && self.log.has_more && !self.log.loading {
-                    want_more = true;
-                }
-                for i in range {
-                    let selected = self.log.selected == Some(i);
-                    if log_row(ui, p, &self.log.commits[i], selected) {
-                        clicked = Some(i);
-                        ui.memory_mut(|m| m.request_focus(focus));
-                    }
-                }
-            });
-        });
-        if want_more {
-            self.log.loading = true;
-            out.push(GitIntent::LoadLog(LogQuery {
-                skip: count,
-                ..LogQuery::default()
-            }));
-        }
-        if let Some(i) = clicked {
-            self.select_log(i, out);
-        }
-        self.show_commit_details(ui, right, p, out);
-    }
-
-    fn show_commit_details(
-        &mut self,
-        ui: &mut Ui,
-        rect: Rect,
-        p: &Palette,
-        out: &mut Vec<GitIntent>,
-    ) {
-        let Some(index) = self.log.selected else {
-            kit::centered_note(ui, rect, t::LOG_SELECT, p);
-            return;
-        };
-        let Some(summary) = self.log.commits.get(index).cloned() else {
-            return;
-        };
-        let details = self.log.details.clone();
-        let mut open_file: Option<usize> = None;
-        let mut select_file: Option<usize> = None;
-        let selected_file = self.log.file_selected;
-        kit::child(ui, rect.shrink2(vec2(10.0, 6.0)), |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("git-commit-details")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let message = details
-                        .as_ref()
-                        .map_or_else(|| summary.subject.clone(), |d| d.message.clone());
-                    ui.label(RichText::new(message).color(p.text).size(14.0));
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} <{}>",
-                            summary.author.name, summary.author.email
-                        ))
-                        .color(p.text_dim),
-                    );
-                    ui.label(
-                        RichText::new(kit::format_date(
-                            summary.author.time,
-                            summary.author.offset_minutes,
-                            true,
-                        ))
-                        .color(p.text_dim),
-                    );
-                    ui.label(
-                        RichText::new(&summary.id)
-                            .monospace()
-                            .color(p.text_dim)
-                            .small(),
-                    );
-                    ui.add_space(8.0);
-                    match &details {
-                        None => {
-                            ui.label(RichText::new(t::GIT_LOADING).color(p.text_dim));
-                        }
-                        Some(details) => {
-                            ui.label(
-                                RichText::new(t::files_count(details.files.len() as u64))
-                                    .strong()
-                                    .color(p.text),
-                            );
-                            for (i, file) in details.files.iter().enumerate() {
-                                let response =
-                                    commit_file_row(ui, p, file, selected_file == Some(i));
-                                if response.double_clicked() {
-                                    open_file = Some(i);
-                                } else if response.clicked() {
-                                    select_file = Some(i);
-                                }
-                            }
-                        }
-                    }
-                });
-        });
-        if let Some(i) = select_file {
-            self.log.file_selected = Some(i);
-        }
-        if let Some(i) = open_file {
-            self.log.file_selected = Some(i);
-            self.open_commit_file(i, out);
-        }
-    }
-
     // ----- Onglet Console --------------------------------------------------------
 
     fn show_console(&mut self, ui: &mut Ui, rect: Rect, p: &Palette) {
@@ -1517,7 +1403,11 @@ impl GitView {
                 }
                 Confirm::AbortOperation(kind) => (
                     t::confirm_abort_title(*kind),
-                    t::CONFIRM_ABORT_DETAIL.to_owned(),
+                    tv::confirm_abort_detail(*kind),
+                ),
+                Confirm::SkipOperation(kind) => (
+                    tv::confirm_skip_title(*kind),
+                    tv::CONFIRM_SKIP_DETAIL.to_owned(),
                 ),
             };
             let mut answer = None;
@@ -1605,17 +1495,10 @@ impl GitView {
             "confirm": self.confirm.as_ref().map(|c| match c {
                 Confirm::KeepSide { side, files } => format!("keep_{side:?}:{}", files.len()),
                 Confirm::AbortOperation(k) => format!("abort:{k:?}"),
+                Confirm::SkipOperation(k) => format!("skip:{k:?}"),
             }),
             "preview": self.preview.state(),
-            "log": {
-                "loaded": self.log.commits.len(),
-                "has_more": self.log.has_more,
-                "loading": self.log.loading,
-                "selected": self.log.selected,
-                "subjects": self.log.commits.iter().take(30).map(|c| c.subject.clone()).collect::<Vec<_>>(),
-                "files": self.log.details.as_ref().map(|d| d.files.iter().map(|f| f.repo_path.clone()).collect::<Vec<_>>()),
-                "message": self.log.details.as_ref().map(|d| d.message.clone()),
-            },
+            "log": self.log.state(),
             "console": {
                 "commands": self.console.len(),
                 "last": self.console.last().map(|r| format!("git {}", r.args.join(" "))),
@@ -1630,6 +1513,8 @@ struct RowEvent {
     clicked: bool,
     double: bool,
     toggled: bool,
+    secondary: bool,
+    pos: egui::Pos2,
 }
 
 fn kind_color(kind: FileKind, p: &Palette) -> Color32 {
@@ -1709,135 +1594,37 @@ fn file_row(
         FontId::proportional(12.0),
         p.text_dim,
     );
-    clip.text(
+    let kind_rect = clip.text(
         pos2(rect.right() - 8.0, rect.center().y),
         Align2::RIGHT_CENTER,
         t::file_kind(file.kind),
         FontId::proportional(11.5),
         p.text_dim,
     );
+    // État d'index : « indexé » ou « en partie indexé » (de quoi retirer de l'index).
+    let mark = match file.index_state() {
+        IndexState::Staged => Some(tv::INDEX_STAGED),
+        IndexState::PartiallyStaged => Some(tv::INDEX_PARTIAL),
+        _ => None,
+    };
+    if let Some(mark) = mark {
+        clip.text(
+            pos2(kind_rect.left() - 10.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            mark,
+            FontId::proportional(11.5),
+            p.git_added,
+        );
+    }
     RowEvent {
         clicked: response.clicked() && !toggled,
         double: response.double_clicked(),
         toggled,
+        secondary: response.secondary_clicked(),
+        pos: response
+            .interact_pointer_pos()
+            .unwrap_or(rect.left_bottom()),
     }
-}
-
-fn log_row(ui: &mut Ui, p: &Palette, commit: &CommitSummary, selected: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, 0.0, p.accent_soft);
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, p.bg_alt);
-    }
-    let color = if commit.is_merge() {
-        p.text_dim
-    } else {
-        p.text
-    };
-    let hash_w = 64.0;
-    let date_w = 112.0;
-    let author_w = if rect.width() > 640.0 { 130.0 } else { 0.0 };
-    let clip_rect = Rect::from_min_max(
-        rect.min,
-        pos2(
-            rect.right() - hash_w - date_w - author_w - 10.0,
-            rect.bottom(),
-        ),
-    );
-    let clip = ui.painter().with_clip_rect(clip_rect);
-    let mut x = rect.left() + 10.0;
-    for label in &commit.refs {
-        let (fill, fg) = match label.kind {
-            RefKind::Head | RefKind::LocalBranch => (p.accent, Color32::WHITE),
-            RefKind::RemoteBranch => (p.bg_raised, p.text),
-            RefKind::Tag => (p.warn.gamma_multiply(0.5), p.text),
-            RefKind::Other => (p.bg_alt, p.text_dim),
-        };
-        x += kit::pill(
-            ui,
-            pos2(x, rect.center().y - 8.0),
-            &label.name,
-            fill,
-            fg,
-            clip_rect,
-        ) + 4.0;
-    }
-    clip.text(
-        pos2(x + 2.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        &commit.subject,
-        FontId::proportional(13.5),
-        color,
-    );
-    let mut right = rect.right() - 8.0;
-    ui.painter().text(
-        pos2(right, rect.center().y),
-        Align2::RIGHT_CENTER,
-        &commit.short_id,
-        FontId::monospace(12.0),
-        p.text_dim,
-    );
-    right -= hash_w;
-    ui.painter().text(
-        pos2(right, rect.center().y),
-        Align2::RIGHT_CENTER,
-        kit::format_when(commit.author.time, commit.author.offset_minutes),
-        FontId::proportional(12.5),
-        p.text_dim,
-    );
-    right -= date_w;
-    if author_w > 0.0 {
-        ui.painter()
-            .with_clip_rect(Rect::from_min_max(
-                pos2(right - author_w, rect.top()),
-                pos2(right, rect.bottom()),
-            ))
-            .text(
-                pos2(right, rect.center().y),
-                Align2::RIGHT_CENTER,
-                &commit.author.name,
-                FontId::proportional(12.5),
-                p.text_dim,
-            );
-    }
-    response.clicked()
-}
-
-fn commit_file_row(ui: &mut Ui, p: &Palette, file: &CommitFile, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, 3.0, p.accent_soft);
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, 3.0, p.bg_alt);
-    }
-    let color = match file.change {
-        Change::Added | Change::Copied => p.git_added,
-        Change::Deleted => p.git_deleted,
-        _ => p.git_modified,
-    };
-    icons::paint(
-        ui.painter(),
-        Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(13.0, 13.0)),
-        Icon::File,
-        color,
-    );
-    let (name, dir) = split_name(&file.repo_path);
-    let name_rect = ui.painter().text(
-        pos2(rect.left() + 26.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        name,
-        FontId::proportional(13.5),
-        color,
-    );
-    ui.painter().text(
-        pos2(name_rect.right() + 8.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        dir,
-        FontId::proportional(12.0),
-        p.text_dim,
-    );
-    response
 }
 
 fn console_summary(record: &CommandRecord) -> (String, Option<bool>) {

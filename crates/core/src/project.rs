@@ -11,6 +11,12 @@ use crate::error::{Error, Result};
 /// Nom du dossier de l'IDE dans un projet : caches (index) et réglages du projet.
 pub const DATA_DIR_NAME: &str = ".juliestorm";
 
+/// Noms que la recherche et l'indexation excluent **toujours**, à toute
+/// profondeur, quels que soient les réglages `[index] excluded` : le dépôt Git et
+/// le dossier de l'IDE. L'interface les montre en tête de la liste des exclus,
+/// grisés et non retirables.
+pub const ALWAYS_EXCLUDED: [&str; 2] = [".git", DATA_DIR_NAME];
+
 /// Un projet ouvert. Peu coûteux à cloner : à passer par valeur aux tâches de fond.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {

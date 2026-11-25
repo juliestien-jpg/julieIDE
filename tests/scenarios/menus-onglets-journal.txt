@@ -1,0 +1,28 @@
+# Clic droit sur un onglet d'éditeur et sur un commit du journal (menus-contextuels.md, critères 15, 19).
+# Avant : branches.sh <dossier> tout
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+file a.txt
+file LISEZMOI.md
+file local.txt
+wait-idle
+screenshot target/essais/branches/50-onglets.png
+rclick 420 42
+wait 400
+screenshot target/essais/branches/51-menu-onglet.png
+state target/essais/branches/51-menu-onglet.json
+ui menu.choose tab.close_others
+wait-idle
+state target/essais/branches/52-fermer-autres.json
+ui git.tab log
+wait-idle
+wait 700
+ui menu.open log 2
+wait 300
+screenshot target/essais/branches/53-menu-commit.png
+state target/essais/branches/53-menu-commit.json
+ui menu.choose log.copy_hash
+wait 300
+state target/essais/branches/53-hash-copie.json
+quit

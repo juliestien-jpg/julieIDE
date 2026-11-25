@@ -264,6 +264,14 @@ impl TerminalPanel {
         self.active = self.tabs.len() - 1;
     }
 
+    /// Ouvre un onglet du terminal par défaut dans ce dossier (menu contextuel
+    /// « Ouvrir un terminal ici », ajout de dev-interface).
+    pub fn open_default_in(&mut self, dir: PathBuf) {
+        let saved = std::mem::replace(&mut self.cwd, dir);
+        self.open_default();
+        self.cwd = saved;
+    }
+
     fn open_default(&mut self) {
         if let Some(profile) = self
             .profiles

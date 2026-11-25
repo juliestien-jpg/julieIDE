@@ -1,0 +1,39 @@
+# Supprimer une branche non fusionnée (commits perdus, Restaurer) et une branche distante
+# (confirmation forte, « Annuler » par défaut) : critères 18 et 19.
+# Avant : branches.sh <dossier> non-fusionnee
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
+resize 1280 720
+wait-idle
+ui branches.open
+wait-idle
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.delete
+wait 400
+ui dialog.choose delete
+wait-idle
+wait 500
+screenshot target/essais/branches/21-non-fusionnee.png
+state target/essais/branches/21-non-fusionnee.json
+ui dialog.choose force_delete
+wait-idle
+wait 500
+state target/essais/branches/21-supprimee.json
+screenshot target/essais/branches/21-supprimee.png
+ui toast.action
+wait-idle
+wait 500
+state target/essais/branches/21-restauree.json
+ui branches.open
+wait-idle
+ui branches.select origin/feature/search
+ui branches.menu
+ui menu.choose branch.delete
+wait 400
+screenshot target/essais/branches/22-supprimer-distante.png
+state target/essais/branches/22-supprimer-distante.json
+ui dialog.choose delete_remote
+wait-idle
+wait 600
+state target/essais/branches/22-distante-supprimee.json
+quit
