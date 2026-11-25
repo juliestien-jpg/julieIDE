@@ -7,16 +7,37 @@ use std::time::{Duration, Instant};
 
 use julie_core::{CancelToken, Domain, TaskContext, TaskHandle, Tasks};
 
+use crate::branches::{
+    check_branch_name, commits_only_on_detached_head, create_branch, delete_branch,
+    force_delete_branch, list_branches, rename_branch, restore_branch, switch_branch,
+    switch_discarding_changes, BranchList, CreateBranchOutcome, CreateBranchRequest,
+    DeleteBranchOutcome, RenameBranchOutcome, SwitchOutcome, SwitchRequest, SwitchTarget,
+};
 use crate::commit::{commit, CommitOutcome, CommitRequest};
 use crate::conflict::{
     abort_operation, accept_side, conflict_versions, continue_operation, resolve_with_content,
     ConflictSide, ConflictVersions, ContinueOutcome, SideResolution,
 };
 use crate::content::{load_diff, DiffRequest, DiffSides};
+use crate::error::{BranchNameProblem, OverwriteConflict};
 use crate::error::{Result, VcsError};
+use crate::files::{
+    add_to_gitignore, discard_changes, move_path, stage, unstage, DiscardOutcome, IgnoreAdded,
+    IgnoreRule,
+};
 use crate::git::{CommandRecord, Git, VcsSettings};
 use crate::history::{commit_details, log, CommitDetails, LogPage, LogQuery};
+use crate::operations::{
+    cherry_pick, merge, rebase, reset, reset_hard, reset_preview, revert_commits, skip_operation,
+    MergeRequest, OperationOutcome, RebaseRequest, ResetMode, ResetOutcome, ResetPreview,
+};
+use crate::remote::{
+    delete_remote_branch, fast_forward_branch, fetch, pull, push, push_preview, push_target,
+    update_project, FetchOutcome, FetchRequest, PullRequest, PushOutcome, PushPreview, PushRequest,
+    PushTarget, RemoteBranchDeleted, RemoteProgress, UpdateRequest,
+};
 use crate::repo::{open_repository, OperationKind, Repository};
+use crate::stash::{list_stashes, restore_auto_stash, AutoStash, LocalChanges, StashEntry};
 use crate::status::{status, Status};
 
 /// Délai de calme après le dernier changement sur disque avant de relire l'état.
@@ -56,6 +77,72 @@ pub enum VcsEvent {
     /// Une demande a échoué. La sortie de Git est dans l'erreur
     /// ([`VcsError::GitFailed`]). Jamais publié pour une annulation.
     Failed(Failure),
+
+    // ---------------------------------------------------------- v1 : branches
+    /// Branches relues ([`Vcs::load_branches`], et après toute opération qui
+    /// touche aux branches ou au distant).
+    Branches(BranchList),
+    /// Vérification d'un nom à la frappe ; `problem: None` : valable.
+    BranchNameChecked {
+        name: String,
+        problem: Option<BranchNameProblem>,
+    },
+    BranchCreated(CreateBranchOutcome),
+    BranchRenamed(RenameBranchOutcome),
+    /// Supprimée ; `tip` permet « Restaurer » ([`Vcs::restore_branch`]).
+    BranchDeleted(DeleteBranchOutcome),
+    BranchRestored {
+        name: String,
+        tip: String,
+    },
+    RemoteBranchDeleted(RemoteBranchDeleted),
+    Switched(SwitchOutcome),
+    /// Avertissement avant de quitter une HEAD détachée : commits sur aucune
+    /// branche.
+    DetachedCommits {
+        count: u32,
+    },
+    // ---------------------------------------------------------- distant
+    Fetched(FetchOutcome),
+    /// Une branche non courante avancée sur son amont.
+    BranchFastForwarded {
+        branch: String,
+        fetch: FetchOutcome,
+    },
+    /// « Mettre à jour le projet » terminé ou arrêté sur un conflit.
+    Updated(OperationOutcome),
+    Pulled(OperationOutcome),
+    PushPreview(PushPreview),
+    Pushed(PushOutcome),
+    /// Progression d'une opération réseau (espacée de 100 ms au plus).
+    Progress(RemoteProgress),
+    // ---------------------------------------------------------- opérations
+    /// Fusion, rebase, cherry-pick ou revert : terminé, ou arrêté sur un
+    /// conflit (`finished: false`, `conflicts`).
+    OperationRan(OperationOutcome),
+    OperationSkipped(ContinueOutcome),
+    ResetPreview(ResetPreview),
+    ResetDone(ResetOutcome),
+    Stashes(Vec<StashEntry>),
+    StashRestored(AutoStash),
+    // ---------------------------------------------------------- fichiers
+    Staged {
+        paths: Vec<PathBuf>,
+    },
+    Unstaged {
+        paths: Vec<PathBuf>,
+    },
+    Discarded(DiscardOutcome),
+    Moved {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    IgnoreAdded(IgnoreAdded),
+    /// La demande attend la fin de l'opération Git en cours (« En attente de
+    /// l'opération Git en cours »). Elle partira d'elle-même.
+    Waiting {
+        action: Action,
+    },
 }
 
 /// Quelle demande a échoué.
@@ -72,6 +159,36 @@ pub enum Action {
     AcceptSide,
     Continue,
     Abort,
+    // v1
+    Branches,
+    CheckBranchName,
+    CreateBranch,
+    RenameBranch,
+    DeleteBranch,
+    RestoreBranch,
+    DeleteRemoteBranch,
+    Switch,
+    DetachedCommits,
+    Fetch,
+    FastForwardBranch,
+    Update,
+    Pull,
+    PushPreview,
+    Push,
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+    Skip,
+    ResetPreview,
+    Reset,
+    Stashes,
+    RestoreStash,
+    Stage,
+    Unstage,
+    Discard,
+    Move,
+    Ignore,
 }
 
 #[derive(Debug)]
@@ -86,6 +203,7 @@ pub struct Failure {
 pub struct Vcs {
     tasks: Tasks,
     git: Git,
+    settings: VcsSettings,
     /// Une seule opération d'écriture à la fois (pas de course sur `index.lock`).
     writes: Arc<Mutex<()>>,
     refresh: Arc<Mutex<RefreshState>>,
@@ -99,19 +217,32 @@ struct RefreshState {
 
 impl Vcs {
     pub fn new(tasks: Tasks, settings: &VcsSettings) -> Self {
-        Self::with_git(tasks, Git::new(settings))
+        Self::with_git(tasks, Git::new(settings)).with_settings(settings.clone())
     }
 
     /// Avec un [`Git`] déjà réglé (tests : configuration isolée). Les commandes
-    /// seront publiées sur le bus de `tasks`.
+    /// seront publiées sur le bus de `tasks`. Réglages par défaut (branches
+    /// protégées `main`, `master`).
     pub fn with_git(tasks: Tasks, git: Git) -> Self {
         let git = git.with_publisher(tasks.publisher().clone());
         Self {
             tasks,
             git,
+            settings: VcsSettings::default(),
             writes: Arc::new(Mutex::new(())),
             refresh: Arc::new(Mutex::new(RefreshState::default())),
         }
+    }
+
+    /// Remplace les réglages (branches protégées…), après une modification
+    /// de la page Git des réglages. `git_path` n'est relu qu'à la construction.
+    pub fn with_settings(mut self, settings: VcsSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    pub fn settings(&self) -> &VcsSettings {
+        &self.settings
     }
 
     pub fn git(&self) -> &Git {
@@ -308,6 +439,513 @@ impl Vcs {
         })
     }
 
+    // ------------------------------------------------------------------ branches
+
+    /// Branches locales et distantes, distants, récentes → `Branches`.
+    pub fn load_branches(&self, repo: &Repository) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn("vcs.branches", Action::Branches, false, move |git, ctx| {
+            ctx.publish(VcsEvent::Branches(list_branches(
+                git,
+                &repo,
+                ctx.cancel_token(),
+            )?));
+            Ok(())
+        })
+    }
+
+    /// Vérifie un nom à la frappe → `BranchNameChecked` (annuler la
+    /// vérification précédente). `ignore` : la branche qu'on renomme.
+    pub fn check_branch_name(
+        &self,
+        repo: &Repository,
+        name: String,
+        ignore: Option<String>,
+    ) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn(
+            "vcs.branch_name",
+            Action::CheckBranchName,
+            false,
+            move |git, ctx| {
+                let problem =
+                    check_branch_name(git, &repo, &name, ignore.as_deref(), ctx.cancel_token())?;
+                ctx.publish(VcsEvent::BranchNameChecked { name, problem });
+                Ok(())
+            },
+        )
+    }
+
+    /// → `BranchCreated` puis `Status` et `Branches`.
+    pub fn create_branch(&self, repo: &Repository, request: CreateBranchRequest) -> TaskHandle {
+        self.write(
+            "vcs.branch_create",
+            Action::CreateBranch,
+            repo,
+            move |git, repo, cancel| {
+                create_branch(git, repo, &request, cancel).map(VcsEvent::BranchCreated)
+            },
+        )
+    }
+
+    /// → `BranchRenamed` puis `Status` et `Branches`.
+    pub fn rename_branch(&self, repo: &Repository, old: String, new: String) -> TaskHandle {
+        self.write(
+            "vcs.branch_rename",
+            Action::RenameBranch,
+            repo,
+            move |git, repo, cancel| {
+                rename_branch(git, repo, &old, &new, cancel).map(VcsEvent::BranchRenamed)
+            },
+        )
+    }
+
+    /// `git branch -d` → `BranchDeleted`, ou `Failed` avec
+    /// [`VcsError::BranchNotMerged`] (seconde confirmation, puis
+    /// [`Vcs::force_delete_branch`]).
+    pub fn delete_branch(&self, repo: &Repository, name: String) -> TaskHandle {
+        self.write(
+            "vcs.branch_delete",
+            Action::DeleteBranch,
+            repo,
+            move |git, repo, cancel| {
+                delete_branch(git, repo, &name, cancel).map(VcsEvent::BranchDeleted)
+            },
+        )
+    }
+
+    /// **Destructif** : `git branch -D` → `BranchDeleted`.
+    pub fn force_delete_branch(&self, repo: &Repository, name: String) -> TaskHandle {
+        self.write(
+            "vcs.branch_delete",
+            Action::DeleteBranch,
+            repo,
+            move |git, repo, cancel| {
+                force_delete_branch(git, repo, &name, cancel).map(VcsEvent::BranchDeleted)
+            },
+        )
+    }
+
+    /// « Restaurer » après suppression → `BranchRestored`.
+    pub fn restore_branch(&self, repo: &Repository, name: String, tip: String) -> TaskHandle {
+        self.write(
+            "vcs.branch_restore",
+            Action::RestoreBranch,
+            repo,
+            move |git, repo, cancel| {
+                restore_branch(git, repo, &name, &tip, cancel)
+                    .map(|()| VcsEvent::BranchRestored { name, tip })
+            },
+        )
+    }
+
+    /// **Destructif pour tout le monde** : supprime la branche sur le distant
+    /// (refusé si protégée) → `RemoteBranchDeleted`.
+    pub fn delete_remote_branch(
+        &self,
+        repo: &Repository,
+        remote: String,
+        branch: String,
+    ) -> TaskHandle {
+        let protected = self.settings.protected_branches.clone();
+        self.network(
+            "vcs.remote_branch_delete",
+            Action::DeleteRemoteBranch,
+            repo,
+            move |git, repo, progress, cancel| {
+                delete_remote_branch(git, repo, &remote, &branch, &protected, progress, cancel)
+                    .map(VcsEvent::RemoteBranchDeleted)
+            },
+        )
+    }
+
+    /// Bascule → `Switched` (ou `Failed` avec [`VcsError::WouldOverwrite`] :
+    /// proposer « Mettre de côté et basculer » ou « Forcer la bascule »).
+    pub fn switch_branch(&self, repo: &Repository, request: SwitchRequest) -> TaskHandle {
+        self.write(
+            "vcs.switch",
+            Action::Switch,
+            repo,
+            move |git, repo, cancel| {
+                switch_branch(git, repo, &request, cancel).map(VcsEvent::Switched)
+            },
+        )
+    }
+
+    /// **Destructif** : « Forcer la bascule » en jetant les changements des
+    /// seuls fichiers de `discard` → `Switched`.
+    pub fn switch_discarding_changes(
+        &self,
+        repo: &Repository,
+        target: SwitchTarget,
+        discard: OverwriteConflict,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.switch",
+            Action::Switch,
+            repo,
+            move |git, repo, cancel| {
+                switch_discarding_changes(git, repo, &target, &discard, cancel)
+                    .map(VcsEvent::Switched)
+            },
+        )
+    }
+
+    /// Commits d'une HEAD détachée qui ne sont sur aucune branche →
+    /// `DetachedCommits`.
+    pub fn check_detached_commits(&self, repo: &Repository) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn(
+            "vcs.detached_commits",
+            Action::DetachedCommits,
+            false,
+            move |git, ctx| {
+                let count = commits_only_on_detached_head(git, &repo, ctx.cancel_token())?;
+                ctx.publish(VcsEvent::DetachedCommits { count });
+                Ok(())
+            },
+        )
+    }
+
+    // ------------------------------------------------------------------ distant
+
+    /// Récupérer → `Progress`…, `Fetched`, puis `Status` et `Branches`.
+    pub fn fetch(&self, repo: &Repository, request: FetchRequest) -> TaskHandle {
+        self.network(
+            "vcs.fetch",
+            Action::Fetch,
+            repo,
+            move |git, repo, progress, cancel| {
+                fetch(git, repo, &request, progress, cancel).map(VcsEvent::Fetched)
+            },
+        )
+    }
+
+    /// Avance une branche non courante sur son amont → `BranchFastForwarded`.
+    pub fn fast_forward_branch(&self, repo: &Repository, branch: String) -> TaskHandle {
+        self.network(
+            "vcs.branch_update",
+            Action::FastForwardBranch,
+            repo,
+            move |git, repo, progress, cancel| {
+                fast_forward_branch(git, repo, &branch, progress, cancel)
+                    .map(|fetch| VcsEvent::BranchFastForwarded { branch, fetch })
+            },
+        )
+    }
+
+    /// « Mettre à jour le projet » → `Updated` (ou `Failed` avec
+    /// [`VcsError::NoUpstream`], [`VcsError::UpstreamGone`]…).
+    pub fn update_project(&self, repo: &Repository, request: UpdateRequest) -> TaskHandle {
+        self.network(
+            "vcs.update",
+            Action::Update,
+            repo,
+            move |git, repo, progress, cancel| {
+                update_project(git, repo, &request, progress, cancel).map(VcsEvent::Updated)
+            },
+        )
+    }
+
+    /// → `Pulled`.
+    pub fn pull(&self, repo: &Repository, request: PullRequest) -> TaskHandle {
+        self.network(
+            "vcs.pull",
+            Action::Pull,
+            repo,
+            move |git, repo, progress, cancel| {
+                pull(git, repo, &request, progress, cancel).map(VcsEvent::Pulled)
+            },
+        )
+    }
+
+    /// Dialogue de push : cible par défaut de `branch` (la courante si
+    /// `None`) ou `target` donnée, commits sortants → `PushPreview`. Sans
+    /// réseau.
+    pub fn load_push_preview(
+        &self,
+        repo: &Repository,
+        branch: Option<String>,
+        target: Option<PushTarget>,
+    ) -> TaskHandle {
+        let repo = repo.clone();
+        let protected = self.settings.protected_branches.clone();
+        self.spawn(
+            "vcs.push_preview",
+            Action::PushPreview,
+            false,
+            move |git, ctx| {
+                let target = match target {
+                    Some(target) => target,
+                    None => push_target(git, &repo, branch.as_deref(), ctx.cancel_token())?,
+                };
+                let preview = push_preview(git, &repo, &target, &protected, ctx.cancel_token())?;
+                ctx.publish(VcsEvent::PushPreview(preview));
+                Ok(())
+            },
+        )
+    }
+
+    /// Pousser → `Progress`…, `Pushed` (ou `Failed` avec
+    /// [`VcsError::PushRejected`], [`VcsError::AuthenticationFailed`]…).
+    pub fn push(&self, repo: &Repository, request: PushRequest) -> TaskHandle {
+        let protected = self.settings.protected_branches.clone();
+        self.network(
+            "vcs.push",
+            Action::Push,
+            repo,
+            move |git, repo, progress, cancel| {
+                push(git, repo, &request, &protected, progress, cancel).map(VcsEvent::Pushed)
+            },
+        )
+    }
+
+    // ------------------------------------------------------------------ opérations
+
+    /// → `OperationRan`.
+    pub fn merge(&self, repo: &Repository, request: MergeRequest) -> TaskHandle {
+        self.write(
+            "vcs.merge",
+            Action::Merge,
+            repo,
+            move |git, repo, cancel| merge(git, repo, &request, cancel).map(VcsEvent::OperationRan),
+        )
+    }
+
+    /// → `OperationRan`.
+    pub fn rebase(&self, repo: &Repository, request: RebaseRequest) -> TaskHandle {
+        self.write(
+            "vcs.rebase",
+            Action::Rebase,
+            repo,
+            move |git, repo, cancel| {
+                rebase(git, repo, &request, cancel).map(VcsEvent::OperationRan)
+            },
+        )
+    }
+
+    /// Commits du plus ancien au plus récent → `OperationRan`.
+    pub fn cherry_pick(
+        &self,
+        repo: &Repository,
+        commits: Vec<String>,
+        local_changes: LocalChanges,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.cherry_pick",
+            Action::CherryPick,
+            repo,
+            move |git, repo, cancel| {
+                cherry_pick(git, repo, &commits, local_changes, cancel).map(VcsEvent::OperationRan)
+            },
+        )
+    }
+
+    /// → `OperationRan`.
+    pub fn revert_commits(
+        &self,
+        repo: &Repository,
+        commits: Vec<String>,
+        local_changes: LocalChanges,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.revert",
+            Action::Revert,
+            repo,
+            move |git, repo, cancel| {
+                revert_commits(git, repo, &commits, local_changes, cancel)
+                    .map(VcsEvent::OperationRan)
+            },
+        )
+    }
+
+    /// Passe le commit en cours (abandonne ses changements) →
+    /// `OperationSkipped`.
+    pub fn skip_operation(&self, repo: &Repository) -> TaskHandle {
+        self.write("vcs.skip", Action::Skip, repo, move |git, repo, cancel| {
+            skip_operation(git, repo, cancel).map(VcsEvent::OperationSkipped)
+        })
+    }
+
+    /// → `ResetPreview`.
+    pub fn load_reset_preview(&self, repo: &Repository, target: String) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn(
+            "vcs.reset_preview",
+            Action::ResetPreview,
+            false,
+            move |git, ctx| {
+                ctx.publish(VcsEvent::ResetPreview(reset_preview(
+                    git,
+                    &repo,
+                    &target,
+                    ctx.cancel_token(),
+                )?));
+                Ok(())
+            },
+        )
+    }
+
+    /// `reset --soft|--mixed` → `ResetDone`.
+    pub fn reset(&self, repo: &Repository, target: String, mode: ResetMode) -> TaskHandle {
+        self.write(
+            "vcs.reset",
+            Action::Reset,
+            repo,
+            move |git, repo, cancel| {
+                reset(git, repo, &target, mode, cancel).map(VcsEvent::ResetDone)
+            },
+        )
+    }
+
+    /// **Destructif** : `reset --hard` → `ResetDone`.
+    pub fn reset_hard(&self, repo: &Repository, target: String, stash_first: bool) -> TaskHandle {
+        self.write(
+            "vcs.reset",
+            Action::Reset,
+            repo,
+            move |git, repo, cancel| {
+                reset_hard(git, repo, &target, stash_first, cancel).map(VcsEvent::ResetDone)
+            },
+        )
+    }
+
+    /// `git stash list` → `Stashes`.
+    pub fn load_stashes(&self, repo: &Repository) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn("vcs.stashes", Action::Stashes, false, move |git, ctx| {
+            ctx.publish(VcsEvent::Stashes(list_stashes(
+                git,
+                &repo,
+                ctx.cancel_token(),
+            )?));
+            Ok(())
+        })
+    }
+
+    /// Restaure une mise de côté gardée → `StashRestored`.
+    pub fn restore_auto_stash(&self, repo: &Repository, commit: String) -> TaskHandle {
+        self.write(
+            "vcs.stash_restore",
+            Action::RestoreStash,
+            repo,
+            move |git, repo, cancel| {
+                restore_auto_stash(git, repo, &commit, cancel).map(VcsEvent::StashRestored)
+            },
+        )
+    }
+
+    // ------------------------------------------------------------------ fichiers
+
+    /// « Ajouter à Git » → `Staged`.
+    pub fn stage(&self, repo: &Repository, paths: Vec<PathBuf>) -> TaskHandle {
+        self.write(
+            "vcs.stage",
+            Action::Stage,
+            repo,
+            move |git, repo, cancel| {
+                stage(git, repo, &paths, cancel).map(|()| VcsEvent::Staged { paths })
+            },
+        )
+    }
+
+    /// « Retirer de l'index » → `Unstaged`.
+    pub fn unstage(&self, repo: &Repository, paths: Vec<PathBuf>) -> TaskHandle {
+        self.write(
+            "vcs.unstage",
+            Action::Unstage,
+            repo,
+            move |git, repo, cancel| {
+                unstage(git, repo, &paths, cancel).map(|()| VcsEvent::Unstaged { paths })
+            },
+        )
+    }
+
+    /// **Destructif** : « Annuler les modifications » → `Discarded`.
+    pub fn discard_changes(&self, repo: &Repository, paths: Vec<PathBuf>) -> TaskHandle {
+        self.write(
+            "vcs.discard",
+            Action::Discard,
+            repo,
+            move |git, repo, cancel| {
+                discard_changes(git, repo, &paths, cancel).map(VcsEvent::Discarded)
+            },
+        )
+    }
+
+    /// `git mv` → `Moved`.
+    pub fn move_path(&self, repo: &Repository, from: PathBuf, to: PathBuf) -> TaskHandle {
+        self.write("vcs.move", Action::Move, repo, move |git, repo, cancel| {
+            move_path(git, repo, &from, &to, cancel).map(|()| VcsEvent::Moved { from, to })
+        })
+    }
+
+    /// Ajout au `.gitignore` → `IgnoreAdded`.
+    pub fn add_to_gitignore(&self, repo: &Repository, rule: IgnoreRule) -> TaskHandle {
+        self.write(
+            "vcs.ignore",
+            Action::Ignore,
+            repo,
+            move |git, repo, cancel| {
+                add_to_gitignore(git, repo, &rule, cancel).map(VcsEvent::IgnoreAdded)
+            },
+        )
+    }
+
+    /// Une écriture : sérialisée, puis `Status` et `Branches` relus, réussite
+    /// ou non.
+    fn write<F>(&self, kind: &'static str, action: Action, repo: &Repository, work: F) -> TaskHandle
+    where
+        F: FnOnce(&Git, &Repository, &CancelToken) -> Result<VcsEvent> + Send + 'static,
+    {
+        let repo = repo.clone();
+        self.spawn(kind, action, true, move |git, ctx| {
+            let result = work(git, &repo, ctx.cancel_token());
+            let outcome = result.map(|event| ctx.publish(event));
+            publish_status(git, &repo, ctx);
+            publish_branches(git, &repo, ctx);
+            outcome
+        })
+    }
+
+    /// Une opération réseau : comme [`Vcs::write`], avec la progression
+    /// publiée (`Progress`, espacée) et passée à la tâche.
+    fn network<F>(
+        &self,
+        kind: &'static str,
+        action: Action,
+        repo: &Repository,
+        work: F,
+    ) -> TaskHandle
+    where
+        F: FnOnce(
+                &Git,
+                &Repository,
+                &mut dyn FnMut(RemoteProgress),
+                &CancelToken,
+            ) -> Result<VcsEvent>
+            + Send
+            + 'static,
+    {
+        let repo = repo.clone();
+        self.spawn(kind, action, true, move |git, ctx| {
+            let mut last: Option<Instant> = None;
+            let mut on_progress = |progress: RemoteProgress| {
+                ctx.progress(progress.done, progress.total);
+                if last.is_some_and(|at| at.elapsed() < PROGRESS_SPACING) {
+                    return;
+                }
+                last = Some(Instant::now());
+                ctx.publish(VcsEvent::Progress(progress));
+            };
+            let result = work(git, &repo, &mut on_progress, ctx.cancel_token());
+            let outcome = result.map(|event| ctx.publish(event));
+            publish_status(git, &repo, ctx);
+            publish_branches(git, &repo, ctx);
+            outcome
+        })
+    }
+
     fn spawn<F>(&self, kind: &'static str, action: Action, exclusive: bool, work: F) -> TaskHandle
     where
         F: FnOnce(&Git, &TaskContext) -> Result<()> + Send + 'static,
@@ -315,7 +953,14 @@ impl Vcs {
         let git = self.git.clone();
         let writes = Arc::clone(&self.writes);
         self.tasks.spawn(Domain::Vcs, kind, move |ctx| {
-            let _guard = exclusive.then(|| lock(&writes));
+            let _guard = exclusive.then(|| match writes.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    ctx.publish(VcsEvent::Waiting { action });
+                    lock(&writes)
+                }
+            });
             match work(&git, ctx) {
                 Ok(()) => Ok(()),
                 Err(error) if error.is_cancelled() => Err(error.into()),
@@ -337,6 +982,16 @@ fn publish_status(git: &Git, repo: &Repository, ctx: &TaskContext) {
         ctx.publish(VcsEvent::Status(status));
     }
 }
+
+/// Les branches relues après une écriture ; un échec de relecture est tu.
+fn publish_branches(git: &Git, repo: &Repository, ctx: &TaskContext) {
+    if let Ok(list) = list_branches(git, repo, &CancelToken::new()) {
+        ctx.publish(VcsEvent::Branches(list));
+    }
+}
+
+/// Écart minimal entre deux `VcsEvent::Progress`.
+const PROGRESS_SPACING: Duration = Duration::from_millis(100);
 
 /// Publie le résultat d'une écriture, puis l'état relu.
 fn then_status<T>(

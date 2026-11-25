@@ -48,6 +48,7 @@ fn a_missing_git_executable_is_reported() {
     let test = TestRepo::new();
     let git = Git::new(&VcsSettings {
         git_path: Some(PathBuf::from(r"C:\nulle part\git-introuvable.exe")),
+        ..VcsSettings::default()
     });
     let error = open_repository(&git, &test.root, &cancel()).unwrap_err();
     assert!(matches!(error, VcsError::GitNotFound { .. }), "{error:?}");

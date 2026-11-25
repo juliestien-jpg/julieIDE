@@ -150,7 +150,7 @@ cargo run -p juliestorm            # l'IDE
 cargo test --workspace             # tous les tests
 ```
 
-## Périmètre de la v0 (à faire)
+## Périmètre de la v0 (livrée le 25/11/2026 ; recette dans `docs/recette-v0.md`)
 
 But : en dix minutes d'usage, sentir les trois piliers. Rien d'autre.
 
@@ -169,11 +169,34 @@ But : en dix minutes d'usage, sentir les trois piliers. Rien d'autre.
   symboles, aller à la définition, usages, relance des échecs, couverture,
   complétion, débogueur.
 
-## Périmètre de la v1
+## Périmètre de la v1 (en cours depuis le 25/11/2026)
 
 Les trois piliers complets tels que décrits en haut, plus JSX/TSX et les gabarits
 AngularJS dans la coloration et l'index. Complétion et inspections de code
 viendront ensuite (probablement par des serveurs de langage).
+
+Demandes de la personne qui dirige le projet, par priorité :
+
+1. **Branches, « de la même manière que PhpStorm »** : widget de branche, basculer,
+   créer, fusionner, rebaser, fetch, pull, push, mise à jour du projet, mise de
+   côté automatique avant bascule, graphe du journal et actions sur un commit
+   (`docs/specs/branches.md`).
+2. **Réglages** : fenêtre de réglages, dont la façon d'exécuter PHPUnit (cas
+   `backoffice` : `php tools\phpunit\phpunit.phar`) (`docs/specs/reglages.md`).
+3. **Menus contextuels** partout, dont `git add` par clic droit
+   (`docs/specs/menus-contextuels.md`).
+4. **Navigation** : Ctrl+clic vers la déclaration et les usages, index des
+   symboles (`docs/specs/navigation.md`).
+5. Le reste des piliers : étagère, patchs, commit partiel, résolution automatique
+   des conflits simples, relance des échecs, configurations de tests, recherche
+   partout à onglets.
+
+Règles propres aux opérations distantes : **les essais de fetch, pull et push se
+font uniquement contre un dépôt nu local créé dans le dossier temporaire**, jamais
+contre un vrai distant (GitHub ou autre), y compris celui de `labmate_paper`.
+JulieStorm ne demande, ne stocke ni ne saisit jamais de mot de passe ou de jeton :
+l'authentification reste au gestionnaire d'identifiants de Git. Un push forcé n'est
+proposé que sur demande explicite, et toujours avec `--force-with-lease`.
 
 ## L'équipe d'agents (`.claude/agents/`)
 

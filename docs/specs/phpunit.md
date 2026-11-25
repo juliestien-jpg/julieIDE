@@ -15,7 +15,8 @@ direct et sauter d'un échec à la ligne fautive.
   `php` du PATH.
 - **PHPUnit** : `vendor/bin/phpunit` du projet (on lance le script PHP sous-jacent
   avec `php`, pas le `.bat`). Absent → message « PHPUnit introuvable dans
-  vendor/bin » et rien n'est lancé.
+  vendor/bin » et rien n'est lancé. *(25/11/2026 : réglable et détection élargie à
+  `tools/phpunit/phpunit.phar` et autres, voir `reglages.md`.)*
 - **Configuration** : `phpunit.xml`, sinon `phpunit.xml.dist`, à la racine du
   projet. Absente → message « Aucun phpunit.xml à la racine du projet ». En v0, une
   seule configuration, implicite (pas de fenêtre de configurations).

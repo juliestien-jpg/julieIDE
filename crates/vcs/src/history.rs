@@ -1,5 +1,6 @@
 //! Journal : liste paginée des commits, détail d'un commit et de ses fichiers.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use julie_core::CancelToken;
@@ -17,11 +18,46 @@ pub const DEFAULT_PAGE_SIZE: usize = 500;
 const SUMMARY_FORMAT: &str = "%H%x00%h%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%D%x00%s";
 const SUMMARY_FIELDS: usize = 11;
 
-/// Une page du journal à charger.
+/// Ordre des commits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LogOrder {
+    /// Par date, mais jamais un parent avant ses enfants (`--date-order`) :
+    /// l'ordre qu'il faut au graphe. Défaut.
+    #[default]
+    Date,
+    /// Les lignées regroupées (`--topo-order`).
+    Topo,
+    /// L'ordre brut de Git (chronologique inverse), sans garantie pour le graphe.
+    Raw,
+}
+
+/// Une page du journal à charger, avec ses filtres. Les filtres de texte sont
+/// des **chaînes fixes** (pas des expressions régulières), insensibles à la
+/// casse.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LogQuery {
-    /// Révision de départ ; `None` : `HEAD`.
+    /// Révision de départ (branche, commit, intervalle `a..b`) ; `None` :
+    /// `HEAD` (ou toutes les branches si `all_refs`).
     pub revision: Option<String>,
+    /// Toutes les branches locales et distantes, les étiquettes et HEAD
+    /// (journal complet avec son graphe). Ignoré si `revision` est donné.
+    pub all_refs: bool,
+    /// Auteur (nom ou adresse) contenant ce texte.
+    pub author: Option<String>,
+    /// Message contenant ce texte.
+    pub text: Option<String>,
+    /// Commits à partir de cette date (secondes Unix, incluse).
+    pub since: Option<i64>,
+    /// Commits jusqu'à cette date (secondes Unix, incluse).
+    pub until: Option<i64>,
+    /// Seulement les commits qui touchent ces chemins (absolus ou relatifs à
+    /// la racine). Les parents rendus sont alors ceux de l'historique
+    /// simplifié : le graphe reste relié.
+    pub paths: Vec<PathBuf>,
+    /// Suivre les renommages (`--follow`, historique d'un fichier) : un seul
+    /// chemin.
+    pub follow: bool,
+    pub order: LogOrder,
     /// Commits à sauter (pagination).
     pub skip: usize,
     /// Commits au plus dans la page.
@@ -32,8 +68,27 @@ impl Default for LogQuery {
     fn default() -> Self {
         Self {
             revision: None,
+            all_refs: false,
+            author: None,
+            text: None,
+            since: None,
+            until: None,
+            paths: Vec::new(),
+            follow: false,
+            order: LogOrder::default(),
             skip: 0,
             limit: DEFAULT_PAGE_SIZE,
+        }
+    }
+}
+
+impl LogQuery {
+    /// Historique d'un fichier (« Historique du fichier »), renommages suivis.
+    pub fn file_history(path: PathBuf) -> Self {
+        Self {
+            paths: vec![path],
+            follow: true,
+            ..Self::default()
         }
     }
 }
@@ -135,8 +190,14 @@ pub fn log(
     query: &LogQuery,
     cancel: &CancelToken,
 ) -> Result<LogPage> {
-    let revision = query.revision.clone().unwrap_or_else(|| "HEAD".to_owned());
-    check_revision(&revision)?;
+    if let Some(revision) = &query.revision {
+        check_revision(revision)?;
+    }
+    if query.follow && query.paths.len() != 1 {
+        return Err(VcsError::InvalidRequest(
+            "--follow demande exactement un chemin".into(),
+        ));
+    }
     if query.revision.is_none() && !has_head(git, repo, cancel)? {
         return Ok(LogPage {
             query: query.clone(),
@@ -144,25 +205,57 @@ pub fn log(
             has_more: false,
         });
     }
-    let output = git.run_ok(
-        repo.work_tree(),
-        &args([
-            "log".to_owned(),
-            "-z".to_owned(),
-            "--date=raw".to_owned(),
-            "--decorate=full".to_owned(),
-            format!("--format={SUMMARY_FORMAT}"),
-            format!("--skip={}", query.skip),
-            format!("--max-count={}", query.limit.saturating_add(1)),
-            "--end-of-options".to_owned(),
-            revision,
-            "--".to_owned(),
-        ]),
-        Access::Read,
-        None,
-        cancel,
-    )?;
-    let mut commits = parse_summaries(&output.stdout)?;
+    let mut options: Vec<OsString> = Vec::new();
+    match query.order {
+        LogOrder::Date => options.push("--date-order".into()),
+        LogOrder::Topo => options.push("--topo-order".into()),
+        LogOrder::Raw => {}
+    }
+    let mut fixed = false;
+    if let Some(author) = query.author.as_ref().filter(|a| !a.is_empty()) {
+        options.push(format!("--author={author}").into());
+        fixed = true;
+    }
+    if let Some(text) = query.text.as_ref().filter(|t| !t.is_empty()) {
+        options.push(format!("--grep={text}").into());
+        fixed = true;
+    }
+    if fixed {
+        options.push("--fixed-strings".into());
+        options.push("--regexp-ignore-case".into());
+    }
+    if let Some(since) = query.since {
+        options.push(format!("--since=@{since}").into());
+    }
+    if let Some(until) = query.until {
+        options.push(format!("--until=@{until}").into());
+    }
+    if query.follow {
+        options.push("--follow".into());
+    } else if !query.paths.is_empty() {
+        // Parents réécrits : le graphe d'un historique filtré reste relié.
+        options.push("--parents".into());
+    }
+    options.push(format!("--skip={}", query.skip).into());
+    options.push(format!("--max-count={}", query.limit.saturating_add(1)).into());
+    match &query.revision {
+        Some(revision) => {
+            options.push("--end-of-options".into());
+            options.push(revision.into());
+        }
+        // Pseudo-options : avant `--end-of-options`, qui en ferait des noms.
+        None if query.all_refs => {
+            for refs in ["--branches", "--remotes", "--tags", "HEAD"] {
+                options.push(refs.into());
+            }
+        }
+        None => options.push("HEAD".into()),
+    }
+    options.push("--".into());
+    for path in &query.paths {
+        options.push(repo.to_repo_path(path)?.into());
+    }
+    let mut commits = run_log(git, repo, options, cancel)?;
     let has_more = commits.len() > query.limit;
     commits.truncate(query.limit);
     Ok(LogPage {
@@ -229,6 +322,26 @@ pub fn commit_details(
         message,
         files,
     })
+}
+
+/// `git log -z --format=SUMMARY_FORMAT <options>` : les commits. `options`
+/// comprend les révisions et le `--` final. **Bloquant.**
+pub(crate) fn run_log(
+    git: &Git,
+    repo: &Repository,
+    options: Vec<OsString>,
+    cancel: &CancelToken,
+) -> Result<Vec<CommitSummary>> {
+    let mut command = args([
+        "log".to_owned(),
+        "-z".to_owned(),
+        "--date=raw".to_owned(),
+        "--decorate=full".to_owned(),
+        format!("--format={SUMMARY_FORMAT}"),
+    ]);
+    command.extend(options);
+    let output = git.run_ok(repo.work_tree(), &command, Access::Read, None, cancel)?;
+    parse_summaries(&output.stdout)
 }
 
 fn utf8(bytes: &[u8]) -> Result<&str> {

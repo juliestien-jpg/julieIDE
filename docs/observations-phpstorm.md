@@ -74,9 +74,43 @@ Chaque résultat : icône du type, nom, chemin abrégé en gris. Tout au clavier
   réussis et les ignorés, trier, déplier, historique des exécutions.
 - Par défaut seuls les tests à problème sont dépliés ; les réussis sont masqués.
 
+## Configuration PHPUnit du projet backoffice (25/11/2026, fichiers lus, rien modifié)
+
+Regardé dans les fichiers de projet de PhpStorm de `backoffice` (`.idea`), en
+lecture seule, pour comprendre le besoin ; rien n'en est recopié.
+
+- PhpStorm 2025.3.4 est ouvert sur `backoffice`, branche `master` (barre du haut :
+  nom du projet, puis widget de branche, puis à droite la configuration
+  d'exécution « backoffice » avec lancer / déboguer).
+- Le projet a **deux** configurations d'exécution PHPUnit nommées : une pour la
+  racine (`phpunit.xml`) et une pour un sous-projet imbriqué qui a son propre
+  `phpunit.xml.dist` et son propre `vendor` (`api/licenses_v2/plugins/mustache_php`).
+  La configuration courante est retenue par projet.
+- Les réglages PHPUnit de PhpStorm sont **par projet** (un chargeur automatique,
+  un fichier de configuration par défaut, plusieurs dossiers de tests déclarés).
+- Sur le disque : `tools/phpunit/phpunit.phar` (PHPUnit 9.6.39, vérifié par
+  `php tools\phpunit\phpunit.phar --version`), un **dossier** `tools/phpunit/`, et
+  dans `vendor/bin/` un `phpunit.rar` mais pas de `phpunit` : une détection par nom
+  approchant se tromperait.
+
+## Widget de branche (25/11/2026, tentative)
+
+Clic sur le widget de branche tenté puis interrompu : rien d'observé au-delà de sa
+place dans la barre du haut (à droite du nom du projet, il affiche le nom de la
+branche courante, `master` sur `backoffice`). La fenêtre surgissante, ses sous-menus,
+le dialogue de push et le choix fusion / rebase de la mise à jour restent à
+observer. Les menus contextuels et la fenêtre de réglages n'ont pas pu être
+observés : l'outil de contrôle de l'ordinateur n'autorise dans un IDE que le clic
+gauche simple (ni clic droit, ni Ctrl+clic, ni raccourci, ni Échap).
+
 ## Ce qu'il reste à observer
 
 Le dialogue de fusion sur un vrai conflit (dépôt d'essai), la création et
 l'application d'un patch, le commit partiel par blocs, la recherche dans les
 fichiers, les icônes de lancement de test dans la gouttière, le diff
-attendu/obtenu d'un test en échec.
+attendu/obtenu d'un test en échec ; la fenêtre surgissante des branches et ses
+sous-menus, le dialogue de push, la mise à jour du projet (choix fusion / rebase) ;
+les menus contextuels de l'arbre, de l'éditeur et des changements ; la fenêtre de
+réglages ; Ctrl+clic sur un usage et sur une déclaration (ces derniers demandent un
+accès plus large que le clic simple, ou que la personne qui dirige le projet les
+montre).

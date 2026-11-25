@@ -250,3 +250,168 @@ fn cancelling_a_task_publishes_no_failure() {
         .expect("relance")
         .join();
 }
+
+// ---------------------------------------------------------------- v1 : branches et distant
+
+#[test]
+fn a_fetch_publishes_its_outcome_then_status_and_branches() {
+    let team = support::Team::new();
+    team.b_commit("b.txt", "b\n", "B");
+    team.b_run(&["push", "-q"]);
+    let harness = Harness::new(&team.a);
+    let repo = team.a.repo();
+    harness.vcs.fetch(&repo, FetchRequest::default()).join();
+    let (events, outcomes, _) = harness.drain();
+    assert_eq!(outcomes, vec![TaskOutcome::Done]);
+    let events: Vec<&VcsEvent> = events
+        .iter()
+        .filter(|event| !matches!(event, VcsEvent::Progress(_)))
+        .collect();
+    match events.as_slice() {
+        [VcsEvent::Fetched(fetched), VcsEvent::Status(status), VcsEvent::Branches(branches)] => {
+            assert_eq!(fetched.updated(), 1);
+            assert_eq!(status.upstream.as_ref().unwrap().ahead_behind, Some((0, 1)));
+            let main = branches.find_local("main").unwrap();
+            assert_eq!(main.tracking.as_ref().unwrap().behind, 1);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_unmerged_delete_fails_with_its_commits_then_force_deletes() {
+    let test = TestRepo::new();
+    test.write("a.txt", "a\n");
+    test.commit_all("Base");
+    test.run(&["switch", "-q", "-c", "seule"]);
+    test.write("s.txt", "s\n");
+    test.commit_all("Seul commit");
+    test.run(&["switch", "-q", "main"]);
+    let harness = Harness::new(&test);
+    let repo = test.repo();
+    harness.vcs.delete_branch(&repo, "seule".into()).join();
+    let (events, outcomes, _) = harness.drain();
+    assert!(matches!(outcomes.as_slice(), [TaskOutcome::Failed(_)]));
+    match events.as_slice() {
+        [VcsEvent::Status(_), VcsEvent::Branches(branches), VcsEvent::Failed(Failure {
+            action: Action::DeleteBranch,
+            error: VcsError::BranchNotMerged { commits: 1, .. },
+        })] => assert!(branches.find_local("seule").is_some()),
+        other => panic!("{other:?}"),
+    }
+    harness
+        .vcs
+        .force_delete_branch(&repo, "seule".into())
+        .join();
+    let (events, outcomes, _) = harness.drain();
+    assert_eq!(outcomes, vec![TaskOutcome::Done]);
+    match events.as_slice() {
+        [VcsEvent::BranchDeleted(deleted), VcsEvent::Status(_), VcsEvent::Branches(branches)] => {
+            assert_eq!(deleted.name, "seule");
+            assert!(branches.find_local("seule").is_none());
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_second_write_waits_for_the_running_operation() {
+    let team = support::Team::new();
+    let a = &team.a;
+    let script = a.base.join("ssh lent.sh");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    let ssh = format!("\"{}\"", script.to_string_lossy().replace('\\', "/"));
+    a.run(&["config", "core.sshCommand", &ssh]);
+    a.run(&[
+        "remote",
+        "add",
+        "lent",
+        "ssh://git@example.invalid/lent.git",
+    ]);
+    a.write("n.txt", "n");
+    let harness = Harness::new(a);
+    let repo = a.repo();
+    let slow = harness.vcs.fetch(
+        &repo,
+        FetchRequest {
+            remote: Some("lent".into()),
+            prune: false,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    let stage = harness.vcs.stage(&repo, vec![a.path("n.txt")]);
+    std::thread::sleep(Duration::from_millis(500));
+    slow.cancel();
+    slow.join();
+    stage.join();
+    let (events, outcomes, _) = harness.drain();
+    assert!(outcomes.contains(&TaskOutcome::Cancelled), "{outcomes:?}");
+    assert!(events.iter().any(|e| matches!(
+        e,
+        VcsEvent::Waiting {
+            action: Action::Stage
+        }
+    )));
+    assert!(events.iter().any(|e| matches!(e, VcsEvent::Staged { .. })));
+    assert!(
+        !events.iter().any(|e| matches!(e, VcsEvent::Failed(_))),
+        "une annulation n'est pas un échec : {events:?}"
+    );
+}
+
+#[test]
+fn switching_through_the_service_reports_kept_stashes() {
+    let test = TestRepo::new();
+    test.write("a.txt", "un\n");
+    test.commit_all("Base");
+    test.run(&["switch", "-q", "-c", "autre"]);
+    test.write("a.txt", "UN autre\n");
+    test.commit_all("Autre");
+    test.run(&["switch", "-q", "main"]);
+    test.write("a.txt", "un local\n");
+    let harness = Harness::new(&test);
+    let repo = test.repo();
+    harness
+        .vcs
+        .switch_branch(
+            &repo,
+            SwitchRequest {
+                target: SwitchTarget::Branch("autre".into()),
+                local_changes: LocalChanges::Keep,
+            },
+        )
+        .join();
+    let (events, _, _) = harness.drain();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        VcsEvent::Failed(Failure {
+            action: Action::Switch,
+            error: VcsError::WouldOverwrite(_)
+        })
+    )));
+    harness
+        .vcs
+        .switch_branch(
+            &repo,
+            SwitchRequest {
+                target: SwitchTarget::Branch("autre".into()),
+                local_changes: LocalChanges::Stash,
+            },
+        )
+        .join();
+    let (events, outcomes, _) = harness.drain();
+    assert_eq!(outcomes, vec![TaskOutcome::Done]);
+    match events.first() {
+        Some(VcsEvent::Switched(outcome)) => {
+            let stash = outcome.stash.as_ref().unwrap();
+            assert!(matches!(stash.restore, StashRestore::Conflicts(_)));
+            // Une fois résolu, l'entrée gardée se restaure… ou se lit dans la liste.
+            harness.vcs.load_stashes(&repo).join();
+            let (events, _, _) = harness.drain();
+            assert!(
+                matches!(events.as_slice(), [VcsEvent::Stashes(list)] if list.len() == 1 && list[0].commit == stash.commit)
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}

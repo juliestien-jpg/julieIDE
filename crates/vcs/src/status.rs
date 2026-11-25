@@ -189,6 +189,33 @@ impl FileStatus {
             _ => Group::Changed,
         }
     }
+
+    /// Ce qui est indexé de ce fichier (marque « indexé » / « en partie
+    /// indexé » de la liste des changements ; « Retirer de l'index » grisé sur
+    /// `NotStaged`).
+    pub fn index_state(&self) -> IndexState {
+        if self.kind == FileKind::Conflicted {
+            return IndexState::Conflicted;
+        }
+        match (self.staged, self.unstaged) {
+            (Change::Unmodified, _) => IndexState::NotStaged,
+            (_, Change::Unmodified) => IndexState::Staged,
+            _ => IndexState::PartiallyStaged,
+        }
+    }
+}
+
+/// État d'index d'un fichier de la liste des changements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IndexState {
+    /// Rien d'indexé (non suivi compris).
+    NotStaged,
+    /// Tout le changement est indexé.
+    Staged,
+    /// Une partie indexée, une autre seulement dans le fichier de travail.
+    PartiallyStaged,
+    /// En conflit (étages 1 à 3).
+    Conflicted,
 }
 
 /// État complet du dépôt.

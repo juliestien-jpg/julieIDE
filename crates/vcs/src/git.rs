@@ -10,18 +10,60 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use julie_core::process::{Command, Output};
+use julie_core::process::{Command, Output, Stream};
 use julie_core::{CancelToken, Domain, Publisher};
 
 use crate::error::{Result, VcsError};
 use crate::service::VcsEvent;
 
 /// Section `[vcs]` des réglages.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub struct VcsSettings {
     /// Chemin de l'exécutable `git` ; `None` : `git` trouvé dans le PATH.
     pub git_path: Option<PathBuf>,
+    /// Branches où force push et suppression distante sont refusés. Noms
+    /// exacts, ou motif terminé par `*` (`release/*`). Défaut : `main`, `master`.
+    pub protected_branches: Vec<String>,
+    /// Méthode de « Mettre à jour le projet » mémorisée (`"fusion"` ou
+    /// `"rebase"`) ; `None` : demander.
+    pub update_method: Option<IntegrationMethod>,
+}
+
+impl Default for VcsSettings {
+    fn default() -> Self {
+        Self {
+            git_path: None,
+            protected_branches: vec!["main".to_owned(), "master".to_owned()],
+            update_method: None,
+        }
+    }
+}
+
+impl VcsSettings {
+    /// La branche (nom court, sans le distant) est-elle protégée ?
+    pub fn is_protected(&self, branch: &str) -> bool {
+        is_protected(&self.protected_branches, branch)
+    }
+}
+
+/// Une branche est-elle dans la liste (noms exacts ou motifs `préfixe*`) ?
+pub fn is_protected(protected: &[String], branch: &str) -> bool {
+    protected
+        .iter()
+        .any(|pattern| match pattern.strip_suffix('*') {
+            Some(prefix) => branch.starts_with(prefix),
+            None => pattern == branch,
+        })
+}
+
+/// Intégrer les changements de l'amont : fusion ou rebase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+pub enum IntegrationMethod {
+    #[serde(rename = "fusion")]
+    Merge,
+    #[serde(rename = "rebase")]
+    Rebase,
 }
 
 /// Nombre de commandes gardées au journal.
@@ -39,6 +81,9 @@ const GLOBAL_OPTIONS: [&str; 7] = [
     "-c",
     "log.showSignature=false",
 ];
+
+/// Reçoit la sortie d'erreur au fil de l'eau.
+type StderrSink<'a> = &'a mut dyn FnMut(&[u8]);
 
 /// Lecture seule ou écriture : une lecture pose `GIT_OPTIONAL_LOCKS=0` (Git ne
 /// rafraîchit pas l'index en douce et ne gêne pas une écriture concurrente).
@@ -98,6 +143,14 @@ impl Git {
         self
     }
 
+    /// Le même Git sans `GIT_LITERAL_PATHSPECS` : pour les commandes qui ne
+    /// reçoivent aucun chemin de nous mais en fabriquent en interne
+    /// (`git stash push --include-untracked` ne nettoie plus les non suivis
+    /// sous chemins littéraux : ils resteraient sur le disque).
+    pub(crate) fn without_literal_pathspecs(&self) -> Git {
+        self.clone().with_env("GIT_LITERAL_PATHSPECS", "0")
+    }
+
     pub fn program(&self) -> &OsStr {
         &self.program
     }
@@ -116,6 +169,30 @@ impl Git {
         access: Access,
         stdin: Option<Vec<u8>>,
         cancel: &CancelToken,
+    ) -> Result<Output> {
+        self.run_inner(cwd, args, access, stdin, cancel, None)
+    }
+
+    /// Comme [`Git::run`], en passant chaque morceau de la sortie d'erreur à
+    /// `on_stderr` dès qu'il arrive (progression d'un fetch, d'un push…).
+    pub(crate) fn run_streaming(
+        &self,
+        cwd: &Path,
+        args: &[OsString],
+        cancel: &CancelToken,
+        on_stderr: &mut dyn FnMut(&[u8]),
+    ) -> Result<Output> {
+        self.run_inner(cwd, args, Access::Write, None, cancel, Some(on_stderr))
+    }
+
+    fn run_inner(
+        &self,
+        cwd: &Path,
+        args: &[OsString],
+        access: Access,
+        stdin: Option<Vec<u8>>,
+        cancel: &CancelToken,
+        mut on_stderr: Option<StderrSink<'_>>,
     ) -> Result<Output> {
         let mut command = Command::new(&self.program)
             .args(GLOBAL_OPTIONS)
@@ -157,7 +234,23 @@ impl Git {
         self.announce(&record);
 
         let started = Instant::now();
-        let result = command.run(cancel);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = command
+            .run_chunks(cancel, |stream, chunk| match stream {
+                Stream::Stdout => stdout.extend_from_slice(chunk),
+                Stream::Stderr => {
+                    stderr.extend_from_slice(chunk);
+                    if let Some(callback) = on_stderr.as_mut() {
+                        callback(chunk);
+                    }
+                }
+            })
+            .map(|status| Output {
+                status,
+                stdout,
+                stderr,
+            });
         let duration = started.elapsed();
         let (outcome, exit_code, stdout, stderr) = match &result {
             Ok(output) => (
@@ -221,6 +314,55 @@ impl Git {
         }
     }
 
+    /// Lecture : sortie standard d'une commande qui doit réussir.
+    pub(crate) fn read(
+        &self,
+        cwd: &Path,
+        args: &[OsString],
+        cancel: &CancelToken,
+    ) -> Result<String> {
+        Ok(self
+            .run_ok(cwd, args, Access::Read, None, cancel)?
+            .stdout_text())
+    }
+
+    /// `git rev-parse -q --verify <rév>^{commit}` : le commit, ou `None`.
+    pub(crate) fn resolve_commit(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        cancel: &CancelToken,
+    ) -> Result<Option<String>> {
+        let output = self.run(
+            cwd,
+            &args([
+                "rev-parse".to_owned(),
+                "-q".to_owned(),
+                "--verify".to_owned(),
+                "--end-of-options".to_owned(),
+                format!("{revision}^{{commit}}"),
+            ]),
+            Access::Read,
+            None,
+            cancel,
+        )?;
+        Ok(output
+            .status
+            .success()
+            .then(|| output.stdout_text().trim().to_owned())
+            .filter(|id| !id.is_empty()))
+    }
+
+    /// `git rev-list --count <args…>`.
+    pub(crate) fn count(&self, cwd: &Path, list: &[&str], cancel: &CancelToken) -> Result<u32> {
+        let mut command = args(["rev-list", "--count"]);
+        command.extend(list.iter().map(OsString::from));
+        let text = self.read(cwd, &command, cancel)?;
+        text.trim()
+            .parse()
+            .map_err(|_| VcsError::UnexpectedOutput(format!("rev-list --count : {text:?}")))
+    }
+
     fn announce(&self, record: &CommandRecord) {
         if let Some(publisher) = &self.publisher {
             publisher.publish_domain(Domain::Vcs, VcsEvent::Command(record.clone()));
@@ -238,6 +380,11 @@ pub(crate) fn failure(args: &[OsString], output: &Output) -> VcsError {
     if stderr.contains("dubious ownership") {
         return VcsError::UnsafeRepository(stderr.trim_end().to_owned());
     }
+    if is_authentication_failure(&stderr) {
+        return VcsError::AuthenticationFailed {
+            stderr: stderr.trim_end().to_owned(),
+        };
+    }
     VcsError::GitFailed {
         command: args
             .iter()
@@ -248,6 +395,30 @@ pub(crate) fn failure(args: &[OsString], output: &Output) -> VcsError {
         stdout,
         stderr,
     }
+}
+
+/// La sortie d'erreur dit-elle que Git voulait des identifiants (ou qu'on les
+/// a refusés) ? Messages anglais (`LC_ALL=C`) de Git, du gestionnaire
+/// d'identifiants, de SSH et des forges courantes. « Could not read from remote
+/// repository » seul ne suffit pas : Git le dit aussi d'un chemin inexistant.
+pub fn is_authentication_failure(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    [
+        "terminal prompts disabled",
+        "could not read username",
+        "could not read password",
+        "authentication failed",
+        "permission denied (publickey",
+        "permission denied, please try again",
+        "host key verification failed",
+        "invalid username or password",
+        "http basic: access denied",
+        "the requested url returned error: 401",
+        "the requested url returned error: 403",
+        "unable to get password from user",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 /// Construit une liste d'arguments à partir de chaînes.

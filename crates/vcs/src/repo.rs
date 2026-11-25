@@ -56,6 +56,19 @@ impl Repository {
         Ok(parts.join("/"))
     }
 
+    /// Le chemin désigne-t-il la racine de l'arbre de travail elle-même ?
+    pub fn is_root(&self, path: &Path) -> bool {
+        let rest = if path.is_absolute() {
+            match strip_prefix(path, &self.work_tree) {
+                Some(rest) => rest,
+                None => return false,
+            }
+        } else {
+            path.to_path_buf()
+        };
+        rest.components().all(|c| matches!(c, Component::CurDir))
+    }
+
     /// Chemin absolu d'un chemin Git (`dossier/fichier.php`).
     pub fn to_absolute(&self, repo_path: &str) -> PathBuf {
         let mut path = self.work_tree.clone();
@@ -177,6 +190,20 @@ pub struct Operation {
     pub their_commit: Option<String>,
     /// Pendant un rebase : la branche rejouée (`refs/heads/x` → `x`).
     pub rebase_branch: Option<String>,
+    /// Pendant un rebase : commit en cours et nombre total (« commit 2 sur 3 »).
+    pub step: Option<(u32, u32)>,
+    /// Pendant un rebase : le commit sur lequel on rejoue.
+    pub onto: Option<String>,
+}
+
+/// Branche courante lue dans le fichier `HEAD` du dossier Git, sans lancer Git :
+/// `Some(nom)` sur une branche (née ou à naître), `None` si HEAD est détachée ou
+/// illisible.
+pub(crate) fn current_branch_name(git_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    text.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(str::to_owned)
 }
 
 pub(crate) fn detect_operation(git_dir: &Path) -> Option<Operation> {
@@ -197,11 +224,21 @@ pub(crate) fn detect_operation(git_dir: &Path) -> Option<Operation> {
                     .map(str::to_owned)
                     .unwrap_or(name)
             });
+            let number = |name: &str| {
+                first_line(&format!("{dir}/{name}"))
+                    .and_then(|text| text.trim().parse::<u32>().ok())
+            };
+            let step = match dir {
+                "rebase-merge" => number("msgnum").zip(number("end")),
+                _ => number("next").zip(number("last")),
+            };
             return Some(Operation {
                 kind: OperationKind::Rebase,
                 message,
                 their_commit: first_line("REBASE_HEAD"),
                 rebase_branch: branch,
+                step,
+                onto: first_line(&format!("{dir}/onto")),
             });
         }
     }
@@ -216,6 +253,8 @@ pub(crate) fn detect_operation(git_dir: &Path) -> Option<Operation> {
             message: message.clone(),
             their_commit: Some(commit),
             rebase_branch: None,
+            step: None,
+            onto: None,
         })
     })
 }

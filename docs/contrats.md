@@ -411,7 +411,7 @@ Versions fixées dans `[workspace.dependencies]` du `Cargo.toml` racine ; une cr
 - Plafond du nombre de tâches simultanées, si la mesure en montre le besoin.
 
 
-## 8. `julie-vcs` (dev-git, lot 2 de la v0)
+## 8. `julie-vcs` (dev-git, lot 2 de la v0 ; lot C de la v1)
 
 Détail et exemples en tête de `crates/vcs/src/lib.rs`. Ne dépend que de
 `julie-core` ; ne connaît pas `julie-diff` (c'est `app` qui passe les versions
@@ -515,6 +515,138 @@ motif), `GIT_OPTIONAL_LOCKS=0` pour les lectures ; `GIT_DIR`, `GIT_WORK_TREE`,
 `GIT_INDEX_FILE` hérités retirés. Crochets et signature jamais contournés.
 Destructif seulement sur demande nommée : `accept_side` (écrase ou supprime le
 fichier) et `abort_operation`.
+
+### v1, lot C : branches, distant, opérations, menus des fichiers (25/11/2026)
+
+Exemples complets en tête de `crates/vcs/src/lib.rs`. Rien de changé pour les
+appels v0 ; `LogQuery` gagne des champs (construire avec `..LogQuery::default()`),
+`VcsSettings` aussi (`..VcsSettings::default()`), `VcsEvent` et `Action` gagnent
+des variantes (garder un `_ =>`).
+
+**Réglages `[vcs]`** : `git_path`, `protected_branches: Vec<String>` (défaut
+`["main", "master"]`, motif `préfixe*` admis), `update_method: Option<IntegrationMethod>`
+(`"fusion"` / `"rebase"` ; `None` : demander). `Vcs::new` les garde ;
+`Vcs::with_settings` les remplace.
+
+**Règle commune des écritures v1** : résultat, puis `Status` **et** `Branches`
+relus, réussite ou non ; `Waiting { action }` publié si une autre écriture tient
+le verrou. Réseau : `Progress(RemoteProgress { phase, from_remote, percent, done,
+total })` espacé de 100 ms, et `ctx.progress`. Aucune saisie d'identifiants
+(`GIT_TERMINAL_PROMPT=0`) : besoin d'identifiants ou refus →
+`VcsError::AuthenticationFailed { stderr }` (l'interface renvoie au terminal / au
+gestionnaire d'identifiants). Annulation : Git et ses descendants tués.
+
+| Méthode | Clé | Événement | Erreurs propres |
+|---|---|---|---|
+| `load_branches(&repo)` | `vcs.branches` | `Branches(BranchList)` | — |
+| `check_branch_name(&repo, nom, ignore)` | `vcs.branch_name` | `BranchNameChecked { name, problem }` | — |
+| `create_branch(&repo, CreateBranchRequest)` | `vcs.branch_create` | `BranchCreated(CreateBranchOutcome)` | `InvalidBranchName`, `WouldOverwrite`, `NoCommits` |
+| `rename_branch(&repo, old, new)` | `vcs.branch_rename` | `BranchRenamed { old, new, upstream }` | `InvalidBranchName`, `BranchNotFound` |
+| `delete_branch(&repo, nom)` | `vcs.branch_delete` | `BranchDeleted { name, tip, upstream }` | `BranchNotMerged { commits, subjects, tip }`, `CurrentBranch` |
+| `force_delete_branch` (**destructif**) | `vcs.branch_delete` | `BranchDeleted` | `CurrentBranch` |
+| `restore_branch(&repo, nom, tip)` | `vcs.branch_restore` | `BranchRestored` | `InvalidBranchName` |
+| `delete_remote_branch(&repo, distant, nom)` (**destructif**) | `vcs.remote_branch_delete` | `RemoteBranchDeleted` | `ProtectedBranch`, `PushRejected` |
+| `switch_branch(&repo, SwitchRequest)` | `vcs.switch` | `Switched(SwitchOutcome)` | `WouldOverwrite(OverwriteConflict)`, `OperationInProgress`, `BranchNotFound` |
+| `switch_discarding_changes(&repo, cible, conflit)` (**destructif**) | `vcs.switch` | `Switched` | — |
+| `check_detached_commits(&repo)` | `vcs.detached_commits` | `DetachedCommits { count }` | — |
+| `fetch(&repo, FetchRequest { remote, prune })` | `vcs.fetch` | `Fetched(FetchOutcome)` | `AuthenticationFailed`, `GitFailed` |
+| `fast_forward_branch(&repo, nom)` | `vcs.branch_update` | `BranchFastForwarded { branch, fetch }` | `Diverged`, `NoUpstream`, `UpstreamGone`, `CurrentBranch` |
+| `update_project(&repo, UpdateRequest { method, local_changes })` | `vcs.update` | `Updated(OperationOutcome)` | `NoUpstream` (sans aucune commande réseau ni fusion), `UpstreamGone`, `DetachedHead` |
+| `pull(&repo, PullRequest { remote, branch, mode, local_changes })` | `vcs.pull` | `Pulled(OperationOutcome)` | idem |
+| `load_push_preview(&repo, branche, cible)` | `vcs.push_preview` | `PushPreview { target, new_branch, outgoing, remote_tip, remote_only, protected, sets_upstream }` | `DetachedHead` |
+| `push(&repo, PushRequest { target, set_upstream, follow_tags, force })` | `vcs.push` | `Pushed { kind, pushed, upstream_set }` | `PushRejected { rejection, output }`, `ProtectedBranch`, `GitFailed` (crochet `pre-push`) |
+| `merge(&repo, MergeRequest)` | `vcs.merge` | `OperationRan(OperationOutcome)` | `WouldOverwrite`, `OperationInProgress` |
+| `rebase(&repo, RebaseRequest { onto, branch, local_changes })` | `vcs.rebase` | `OperationRan` | idem |
+| `cherry_pick(&repo, commits, lc)` / `revert_commits` | `vcs.cherry_pick` / `vcs.revert` | `OperationRan` | `MergeCommitNotSupported` |
+| `skip_operation(&repo)` (**abandonne le commit**) | `vcs.skip` | `OperationSkipped(ContinueOutcome)` | `NoOperationInProgress` |
+| `load_reset_preview(&repo, cible)` | `vcs.reset_preview` | `ResetPreview { commits_leaving, unreachable, pushed, local_changes }` | — |
+| `reset(&repo, cible, Soft/Mixed)` / `reset_hard(&repo, cible, stash_first)` (**destructif**) | `vcs.reset` | `ResetDone` | — |
+| `load_stashes(&repo)` / `restore_auto_stash(&repo, commit)` | `vcs.stashes` / `vcs.stash_restore` | `Stashes(Vec<StashEntry>)` / `StashRestored(AutoStash)` | — |
+| `stage` / `unstage(&repo, chemins)` | `vcs.stage` / `vcs.unstage` | `Staged` / `Unstaged` | `IgnoredPaths` |
+| `discard_changes(&repo, chemins)` (**destructif**) | `vcs.discard` | `Discarded { restored, unstaged_added }` | `Conflicted` |
+| `move_path(&repo, de, vers)` | `vcs.move` | `Moved` | `NotTracked`, `DestinationExists` |
+| `add_to_gitignore(&repo, IgnoreRule)` | `vcs.ignore` | `IgnoreAdded { file, line, already_present }` | `AlreadyTracked` |
+
+**Types** :
+
+- `BranchList { current, detached_at, unborn, local, remote, remotes, recent }` ;
+  `Branch { name, full_ref, kind, remote, short_name, current, tracking:
+  Option<Tracking { upstream, ahead, behind, gone }>, last_commit: BranchCommit
+  { id, subject, author, time } }`. `origin/HEAD` exclu ; `recent` : 5 au plus,
+  tirées du reflog de HEAD (`checkout: moving from A to B`), courante exclue.
+  `branch_tree(&noms) -> Vec<BranchNode>` (pur) : dossiers par préfixe, un dossier
+  d'un seul élément replié en une ligne (`bugfix/crash`).
+- `BranchNameProblem` : `Empty`, `Invalid { suggestion }` (espaces → tirets),
+  `AlreadyExists`, `SameNameDifferentCase`, `FolderOfExisting`, `InsideExisting`,
+  `FolderCaseMismatch` (casse Windows). `suggest_branch_name`,
+  `branch_name_collision` purs.
+- `SwitchTarget::{Branch, Remote("origin/x"), Detach(rév)}` ; `LocalChanges::{Keep,
+  Stash}` ; `SwitchOutcome { branch, head, created, stash, hook_output,
+  behind_upstream, output }` (`hook_output` : bascule faite, `post-checkout` en
+  échec). `OverwriteConflict { tracked, untracked, output }`.
+- `AutoStash { message, commit, restore: StashRestore }` ; `StashRestore::{Restored,
+  Conflicts(chemins), Pending, Kept, Failed(texte)}` : l'entrée n'est supprimée que
+  si `Restored`. Message : `JulieStorm : avant bascule de C vers X — AAAA-MM-JJ
+  HH:MM UTC` (`AUTO_STASH_PREFIX`) ; aussi « avant mise à jour de », « avant rebase
+  de … sur … », « avant fusion de … dans … », « avant cherry-pick sur », « avant
+  revert sur », « avant réinitialisation de ».
+- `OperationOutcome { kind, finished, up_to_date, fast_forward, before, head,
+  received, changed_files, conflicts, stash, fetch, output }` : `finished: false` =
+  arrêtée sur un conflit (liste des conflits et dialogue de fusion existants, puis
+  `continue_operation` / `skip_operation` / `abort_operation`).
+  `Operation` (dans `Status`) gagne `step: Option<(n, total)>` (« commit 2 sur 3 »)
+  et `onto`.
+- `PushTarget { branch, remote, remote_branch }` (`push_target` : l'amont, sinon
+  `origin` et le même nom) ; `PushForce::{No, WithLease { expected }}` (jamais de
+  `--force` nu) ; `PushRejection::{NonFastForward { known_behind }, StaleLease,
+  RemoteRejected { reason }, Other { reason }}` ; `PushedKind::{New, FastForward,
+  Forced, UpToDate}`.
+- `FetchOutcome { updates: Vec<RefUpdate { kind, old, new, local_ref }>, output }`,
+  `updated()`, `pruned()`, `is_empty()`.
+- `FileStatus::index_state() -> IndexState::{NotStaged, Staged, PartiallyStaged,
+  Conflicted}` (marque « indexé » / « en partie indexé »).
+- `LogQuery` gagne `all_refs`, `author`, `text` (chaînes fixes, sans casse),
+  `since`, `until` (Unix), `paths`, `follow`, `order` (`LogOrder::Date` par défaut,
+  enfants avant parents) ; `LogQuery::file_history(chemin)`. Avec `paths`, les
+  parents rendus sont ceux de l'historique simplifié.
+- **Graphe** (pur, `GraphBuilder::push_page(&commits) -> Vec<GraphRow>`) :
+  `GraphRow { commit, lane, color, edges: Vec<GraphEdge { from, to, color, half:
+  Top|Bottom }>, width }`. Garder le même `GraphBuilder` pour toutes les pages d'un
+  journal : les pages donnent les mêmes lignes qu'un calcul d'un tenant. Premier
+  parent dans le couloir de l'enfant ; aucun couloir ne se décale ; couleur stable
+  (hachage du nom de branche posé sur le commit qui ouvre le couloir, sinon du
+  hash), à réduire par `color % palette.len()`. 10 000 commits : bien moins de 1 s
+  en debug.
+
+**Commandes retenues** : branches `git for-each-ref --format=…%00…` (avance/retard
+par `%(upstream:track,nobracket)`, jamais de réseau), récentes `git log -g
+--grep-reflog="checkout: moving from "`, nom `git check-ref-format --branch`,
+créer `git switch -c` / `git branch [--track]` (dépôt sans commit : `git
+symbolic-ref HEAD refs/heads/<nom>`, l'index n'est pas touché), basculer `git switch
+--no-guess` / `-c X --track origin/X` / `--detach`, supprimer `git branch -d|-D`
+(commits orphelins comptés par `git rev-list --count --stdin`, branches passées
+sur l'entrée standard), fetch `git fetch --porcelain --progress [--prune]
+(--all|<distant>)`, mise à jour `fetch <distant>` puis `git merge --no-edit
+<amont>` ou `git rebase <amont>`, pull `git pull --progress
+--no-rebase|--rebase|--ff-only`, avance d'une autre branche `git fetch <distant>
+<réf>:refs/heads/<b>`, push `git push --porcelain --progress [-u] [--follow-tags]
+[--force-with-lease=refs/heads/<n>:<attendu>] <distant> refs/heads/<b>:refs/heads/<n>`,
+suppression distante `git push --porcelain <distant> --delete refs/heads/<n>`,
+fusion `git merge --ff|--no-ff|--ff-only [--squash] [--no-commit] (-m|--no-edit)`,
+`git rebase <onto> [<branche>]`, `git cherry-pick`, `git revert --no-edit`, `git
+<op> --skip`, `git reset -q --soft|--mixed|--hard <commit>`, mise de côté `git
+stash push --include-untracked -m` / `git stash apply <commit>` / `git stash drop
+stash@{n}` (cherchée par son commit) — **sans** `GIT_LITERAL_PATHSPECS` pour ces
+deux commandes (sous chemins littéraux, `stash push -u` laisse les non suivis sur
+le disque). Menus : `git add --`, `git restore --staged --` (dépôt sans commit :
+`git rm --cached -r --force --ignore-unmatch`), `git restore --source=HEAD --staged
+--worktree --` pour annuler, `git mv --` (casse seule : nom intermédiaire),
+`.gitignore` par `file::write_text` (fin de ligne et encodage du fichier gardés).
+
+**Copie de sécurité** (`decisions-v1.md` n° 3) : pas dans `julie-vcs`. Avant
+`switch_discarding_changes`, `reset_hard`, `discard_changes`, `accept_side`,
+l'appelant copie les fichiers qu'il a fait confirmer (`OverwriteConflict::files()`,
+`ResetPreview::local_changes`, sa sélection) dans `.juliestorm/annulations/`.
 
 ## 9. `julie-diff` (dev-fusion-diff, lot 2 de la v0)
 
