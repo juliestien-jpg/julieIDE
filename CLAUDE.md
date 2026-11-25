@@ -169,7 +169,7 @@ But : en dix minutes d'usage, sentir les trois piliers. Rien d'autre.
   symboles, aller à la définition, usages, relance des échecs, couverture,
   complétion, débogueur.
 
-## Périmètre de la v1 (en cours depuis le 25/11/2026)
+## Périmètre de la v1 (priorités 1 à 4 livrées le 25/11/2026, plus les éditeurs fractionnés ; recette dans `docs/recette-v1.md`)
 
 Les trois piliers complets tels que décrits en haut, plus JSX/TSX et les gabarits
 AngularJS dans la coloration et l'index. Complétion et inspections de code
