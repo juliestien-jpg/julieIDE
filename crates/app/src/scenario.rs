@@ -43,6 +43,11 @@ pub enum Step {
     Click(f32, f32, Modifiers),
     /// `rclick <x> <y>` : clic droit (menus contextuels).
     RClick(f32, f32, Modifiers),
+    /// `drag <x1> <y1> <x2> <y2>` : glisser le bouton gauche d'un point à l'autre
+    /// (séparateur de groupes, onglet).
+    Drag(f32, f32, f32, f32, bool),
+    /// `release <x> <y>` : relâche le bouton gauche (après `drag … hold`).
+    Release(f32, f32),
     /// `wait <ms>`
     Wait(u64),
     /// `wait-idle` : plus de tâche de fond, index prêt, résultats arrivés.
@@ -112,6 +117,8 @@ pub fn parse_combo(text: &str) -> Result<Combo, String> {
                     "droite" => "Right".to_owned(),
                     "haut" => "Up".to_owned(),
                     "bas" => "Down".to_owned(),
+                    "pageup" | "page_up" | "pgup" => "PageUp".to_owned(),
+                    "pagedown" | "page_down" | "pgdn" => "PageDown".to_owned(),
                     "space" | "espace" => "Space".to_owned(),
                     other if other.len() == 1 => other.to_uppercase(),
                     other
@@ -220,6 +227,24 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
                     Step::RClick(x, y, mods)
                 }
             }
+            "drag" => {
+                let mut parts = rest.split_whitespace();
+                let mut next = || number_arg(parts.next().unwrap_or(""));
+                let (x1, y1, x2, y2) = (next()?, next()?, next()?, next()?);
+                // `hold` : ne relâche pas (photographier l'aperçu pendant le glisser).
+                let release = match parts.next() {
+                    None => true,
+                    Some("hold") => false,
+                    Some(_) => return Err(fail("`drag x1 y1 x2 y2 [hold]`")),
+                };
+                Step::Drag(x1, y1, x2, y2, release)
+            }
+            "release" => {
+                let mut parts = rest.split_whitespace();
+                let x = number_arg(parts.next().unwrap_or(""))?;
+                let y = number_arg(parts.next().unwrap_or(""))?;
+                Step::Release(x, y)
+            }
             "wait" => Step::Wait(
                 rest.parse::<u64>()
                     .map_err(|_| fail("durée en millisecondes attendue"))?,
@@ -272,6 +297,57 @@ pub struct Injection {
 impl Injection {
     pub fn click(pos: Pos2) -> Vec<Injection> {
         Self::click_with(pos, PointerButton::Primary, Modifiers::NONE)
+    }
+
+    /// Presse en `from`, glisse par étapes jusqu'en `to`, relâche : le vrai chemin d'un
+    /// glisser à la souris (séparateur, onglet).
+    pub fn drag(from: Pos2, to: Pos2, release: bool) -> Vec<Injection> {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut steps = vec![
+            Injection {
+                events: vec![Event::PointerMoved(from)],
+            },
+            Injection {
+                events: vec![Event::PointerMoved(from)],
+            },
+            Injection {
+                events: vec![button(from, true)],
+            },
+        ];
+        const STEPS: u32 = 8;
+        for i in 1..=STEPS {
+            let t = i as f32 / STEPS as f32;
+            steps.push(Injection {
+                events: vec![Event::PointerMoved(from + (to - from) * t)],
+            });
+        }
+        // Une image de plus à l'arrivée : l'aperçu se met à jour avant le relâchement.
+        steps.push(Injection {
+            events: vec![Event::PointerMoved(to)],
+        });
+        if release {
+            steps.push(Injection {
+                events: vec![button(to, false)],
+            });
+        }
+        steps
+    }
+
+    /// Relâche le bouton gauche en `pos`.
+    pub fn release(pos: Pos2) -> Vec<Injection> {
+        vec![Injection {
+            events: vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        }]
     }
 
     pub fn click_with(pos: Pos2, which: PointerButton, modifiers: Modifiers) -> Vec<Injection> {

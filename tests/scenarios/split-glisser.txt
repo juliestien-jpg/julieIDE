@@ -1,0 +1,45 @@
+# Split view : glisser un onglet vers le bord d'un groupe (nouvelle division) et vers la rangée
+# d'onglets d'un autre groupe ; Échap annule. Coordonnées en 1280x720, 100 % (arbre ouvert).
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js
+file src/config.js
+file src/scenes/IntroScene.js:10
+wait-idle
+# config.js (onglet à x = 430) vers le bord droit : l'aperçu moitié droite, puis le relâchement.
+drag 430 41 1200 400 hold
+wait 200
+screenshot target/essais/split/40-apercu-bord-droit.png
+release 1200 400
+wait-idle
+state target/essais/split/41-glisse-droite.json
+screenshot target/essais/split/41-glisse-droite.png
+# IntroScene.js (onglet à x = 460) vers le bord bas du groupe de droite.
+drag 460 41 1040 680 hold
+wait 200
+screenshot target/essais/split/42-apercu-bord-bas.png
+release 1040 680
+wait-idle
+state target/essais/split/43-glisse-bas.json
+screenshot target/essais/split/43-glisse-bas.png
+# Échap pendant un glisser : rien ne bouge.
+drag 345 41 900 300 hold
+wait 200
+key Escape
+wait 200
+release 900 300
+wait 300
+state target/essais/split/44-annule.json
+# main.js (seul onglet du groupe de gauche) vers la rangée d'onglets du groupe en haut à droite :
+# le groupe de gauche, vidé, disparaît.
+drag 345 41 1000 41 hold
+wait 200
+screenshot target/essais/split/45-apercu-rangee.png
+release 1000 41
+wait-idle
+state target/essais/split/46-vers-rangee.json
+screenshot target/essais/split/46-vers-rangee.png
+quit

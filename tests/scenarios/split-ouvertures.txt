@@ -1,0 +1,37 @@
+# Split view : ouvrir dans le groupe actif depuis l'arbre, la recherche dans les fichiers, la
+# navigation (Ctrl+clic, usages). Décor : bash tests/fixtures/navigation-copie.sh
+# (dossier jsessai-nav\proj). Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+resize 1280 720
+wait-idle
+file src/Service/UserService.php:33:37
+file src/Model/User.php
+wait-idle
+action editor.move_right
+wait-idle
+# Le groupe de droite (User.php) est actif ; le groupe 1 garde UserService.php.
+ui group.activate 1
+# Recherche dans les fichiers : l'occurrence s'ouvre dans le groupe actif (1).
+action nav.find_in_files
+type parent::getName
+wait-idle
+key Enter
+wait-idle
+state target/essais/split/50-recherche.json
+# Ctrl+clic sur une déclaration, dans le groupe actif.
+file src/Service/UserService.php:33:37
+ui nav.ctrl-click 33:37
+wait-idle
+state target/essais/split/51-navigation.json
+screenshot target/essais/split/51-navigation.png
+# Arbre du projet : clic sur un fichier (celui de web/js), dans le groupe actif.
+ui group.activate 1
+tree-expand web/js
+key Alt+1
+wait-idle
+key Down
+key Enter
+wait-idle
+state target/essais/split/52-arbre.json
+screenshot target/essais/split/52-arbre.png
+quit

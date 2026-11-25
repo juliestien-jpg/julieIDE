@@ -1,0 +1,22 @@
+# Split view : un fichier changé sur le disque alors qu'il est montré dans deux groupes : un seul
+# document, donc un seul rechargement ; modifié, le bandeau « changé sur le disque » est dans les
+# deux vues. Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/config.js:3
+action editor.split_right
+wait-idle
+# Fichier non modifié réécrit dehors : rechargé tout seul, une fois, dans les deux vues.
+external-write C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj/src/config.js premier changement\nsur deux lignes\n
+wait 2600
+state target/essais/split/70-recharge.json
+screenshot target/essais/split/70-recharge.png
+# Modifié dans une vue, réécrit dehors : le bandeau apparaît (une seule notice, vue dans les deux groupes).
+type XYZ
+external-write C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj/src/config.js deuxieme changement\nsur trois\nlignes\n
+wait 2600
+state target/essais/split/71-bandeau.json
+screenshot target/essais/split/71-bandeau.png
+quit

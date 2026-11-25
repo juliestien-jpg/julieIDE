@@ -51,6 +51,13 @@ Que les réflexes PhpStorm de la personne qui dirige le projet marchent tels que
 | Terminal | Ctrl+V, Maj+Inser | Coller | oui |
 | Terminal | Ctrl+Maj+C / Ctrl+Maj+V | Copier / coller toujours | nôtre |
 
+### Ajout du 25/11/2026 (`split.md`)
+
+| Contexte | Raccourci | Action | PhpStorm |
+|---|---|---|---|
+| Partout (sauf terminal) | Ctrl+Alt+Page suivante / précédente | Groupe d'éditeurs suivant / précédent | nôtre (libre : aucune autre action ne l'utilise ; Alt+Tab et Ctrl+Alt+Tab sont pris par Windows) |
+| Menu Affichage, palette, menu d'un onglet | aucun | Fractionner à droite / en bas, Déplacer à droite / en bas / vers l'autre groupe, Tout regrouper | — |
+
 ### Ajouts du 25/11/2026 (`reglages.md`, `menus-contextuels.md`, `navigation.md`, `branches.md`)
 
 | Contexte | Raccourci | Action | PhpStorm |

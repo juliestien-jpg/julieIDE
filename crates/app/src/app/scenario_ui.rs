@@ -36,6 +36,39 @@ impl JulieStormApp {
             return result;
         }
         match command {
+            // ----- Éditeurs fractionnés ---------------------------------------------
+            // `group.activate <n>` : le groupe n (base 1, ordre d'affichage) devient actif.
+            "group.activate" => {
+                let n = number(arg)?;
+                let order = self.editors.group_order();
+                let group = *order
+                    .get(n.wrapping_sub(1))
+                    .ok_or_else(|| format!("groupe {n} absent ({} groupe(s))", order.len()))?;
+                self.editors.activate_group(group);
+            }
+            // `group.tab <groupe> <onglet>` : active un onglet d'un groupe (bases 1).
+            "group.tab" => {
+                let mut parts = arg.split_whitespace();
+                let n = number(parts.next().unwrap_or(""))?;
+                let tab = number(parts.next().unwrap_or(""))?;
+                let order = self.editors.group_order();
+                let group = *order
+                    .get(n.wrapping_sub(1))
+                    .ok_or_else(|| format!("groupe {n} absent"))?;
+                let count = self
+                    .editors
+                    .groups
+                    .iter()
+                    .find(|g| g.id == group)
+                    .map_or(0, |g| g.tabs.len());
+                if tab == 0 || tab > count {
+                    return Err(format!("onglet {tab} absent du groupe {n}"));
+                }
+                self.editors.activate_tab(group, tab - 1);
+            }
+            // `layout.persist on|off` : sauvegarde et restauration de la disposition dans
+            // `.juliestorm/` (désactivées par défaut en mode scénario).
+            "layout.persist" => self.layout_persist = on_off(arg)?,
             // ----- Git ----------------------------------------------------------
             "git.tab" => {
                 self.tools.bottom = BottomTool::Git;

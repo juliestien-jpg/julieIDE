@@ -1,0 +1,10 @@
+# Deuxième lancement : le projet rouvre la même disposition, les mêmes onglets (critère 8).
+# À jouer après split-persistance-a.txt, sur le même dossier.
+ui layout.persist on
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+wait 500
+state target/essais/split/31-apres-reouverture.json
+screenshot target/essais/split/31-apres-reouverture.png
+quit

@@ -40,6 +40,13 @@
 //!   possibles. Un document lui-même en lecture seule
 //!   (`Document::set_read_only`) refuse aussi toute modification.
 //!
+//! # Un document, plusieurs vues
+//!
+//! Un [`EditorView`] ne possède pas le document : on peut en afficher deux sur le même
+//! `Document` (éditeurs fractionnés, voir `tabs.rs`). Défilement, glisser et IME sont par vue ;
+//! les sélections sont au document, la vue qui n'a pas la main dessine celles de
+//! [`EditorView::paint_selections`] (laissé à `None` dans tous les autres cas).
+//!
 //! # Volets côte à côte (diff, fusion)
 //!
 //! L'interface pose deux ou trois éditeurs avec [`split_panes`] (qui rend aussi

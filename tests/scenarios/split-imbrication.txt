@@ -1,0 +1,53 @@
+# Split view : trois niveaux d'imbrication, séparateur déplacé à la souris, proportion gardée au
+# redimensionnement, 1280x720 / 1920x1080 / plein écran, 100 % et 150 % (critères 4 et 5).
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js
+file src/config.js
+file src/scenes/IntroScene.js:10
+file src/scenes/PauseScene.js
+# Deux colonnes, la droite coupée en deux, le bas à droite coupé en deux : quatre niveaux d'arbre.
+action editor.split_right
+action editor.split_down
+action editor.split_right
+wait-idle
+state target/essais/split/20-quatre-groupes.json
+screenshot target/essais/split/20-quatre-groupes-1280.png
+# Critère 4 : le séparateur entre la colonne de gauche et celle de droite (x = 796) se tire à la souris.
+drag 796 300 520 300
+wait 300
+state target/essais/split/21-separateur-tire.json
+screenshot target/essais/split/21-separateur-tire.png
+# Le séparateur horizontal de la colonne de droite (entre les groupes 2 et 3), y = 361.
+drag 1000 361 1000 250
+wait 300
+state target/essais/split/22-separateur-horizontal.json
+# La proportion est gardée au redimensionnement.
+resize 1000 600
+wait 300
+state target/essais/split/23-petite-fenetre.json
+screenshot target/essais/split/23-petite-fenetre.png
+resize 1920 1080
+wait 300
+state target/essais/split/24-1920.json
+screenshot target/essais/split/24-1920.png
+scale 1.5
+wait 300
+screenshot target/essais/split/25-1920-150.png
+scale 1.0
+resize 1280 720
+wait 300
+scale 1.5
+wait 300
+state target/essais/split/26-1280-150.json
+screenshot target/essais/split/26-1280-150.png
+scale 1.0
+fullscreen on
+wait 600
+state target/essais/split/27-plein-ecran.json
+screenshot target/essais/split/27-plein-ecran.png
+fullscreen off
+quit

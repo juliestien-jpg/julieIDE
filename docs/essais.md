@@ -46,6 +46,8 @@ espaces des chemins sont donc permis).
 | `key <combinaison>` | Appuie sur une touche : `Enter`, `Escape`, `Tab`, `Down`/`Up`/`Left`/`Right` (ou `Bas`, `Haut`, `Gauche`, `Droite`), `F4`…, une lettre, un chiffre ; avec `Ctrl+`, `Alt+`, `Shift+` (ou `Maj+`). Ex. `key Ctrl+Maj+N`, `key Alt+Right`, `key Ctrl+A`. |
 | `click <x> <y>` | Clic gauche aux coordonnées (points, origine en haut à gauche de la fenêtre). |
 | `rclick <x> <y>` | Clic droit aux coordonnées : ouvre le menu contextuel de ce qui est dessous (arbre, changements, onglets, journal). C'est le vrai chemin de la souris. |
+| `drag <x1> <y1> <x2> <y2> [hold]` | Glisse le bouton gauche d'un point à l'autre (appui, huit déplacements, relâchement) : séparateur entre deux groupes d'éditeurs, onglet vers le bord ou la rangée d'onglets d'un groupe. Avec `hold`, le bouton reste enfoncé (photographier l'aperçu d'un glisser). |
+| `release <x> <y>` | Relâche le bouton gauche (après `drag … hold`). Échap entre les deux annule le glisser d'un onglet. |
 | `wait <ms>` | Attend. |
 | `wait-idle` | Attend que plus rien ne travaille : aucune tâche de fond (sauf sessions de terminal), index prêt, état Git connu, résultats de recherche et d'« aller au fichier » arrivés, fichiers chargés, dossiers de l'arbre listés. Quatre images calmes de suite. |
 | `screenshot <fichier.png>` | Capture la fenêtre (PNG, taille réelle en pixels : 1280×720 à 100 %). |
@@ -452,6 +454,50 @@ vide et neuf : un dossier qui garde un `last_project.txt` fait rouvrir ce projet
 | `nav-vrai-code.txt` | copie de quelques fichiers de `lab` : propriété sans type, `new`, fonction native, usages |
 | `nav-indexation.txt`, `nav-indexation-message.txt` | progression « Indexation des symboles… n % » dans la barre d'état, message « Indexation en cours (n %) » |
 
+### Éditeurs fractionnés (split view)
+
+Spécification : `docs/specs/split.md`. Les actions du registre :
+
+| Action | Effet | Raccourci |
+|---|---|---|
+| `editor.split_right` / `editor.split_down` | « Fractionner à droite / en bas » : nouveau groupe, même document, deux vues | aucun |
+| `editor.move_right` / `editor.move_down` | « Déplacer à droite / en bas » : l'onglet actif change de groupe (grisé s'il est seul dans son groupe) | aucun |
+| `editor.move_other` | « Déplacer vers l'autre groupe » (le suivant dans l'ordre d'affichage) | aucun |
+| `editor.unsplit_all` | « Tout regrouper » : un seul groupe, chaque fichier une fois | aucun |
+| `editor.next_group` / `editor.prev_group` | groupe d'éditeurs suivant / précédent | Ctrl+Alt+Page suivante / précédente |
+
+Commandes `ui` :
+
+| Commande | Effet |
+|---|---|
+| `group.activate <n>` | Le groupe n (base 1, **ordre d'affichage** : gauche à droite, haut en bas) devient actif, son éditeur a le focus. |
+| `group.tab <groupe> <onglet>` | Active l'onglet (base 1) d'un groupe. |
+| `layout.persist on\|off` | Sauvegarde et restauration de la disposition dans `<projet>\.juliestorm\layout.json` (**désactivées par défaut en mode scénario**, comme la mémoire du dernier projet ; à placer **avant** `project`). Hors scénario elles sont toujours actives. |
+
+`menu.open tab <numéro>` désigne l'onglet **du groupe actif** ; `menu.open tab <fragment>` le
+premier onglet dont le chemin contient le fragment, en commençant par le groupe actif (il
+devient actif s'il est ailleurs, comme un vrai clic droit). Le menu d'un onglet contient les
+actions ci-dessus ; la raison du grisé est dans `context_menu.entries[].reason`.
+
+État JSON : `tabs` reste la liste des onglets **du groupe actif** (un seul groupe : comme
+avant). `groups` : `count`, `active` (n du groupe actif), `depth` (niveaux d'imbrication),
+`layout` (l'arbre : `{split: vertical|horizontal, ratio, a, b}` ou `{group: n}`), `restoring`,
+`list` (dans l'ordre d'affichage : `index`, `active`, `rect` = `[x, y, largeur, hauteur]` en points,
+`tabs` : `title`, `path`, `active`, `modified`, `views` = nombre de vues du document,
+`line` / `column` **de cette vue**, `scroll_y`). Un séparateur se déplace avec `drag` : il se
+repère au bord entre les `rect` de deux groupes voisins.
+
+| Scénario | Décor | Ce qu'il joue |
+|---|---|---|
+| `split-base.txt` | clone jetable de `labmate_paper` (`git clone` vers `%TEMP%\jsessai-split\proj`) | critère 1 : fractionner à droite, frappe dans une vue visible dans l'autre, Ctrl+S une seule fois |
+| `split-groupes.txt` | idem | critères 2, 3, 6, 7, 9 : déplacer en bas, ouvrir dans le groupe actif, fermer le dernier onglet d'un groupe, tout regrouper, fermer une vue d'un document modifié |
+| `split-imbrication.txt` | idem | critères 4 et 5 : séparateur glissé à la souris, proportion gardée au redimensionnement, trois niveaux en 1280×720 et 1920×1080, 100 % et 150 % |
+| `split-glisser.txt` | idem | glisser un onglet vers un bord (nouvelle division) et vers la rangée d'onglets d'un autre groupe |
+| `split-persistance-a.txt`, `split-persistance-b.txt` | idem | critère 8 : construire une disposition, quitter, rouvrir le projet |
+| `split-ouvertures.txt` | `bash tests/fixtures/navigation-copie.sh` | ouverture dans le groupe actif depuis la recherche dans les fichiers, la navigation (Ctrl+clic : un fichier ouvert dans l'autre groupe y est activé) et l'arbre du projet |
+| `split-menus.txt` | clone jetable | menu d'un onglet (entrées grisées avec leur raison), palette (`fraction`), menu Affichage, Ctrl+Alt+Page suivante / précédente |
+| `split-disque.txt` | clone jetable | fichier réécrit hors de l'IDE et montré dans deux groupes : un seul rechargement ; modifié : le bandeau est dans les deux vues |
+
 ## Ce que le mode scénario ne couvre pas
 
 - Le **sélecteur de dossiers du système** (`file.open_folder`) : fenêtre native, hors
@@ -459,8 +505,9 @@ vide et neuf : un dossier qui garde un `last_project.txt` fait rouvrir ce projet
 - Une **vraie** frappe du clavier ou clic de la souris passant par le pilote graphique : les étapes
   injectent les événements dans egui, après le système. Ce qu'un pilote ferait des touches
   (Ctrl+Alt+flèches de certains pilotes Intel) ne s'y voit donc pas.
-- Le glisser-déposer, la molette, les infobulles (survol) : pas d'étape
-  correspondante. `click` couvre le clic gauche, `rclick` le clic droit (les raisons des entrées
+- La molette et les infobulles (survol) : pas d'étape correspondante ; le glisser-déposer
+  n'a que `drag` / `release` (séparateurs, onglets), pas de dépôt de fichiers venant du système.
+  `click` couvre le clic gauche, `rclick` le clic droit (les raisons des entrées
   grisées, normalement en infobulle, se lisent dans `context_menu.entries[].reason`). Le défilement des listes se
   joue au clavier (Fin, Début, pages dans le journal) et celui de la fusion par
   `merge.focus <ligne>` ou F7.

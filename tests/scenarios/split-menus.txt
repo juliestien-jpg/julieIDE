@@ -1,0 +1,47 @@
+# Split view : entrées dans le menu contextuel d'un onglet, le menu Affichage et la palette
+# d'actions ; raccourcis Ctrl+Alt+Page suivante / précédente ; raisons des entrées grisées.
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js
+file src/config.js
+wait-idle
+# Clic droit sur l'onglet main.js : « Déplacer… » vers l'autre groupe est grisé (un seul groupe).
+rclick 345 41
+wait 400
+screenshot target/essais/split/60-menu-onglet.png
+state target/essais/split/60-menu-onglet.json
+key Escape
+wait 200
+# Palette d'actions : « fraction » trouve les deux fractionnements.
+action nav.action_palette
+type fraction
+wait 300
+screenshot target/essais/split/61-palette.png
+state target/essais/split/61-palette.json
+key Escape
+wait 200
+# Menu Affichage (barre de menus).
+click 236 12
+wait 300
+screenshot target/essais/split/62-menu-affichage.png
+key Escape
+wait 200
+# Fractionner, puis changer de groupe au clavier.
+action editor.split_right
+wait-idle
+key Ctrl+Alt+PageUp
+wait 200
+state target/essais/split/63-groupe-precedent.json
+key Ctrl+Alt+PageDown
+wait 200
+state target/essais/split/64-groupe-suivant.json
+# Le menu d'un onglet seul dans son groupe : « Déplacer à droite / en bas » grisés avec leur raison.
+rclick 830 41
+wait 400
+screenshot target/essais/split/65-menu-onglet-seul.png
+state target/essais/split/65-menu-onglet-seul.json
+key Escape
+quit

@@ -190,6 +190,10 @@ pub struct EditorView {
     last_hover: Option<TextPosition>,
     /// Ctrl+B pressé à cette image.
     navigate_key: bool,
+    /// Sélections à dessiner à la place de celles du document : positionnées par l'hôte
+    /// quand cette vue n'est pas celle qui tient la sélection « vivante » (un document
+    /// affiché par deux vues). `None` : celles du document.
+    pub paint_selections: Option<Selections>,
 }
 
 impl EditorView {
@@ -212,6 +216,7 @@ impl EditorView {
             layout: None,
             last_hover: None,
             navigate_key: false,
+            paint_selections: None,
         }
     }
 
@@ -1010,7 +1015,13 @@ impl EditorView {
             Rect::from_x_y_ranges(text_rect.x_range(), line_top(line)..=line_top(line) + lh)
         };
 
-        let primary = document.selections().primary();
+        // Une vue qui n'a pas la sélection « vivante » du document (deuxième vue du même
+        // document) dessine la sienne.
+        let selections = self
+            .paint_selections
+            .clone()
+            .unwrap_or_else(|| document.selections().clone());
+        let primary = selections.primary();
         let cursor_line = buffer.line_of(primary.head) as u32;
 
         // Fonds de lignes : ligne courante, puis décorations.
@@ -1100,7 +1111,7 @@ impl EditorView {
         } else {
             theme.selection_unfocused
         };
-        for selection in document.selections().iter().filter(|s| !s.is_empty()) {
+        for selection in selections.iter().filter(|s| !s.is_empty()) {
             paint_range(
                 buffer.offset_to_position(selection.start()),
                 buffer.offset_to_position(selection.end()),
@@ -1173,7 +1184,7 @@ impl EditorView {
 
         // Curseurs (et composition IME en cours).
         if focused {
-            for selection in document.selections().iter() {
+            for selection in selections.iter() {
                 let p = buffer.offset_to_position(selection.head);
                 if !visible.contains(&p.line) {
                     continue;

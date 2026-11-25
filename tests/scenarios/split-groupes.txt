@@ -1,0 +1,62 @@
+# Split view : déplacer en bas, ouvrir dans le groupe actif, fermer le dernier onglet d'un
+# groupe, tout regrouper, fermeture d'une vue d'un document modifié (critères 2, 3, 6, 7, 9).
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable : ce scénario écrit)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js
+file src/config.js
+file src/scenes/IntroScene.js:10
+file src/scenes/LevelScene.js:40
+wait-idle
+# Critère 2 : « Déplacer en bas » sur LevelScene.js.
+action editor.move_down
+wait-idle
+state target/essais/split/10-deplace-bas.json
+screenshot target/essais/split/10-deplace-bas.png
+# Critère 3 : avec deux groupes, Ctrl+Maj+N puis Entrée ouvre dans le groupe actif.
+ui group.activate 1
+action nav.goto_file
+type PauseScene
+wait-idle
+key Enter
+wait-idle
+state target/essais/split/11-ouvre-dans-groupe1.json
+screenshot target/essais/split/11-ouvre-dans-groupe1.png
+# Un fichier déjà ouvert seulement dans l'autre groupe : on active cet onglet-là, pas de doublon.
+action nav.goto_file
+type LevelScene
+wait-idle
+key Enter
+wait-idle
+state target/essais/split/12-active-autre-groupe.json
+# Critère 6 : fermer le dernier onglet du groupe du bas le fait disparaître.
+action file.close_tab
+wait-idle
+state target/essais/split/13-groupe-ferme.json
+screenshot target/essais/split/13-groupe-ferme.png
+# Critère 7 : deux groupes puis « Tout regrouper ».
+action editor.move_right
+action editor.split_down
+wait-idle
+state target/essais/split/14-trois-groupes.json
+screenshot target/essais/split/14-trois-groupes.png
+action editor.unsplit_all
+wait-idle
+state target/essais/split/15-regroupe.json
+screenshot target/essais/split/15-regroupe.png
+# Critère 9 : deux vues d'un document modifié ; fermer une vue ne pose pas de question.
+file src/config.js:3
+action editor.split_right
+type QQ
+action file.close_tab
+wait 300
+state target/essais/split/16-ferme-une-vue.json
+# Fermer la dernière vue : la question « Enregistrer ? » apparaît.
+action file.close_tab
+wait 300
+state target/essais/split/17-ferme-derniere.json
+screenshot target/essais/split/17-ferme-derniere.png
+ui cancel
+quit

@@ -797,7 +797,7 @@ gestionnaire d'identifiants). Annulation : Git et ses descendants tués.
 | `force_delete_branch` (**destructif**) | `vcs.branch_delete` | `BranchDeleted` | `CurrentBranch` |
 | `restore_branch(&repo, nom, tip)` | `vcs.branch_restore` | `BranchRestored` | `InvalidBranchName` |
 | `delete_remote_branch(&repo, distant, nom)` (**destructif**) | `vcs.remote_branch_delete` | `RemoteBranchDeleted` | `ProtectedBranch`, `PushRejected` |
-| `switch_branch(&repo, SwitchRequest)` | `vcs.switch` | `Switched(SwitchOutcome)` | `WouldOverwrite(OverwriteConflict)`, `OperationInProgress`, `BranchNotFound` |
+| `switch_branch(&repo, SwitchRequest)` / `switch_branch_with(…, SwitchOptions)` | `vcs.switch` | `Switched(SwitchOutcome)` | `WouldOverwrite(OverwriteConflict)`, `OperationInProgress`, `BranchNotFound`, `DetachedCommitsLeft` |
 | `switch_discarding_changes(&repo, cible, conflit)` (**destructif**) | `vcs.switch` | `Switched` | — |
 | `check_detached_commits(&repo)` | `vcs.detached_commits` | `DetachedCommits { count }` | — |
 | `fetch(&repo, FetchRequest { remote, prune })` | `vcs.fetch` | `Fetched(FetchOutcome)` | `AuthenticationFailed`, `GitFailed` |
@@ -808,7 +808,11 @@ gestionnaire d'identifiants). Annulation : Git et ses descendants tués.
 | `push(&repo, PushRequest { target, set_upstream, follow_tags, force })` | `vcs.push` | `Pushed { kind, pushed, upstream_set }` | `PushRejected { rejection, output }`, `ProtectedBranch`, `GitFailed` (crochet `pre-push`) |
 | `merge(&repo, MergeRequest)` | `vcs.merge` | `OperationRan(OperationOutcome)` | `WouldOverwrite`, `OperationInProgress` |
 | `rebase(&repo, RebaseRequest { onto, branch, local_changes })` | `vcs.rebase` | `OperationRan` | idem |
-| `cherry_pick(&repo, commits, lc)` / `revert_commits` | `vcs.cherry_pick` / `vcs.revert` | `OperationRan` | `MergeCommitNotSupported` |
+| `cherry_pick(&repo, commits, lc)` / `revert_commits` | `vcs.cherry_pick` / `vcs.revert` | `OperationRan` | `MergeCommitNotSupported`, `AlreadyApplied` (cherry-pick) |
+| `check_cherry_pick(&repo, commits)` | `vcs.cherry_pick_check` | `CherryPickChecked(Vec<(String, CommitPresence)>)` | — |
+| `set_upstream(&repo, branche, Option<amont>)` | `vcs.upstream` | `UpstreamChanged { branch, upstream }` | `BranchNotFound` |
+| `restore_deleted_branch(&repo, DeleteBranchOutcome)` | `vcs.branch_restore` | `BranchRestored` | `InvalidBranchName` |
+| `load_pending_stashes(&repo)` / `restore_pending_stash(&repo)` | `vcs.pending_stashes` / `vcs.stash_restore` | `PendingStashes(Vec<PendingStash>)` / `StashRestored(AutoStash)` | `OperationInProgress` |
 | `skip_operation(&repo)` (**abandonne le commit**) | `vcs.skip` | `OperationSkipped(ContinueOutcome)` | `NoOperationInProgress` |
 | `load_reset_preview(&repo, cible)` | `vcs.reset_preview` | `ResetPreview { commits_leaving, unreachable, pushed, local_changes }` | — |
 | `reset(&repo, cible, Soft/Mixed)` / `reset_hard(&repo, cible, stash_first)` (**destructif**) | `vcs.reset` | `ResetDone` | — |
@@ -898,6 +902,130 @@ le disque). Menus : `git add --`, `git restore --staged --` (dépôt sans commit
 `switch_discarding_changes`, `reset_hard`, `discard_changes`, `accept_side`,
 l'appelant copie les fichiers qu'il a fait confirmer (`OverwriteConflict::files()`,
 `ResetPreview::local_changes`, sa sélection) dans `.juliestorm/annulations/`.
+
+### v1, corrections de la recette (`recette-v1.md`, 25/11/2026)
+
+Tout est **ajouté** : seul `ConflictVersions` gagne un champ obligatoire
+(`labels`) — un littéral `ConflictVersions { … }` (aide de test de
+`app/src/merge.rs`) doit ajouter `labels: ConflictLabels::for_operation(Some(OperationKind::Merge))`.
+Changement de comportement : `switch_branch` **refuse** désormais de quitter une
+HEAD détachée qui porte des commits sur aucune branche (`DetachedCommitsLeft`).
+
+**M1 — mise de côté liée à l'opération.** Quand une opération entourée de
+`LocalChanges::Stash` (mise à jour, pull, fusion, rebase, cherry-pick, revert,
+bascule) s'arrête sur un conflit, `AutoStash::restore == Pending` et le lien est
+écrit dans le dossier Git (`<git_dir>/JULIESTORM_PENDING_STASH`, constante
+`PENDING_STASH_FILE` : commit, opération, message ; hors arbre de travail, relu
+au redémarrage). Ensuite, **sans rien demander à l'interface** :
+
+| Appel | Événements (dans l'ordre) | La mise de côté |
+|---|---|---|
+| `continue_operation` qui termine | `OperationContinued(o)` (`o.stash`), `StashRestored(s)`, `Status`, `PendingStashes` | remise ; `s.restore` = `Restored` / `Conflicts(chemins)` / `Failed(texte)` |
+| `continue_operation` arrêtée de nouveau | `OperationContinued { finished: false, stash: None }` … | attend toujours |
+| `skip_operation` qui termine | `OperationSkipped(o)`, `StashRestored(s)`, `Status`, `Branches`, `PendingStashes` | remise |
+| `abort_operation` | `OperationAborted(kind)`, `StashRestored(s)`, `Status`, `PendingStashes` | remise (l'arbre est revenu à l'avant-opération) |
+| opération finie ailleurs (terminal) | — | état `OperationOver` : l'interface propose « Remettre mes changements » → `vcs.restore_pending_stash(&repo)` → `StashRestored` |
+
+Fonctions synchrones : `abort_operation` remet aussi (signature inchangée) ;
+`abort_operation_restoring -> AbortOutcome { kind, stash }` dit l'issue ;
+`ContinueOutcome` gagne `stash: Option<AutoStash>`.
+
+Bandeau « mises de côté JulieStorm en attente » : `VcsEvent::PendingStashes(Vec<PendingStash>)`
+publié à l'ouverture et **après chaque écriture** (et par `vcs.load_pending_stashes`).
+`PendingStash { entry: StashEntry, message, reason: Option<StashReason>, state }`,
+`PendingStashState::{AwaitingOperation(kind), OperationOver, Kept}`. Liste vide :
+plus de bandeau. `StashReason::parse(message)` relit un message (pur).
+`AutoStash` gagne `untracked_not_restored: Vec<PathBuf>` (m13 : non suivi dont le
+chemin est maintenant pris ; votre version reste dans `<commit>^3`, l'entrée est
+gardée).
+
+Ce que l'interface doit faire :
+1. `after_integration` / `after_switch` avec `Pending` : dire « Vos changements
+   locaux sont mis de côté (« <message> ») ; ils reviendront à la fin de la
+   <opération> » (plus « gardés » sans suite).
+2. Sur `StashRestored(s)` : `Restored` → « Vos changements locaux ont été remis » ;
+   `Conflicts` → ouvrir la liste des conflits, « Remise en conflit : l'entrée
+   « <message> » est gardée » ; `Failed` → message + texte de Git ; si
+   `untracked_not_restored` non vide → les nommer (« votre version est gardée
+   dans la mise de côté »).
+3. Sur `PendingStashes` : bandeau si non vide ; `OperationOver` → bouton
+   « Remettre mes changements » (`restore_pending_stash`) ; `Kept` → « Remettre »
+   (`restore_auto_stash(&repo, entry.commit)`).
+4. Au retour du focus : `load_pending_stashes` (une remise au terminal).
+
+**M3 — HEAD détachée.** `switch_branch`, `switch_discarding_changes` (vérifié
+**avant** de jeter) et `create_branch { switch: true }` vers un autre commit
+refusent par `VcsError::DetachedCommitsLeft { head, count, subjects }` quand des
+commits seraient laissés sur aucune branche (ceux que la cible contient ne
+comptent pas). Rien n'a changé. Dialogue : « n commits ne sont sur aucune
+branche » + sujets, **« Créer une branche d'abord »** (`create_branch {
+name, start: None, switch: true }` : même commit, rien ne bouge, puis refaire la
+bascule) / **« Basculer quand même »** → `vcs.switch_branch_with(&repo, demande,
+SwitchOptions { leave_detached_commits: true })` (ou
+`switch_discarding_changes_with`) / Annuler. `SwitchOutcome` gagne
+`left_detached: Option<(u32, commit)>` (notification « n commits laissés,
+récupérables : Créer une branche sur <commit> »). Bandeau :
+`VcsEvent::DetachedHead(DetachedHeadReport { head, orphan_commits, subjects })`
+publié à l'ouverture et après chaque écriture (commit compris) **tant que HEAD est
+détachée** ; `orphan_commits > 0` → « Vos commits ne sont sur aucune branche » +
+« Créer une branche ici ». Sur une branche : rien (se fier à `Status::head`).
+Synchrone : `detached_head_report`.
+
+**M5 — qui est qui dans un conflit.** `ConflictVersions::labels: ConflictLabels
+{ ours: SideLabel, theirs: SideLabel }` ; `SideLabel { role: Option<SideRole>,
+name, commit, subject }` ; `ConflictLabels::yours()` / `incoming()` →
+`ConflictSide`, `side(s)`, `for_operation(kind)` (pur) ; `ConflictSide::other()`.
+
+| Opération | étage 2 (`Ours`) | étage 3 (`Theirs`) | `yours()` |
+|---|---|---|---|
+| fusion | `CurrentBranch` (« main ») | `MergedRevision` (« origin/main », d'après `MERGE_MSG`) | `Ours` |
+| rebase | `RebaseBase` (amont, « origin/main ») | `ReplayedCommit` (votre commit, sujet, branche rejouée) | **`Theirs`** |
+| cherry-pick | `CurrentBranch` | `PickedCommit` (commit, sujet) | `Ours` |
+| revert | `CurrentBranch` | `RevertedCommit` (l'inverse du commit) | `Ours` |
+| remise d'une mise de côté (aucune opération) | `UpdatedBranch` | `StashedChanges` | **`Theirs`** |
+
+L'interface remplace « Garder la nôtre / Prendre la leur » par « Garder votre
+version (<nom>) » → `accept_side(labels.yours())` et « Prendre <nom de l'autre> »
+→ `accept_side(labels.incoming())`, et titre les volets d'après `role` + `name`
+(+ `subject`). Le dialogue de fusion met « votre travail » du côté où il l'attend,
+quel que soit l'étage.
+
+**M2 — ce qui a été jeté.** `SwitchOutcome::discarded` (forcer la bascule :
+suivis remis à HEAD + non suivis supprimés) et `ResetOutcome::discarded`
+(`reset_hard` sans mise de côté). La notification nomme ces fichiers, propose
+« Rétablir » (copie de sécurité) et ne dit « vos changements ont suivi » que s'il
+reste des changements dans le `Status` suivant.
+
+**m1 — erreurs lisibles.** Le `Display` de `VcsError` n'a plus de `{:?}` :
+`WouldOverwrite` → « des changements locaux seraient écrasés : a.txt (modifié) ;
+login.txt (non suivi) » (`OverwriteConflict::summary()`, `len()`,
+`relative_names(racine)`), `OperationInProgress`, `InvalidBranchName`
+(`Display` de `BranchNameProblem`), `PushRejected` (`Display` de `PushRejection`),
+`IgnoredPaths`. `OperationKind::label()`. Pour `merge`, `rebase`, `cherry_pick`,
+`revert_commits` refusés par `WouldOverwrite`, l'interface ouvre le même dialogue
+que la bascule (« Mettre de côté et … » = même demande avec `LocalChanges::Stash`).
+
+**m2 — cherry-pick d'un commit déjà présent.** `vcs.check_cherry_pick(&repo,
+commits)` → `CherryPickChecked(Vec<(commit, CommitPresence)>)`,
+`CommitPresence::{Absent, Contained, SameChange}` (`git merge-base
+--is-ancestor`, puis `git cherry HEAD <c> <c>^`) ; griser si `is_present()`
+(« déjà sur la branche courante »). `cherry_pick` refuse d'avance
+(`VcsError::AlreadyApplied { commits }`, rien de lancé) ; un commit devenu vide en
+route est passé (`git cherry-pick --skip`, idem `revert`) et listé dans
+`OperationOutcome::empty_skipped` : plus d'état « cherry-pick en cours — 0
+fichier ».
+
+**m3 — restaurer avec l'amont.** `DeleteBranchOutcome::upstream_config:
+Option<BranchUpstream { remote, merge }>` ; `vcs.restore_deleted_branch(&repo,
+outcome)` (à la place de `restore_branch`) remet le commit **et** l'amont
+(`git config branch.<n>.remote|merge`, même si la distante a disparu).
+
+**Amont.** `vcs.set_upstream(&repo, branche, Some("origin/x"))` (« Choisir
+l'amont… », `git branch --set-upstream-to`) ou `None` (« Retirer l'amont »,
+`--unset-upstream`) → `UpstreamChanged { branch, upstream }` puis `Status`,
+`Branches`. Amont inexistant : `Failed(BranchNotFound)`.
+
+Nouvelles `Action` : `PendingStashes`, `CheckCherryPick`, `SetUpstream`.
 
 ## 9. `julie-diff` (dev-fusion-diff, lot 2 de la v0)
 
@@ -1143,6 +1271,14 @@ Détail en tête de `crates/text/src/lib.rs` et de `crates/app/src/editor/mod.rs
   `EditorLayout { text_rect, gutter_rect, line_height, scroll_y, visible_lines,
   line_count }` avec `line_top(l)`, `line_y_range(l)`, `lines_y_range(a..b)`,
   `line_at(y)` pour dessiner les connecteurs.
+- **Un `Document` affiché par plusieurs `EditorView`** (éditeurs fractionnés, 25/11/2026) : oui, une
+  vue ne possède pas le document (il lui est prêté à chaque image) ; le défilement, le glisser et
+  la composition IME sont par vue. **Une seule chose est au document : les sélections** (contrat
+  `julie-text`). L'hôte (`app`, `tabs.rs`) laisse donc la sélection « vivante » du document à la vue
+  qui a le focus, range celle des autres (recalée par `Buffer::map_offset_since`) et la fait dessiner
+  par `EditorView::paint_selections` (ajout du 25/11/2026 dans `editor/view.rs`, par `dev-interface` :
+  `Option<Selections>` lue seulement au dessin ; `None` = celles du document). Le changement de vue
+  active échange les deux (un `set_selections`, donc un seul cran d'annulation fermé).
 - Raccourcis pris par l'éditeur (focus) : ceux de la ligne « Éditeur » de
   `docs/specs/raccourcis.md` sauf Ctrl+F4, Alt+Gauche/Droite et Ctrl+Tab
   (onglets : à l'hôte), plus Ctrl+D, Ctrl+/, Alt+Maj+Haut/Bas. Ctrl+S est à

@@ -169,6 +169,11 @@ pub struct JulieStormApp {
     scenario_active: bool,
     injected: VecDeque<Injection>,
     remember_last: bool,
+    /// Disposition des éditeurs sauvegardée dans `.juliestorm/` et restaurée à l'ouverture
+    /// (désactivée par défaut en mode scénario : `ui layout.persist on`).
+    layout_persist: bool,
+    /// Dernier texte de disposition écrit (ou lu) : on n'écrit que sur changement.
+    layout_saved: String,
     git: GitView,
     tests: TestsView,
     merge: Option<MergeDialog>,
@@ -278,6 +283,8 @@ impl JulieStormApp {
             scenario_active: false,
             injected: VecDeque::new(),
             remember_last: options.scenario.is_none() || project::state_dir_overridden(),
+            layout_persist: options.scenario.is_none(),
+            layout_saved: String::new(),
             git: GitView::new(dark),
             tests: TestsView::new(PathBuf::new(), None),
             merge: None,
@@ -537,11 +544,63 @@ impl JulieStormApp {
         self.find = FindInFiles::new();
         self.find_open = false;
         self.palette = None;
+        self.layout_saved.clear();
+        self.restore_layout(&root);
         if self.remember_last {
             project::spawn_write_last(root);
         }
         self.tools.project_open = true;
         self.ctx.request_repaint();
+    }
+
+    /// Rouvre les onglets et les divisions du projet, s'il n'y a encore rien d'ouvert.
+    fn restore_layout(&mut self, root: &Path) {
+        if !self.layout_persist {
+            return;
+        }
+        let file = root.join(".juliestorm").join(crate::tabs::LAYOUT_FILE);
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        self.editors.restore_layout(&self.tasks, root, &value);
+    }
+
+    /// Écrit la disposition quand elle change (hors glisser en cours), sans bloquer.
+    fn persist_layout(&mut self, ctx: &egui::Context) {
+        if !self.layout_persist || self.editors.is_restoring() || !self.editors.is_loaded() {
+            return;
+        }
+        let Some(project) = &self.project else {
+            return;
+        };
+        if ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let root = project.project.root().to_path_buf();
+        let text = self
+            .editors
+            .layout_json(&root)
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        if text == self.layout_saved {
+            return;
+        }
+        self.layout_saved.clone_from(&text);
+        let dir = root.join(".juliestorm");
+        std::thread::spawn(move || {
+            let file = dir.join(crate::tabs::LAYOUT_FILE);
+            if text.is_empty() {
+                let _ = std::fs::remove_file(file);
+                return;
+            }
+            let temp = dir.join(format!("{}.tmp", crate::tabs::LAYOUT_FILE));
+            if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&temp, text).is_ok() {
+                let _ = std::fs::rename(&temp, &file);
+            }
+        });
     }
 
     // ----- Événements des crates -----------------------------------------------
@@ -1076,8 +1135,8 @@ impl JulieStormApp {
     fn action_enabled(&self, id: ActionId) -> bool {
         match id {
             ActionId::SaveAll => self.editors.any_modified(),
-            ActionId::CloseTab | ActionId::LastTab => !self.editors.items.is_empty(),
-            ActionId::NextTab | ActionId::PreviousTab => self.editors.items.len() > 1,
+            ActionId::CloseTab | ActionId::LastTab => self.editors.active_tab().is_some(),
+            ActionId::NextTab | ActionId::PreviousTab => self.editors.active_tab_count() > 1,
             ActionId::GotoFile | ActionId::FindInFiles => self.project.is_some(),
             ActionId::ReloadFromDisk => self.project.is_some() || !self.editors.items.is_empty(),
             ActionId::GitCommit | ActionId::ToggleCommit | ActionId::GitRefresh => {
@@ -1125,8 +1184,9 @@ impl JulieStormApp {
                 }
             }
             ActionId::CloseTab => {
-                if !self.editors.items.is_empty() {
-                    self.request_close(self.editors.active);
+                let group = self.editors.active_group;
+                if let Some(index) = self.editors.active_group_ref().map(|g| g.active) {
+                    self.request_close(group, index);
                 }
             }
             ActionId::ReloadFromDisk => {
@@ -1297,8 +1357,8 @@ impl JulieStormApp {
     }
 
     fn focus_editor(&mut self) {
-        if let Some(editor) = self.editors.active_editor_mut() {
-            editor.view.request_focus();
+        if let Some(view) = self.editors.active_view_mut() {
+            view.request_focus();
         }
     }
 
@@ -1315,17 +1375,20 @@ impl JulieStormApp {
         self.editors.open(&self.tasks, path, goto);
     }
 
-    fn request_close(&mut self, index: usize) {
-        let Some(editor) = self.editors.items.get(index) else {
+    /// Ferme un onglet. Le document n'est en jeu (question « Enregistrer ? ») que si
+    /// c'est sa dernière vue : tant qu'un autre groupe le montre, on ne ferme que la vue.
+    fn request_close(&mut self, group: crate::tabs::GroupId, index: usize) {
+        let Some((doc, last_view)) = self.editors.tab_info(group, index) else {
             return;
         };
-        if editor.document.is_modified() {
+        let editor = &self.editors.items[doc];
+        if last_view && editor.document.is_modified() {
             if let Some(path) = editor.path() {
                 self.dialog = Some(Dialog::CloseTab(path.to_path_buf()));
                 return;
             }
         }
-        self.editors.close(index);
+        self.editors.close_view(group, index);
     }
 
     fn dispatch_shortcuts(&mut self, ctx: &egui::Context) {
@@ -1782,17 +1845,19 @@ impl JulieStormApp {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(editor_bg))
             .show(ui, |ui| {
-                if self.editors.items.is_empty() {
+                if self.editors.groups.is_empty() || self.editors.items.is_empty() {
                     welcome_action = self.draw_welcome(ui, p);
                 } else {
-                    tab_intents = self.editors.show_tab_bar(ui, p, editor_bg);
-                    (banner, editor_intents) = self.editors.show_active(ui, p, link);
+                    let shown = self.editors.show(ui, p, editor_bg, link);
+                    tab_intents = shown.tab_intents;
+                    banner = shown.banner;
+                    editor_intents = shown.editor_intents;
                 }
             });
         for intent in tab_intents {
             match intent {
-                TabIntent::Activate(i) => self.editors.activate(i),
-                TabIntent::Close(i) => self.request_close(i),
+                TabIntent::Activate { group, index } => self.editors.activate_tab(group, index),
+                TabIntent::Close { group, index } => self.request_close(group, index),
             }
         }
         if let Some(BannerIntent::Reload(path)) = banner {
@@ -2226,6 +2291,18 @@ impl JulieStormApp {
                 ));
                 sc.settle = 5;
             }
+            Step::Drag(x1, y1, x2, y2, release) => {
+                self.injected.extend(Injection::drag(
+                    egui::pos2(x1, y1),
+                    egui::pos2(x2, y2),
+                    release,
+                ));
+                sc.settle = 5;
+            }
+            Step::Release(x, y) => {
+                self.injected.extend(Injection::release(egui::pos2(x, y)));
+                sc.settle = 5;
+            }
             Step::Wait(ms) => sc.wait_ms(ms),
             Step::WaitIdle => sc.start_idle_wait(),
             Step::Screenshot(path) => {
@@ -2315,38 +2392,14 @@ impl JulieStormApp {
             "terminal"
         } else if self.tree.has_focus(ctx) {
             "tree"
-        } else if self
-            .editors
-            .active_editor()
-            .is_some_and(|e| e.view.has_focus(ctx))
+        } else if self.editors.active_editor().is_some()
+            && self.editors.active_view().is_some_and(|v| v.has_focus(ctx))
         {
             "editor"
         } else {
             "none"
         };
-        let titles = self.editors.titles();
-        let tabs: Vec<serde_json::Value> = self
-            .editors
-            .items
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                let position = e.document.cursor_position();
-                serde_json::json!({
-                    "title": titles[i],
-                    "path": e.path().map(|p| p.display().to_string()),
-                    "active": i == self.editors.active,
-                    "modified": e.document.is_modified(),
-                    "line": position.line + 1,
-                    "column": position.column + 1,
-                    "notice": e.notice.map(|n| format!("{n:?}")),
-                    "read_only": e.document.is_read_only(),
-                    "lines": e.document.buffer().len_lines(),
-                    "first_line": e.document.buffer().line(0).to_string(),
-                    "language": format!("{:?}", e.document.language()),
-                })
-            })
-            .collect();
+        let tabs = self.editors.active_tabs_state();
         let mut value = serde_json::json!({
             "title": self.last_title,
             "dark": self.dark,
@@ -2368,6 +2421,7 @@ impl JulieStormApp {
                 },
             })),
             "tabs": tabs,
+            "groups": self.editors.groups_state(),
             "recent": self.editors.recent.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "tree": {
                 "visible": self.tree.visible_names(),
@@ -2529,6 +2583,7 @@ impl eframe::App for JulieStormApp {
         self.pump_settings();
         self.scenario_step(&ctx);
         self.handle_close_request(&ctx);
+        self.editors.sync_ownership();
         self.dispatch_shortcuts(&ctx);
         self.poll_disk(&ctx);
         self.poll_git(&ctx);
@@ -2574,6 +2629,7 @@ impl eframe::App for JulieStormApp {
         self.draw_bottom(ui, &p);
         self.draw_project_panel(ui, &p);
         self.draw_central(ui, &p);
+        self.persist_layout(&ctx);
         self.nav_tick(&ctx);
 
         // Échap dans l'arbre : retour à l'éditeur.

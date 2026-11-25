@@ -178,11 +178,7 @@ impl JulieStormApp {
         if git_visible && self.git.list_has_focus(ctx) {
             return changes();
         }
-        if self
-            .editors
-            .active_editor()
-            .is_some_and(|e| e.view.has_focus(ctx))
-        {
+        if self.editors.active_view().is_some_and(|v| v.has_focus(ctx)) {
             return tab();
         }
         if git_visible {
@@ -250,8 +246,8 @@ impl JulieStormApp {
         }
         if self
             .editors
-            .active_editor()
-            .is_some_and(|e| e.view.has_focus(&ctx))
+            .active_view()
+            .is_some_and(|v| v.has_focus(&ctx))
         {
             let pos = egui::pos2(screen.center().x, screen.top() + 200.0);
             let target = self.editor_target();
@@ -478,6 +474,13 @@ impl JulieStormApp {
                 Action(TabCloseOthers),
                 Action(TabCloseAll),
                 Action(TabCloseUnmodified),
+                Sep,
+                Action(SplitRight),
+                Action(SplitDown),
+                Action(MoveRight),
+                Action(MoveDown),
+                Action(MoveToOtherGroup),
+                Action(UnsplitAll),
                 Sep,
                 copy(),
                 Action(RevealInExplorer),
@@ -743,6 +746,11 @@ impl JulieStormApp {
         use ActionId::*;
         // Les entrées propres à l'éditeur, aux tests, à la recherche et au terminal.
         match (id, target) {
+            (
+                SplitRight | SplitDown | MoveRight | MoveDown | MoveToOtherGroup | UnsplitAll
+                | NextGroup | PrevGroup,
+                _,
+            ) => return self.split_reason(id),
             (GotoDeclaration | FindUsages, _) => return self.nav_unavailable_reason(),
             (FindInFiles, _) => {
                 return self
@@ -911,11 +919,15 @@ impl JulieStormApp {
                             None
                         }
                     }
-                    TabCloseOthers if self.editors.items.len() <= 1 => {
+                    TabCloseOthers if self.editors.active_tab_count() <= 1 => {
                         Some(t::REASON_ONE_TAB.to_owned())
                     }
                     TabCloseUnmodified
-                        if self.editors.items.iter().all(|e| e.document.is_modified()) =>
+                        if self
+                            .editors
+                            .active_group_paths()
+                            .iter()
+                            .all(|p| self.editors.unsaved_text(p).is_some()) =>
                     {
                         Some(t::REASON_NO_UNMODIFIED_TAB.to_owned())
                     }
@@ -1018,6 +1030,8 @@ impl JulieStormApp {
         match id {
             UpdateProject | Push | NewBranch | BranchesPopup | Fetch => self.git_status().is_some(),
             ContextMenuKey => true,
+            SplitRight | SplitDown | MoveRight | MoveDown | MoveToOtherGroup | UnsplitAll
+            | NextGroup | PrevGroup => self.split_reason(id).is_none(),
             // Entrées propres à une zone : seulement par son menu contextuel.
             EditCut | EditCopy | EditPaste | EditSelectAll | TestRunNode | TestGoto
             | TestCompare | TestCopyName | HitOpen | HitCopyLine | HitExclude | TermCopy
@@ -1053,6 +1067,8 @@ impl JulieStormApp {
                 return;
             }
             ContextMenuKey => return self.open_menu_for_focus(),
+            SplitRight | SplitDown | MoveRight | MoveDown | MoveToOtherGroup | UnsplitAll
+            | NextGroup | PrevGroup => return self.run_split_action(id),
             TestRerunFailed => {
                 if let Some(request) = self.tests.failures_request() {
                     self.start_run(request, false);
@@ -1085,10 +1101,65 @@ impl JulieStormApp {
         }
     }
 
+    /// Pourquoi une action des éditeurs fractionnés est indisponible (`None` : elle est disponible).
+    pub(super) fn split_reason(&self, id: ActionId) -> Option<String> {
+        use ActionId::*;
+        match id {
+            SplitRight | SplitDown | MoveRight | MoveDown
+                if self.editors.active_tab().is_none() =>
+            {
+                Some(t::REASON_NO_FILE_OPEN.to_owned())
+            }
+            MoveRight | MoveDown if self.editors.active_tab_count() < 2 => {
+                Some(t::REASON_ONE_TAB_IN_GROUP.to_owned())
+            }
+            MoveToOtherGroup | UnsplitAll | NextGroup | PrevGroup
+                if self.editors.groups.len() < 2 =>
+            {
+                Some(t::REASON_ONE_GROUP.to_owned())
+            }
+            _ => None,
+        }
+    }
+
+    /// Fractionner, déplacer, regrouper, changer de groupe.
+    fn run_split_action(&mut self, id: ActionId) {
+        use crate::tabs::Dir;
+        use ActionId::*;
+        if let Some(reason) = self.split_reason(id) {
+            self.toast(reason, true, None);
+            return;
+        }
+        match id {
+            SplitRight => {
+                self.editors.split_active(Dir::Vertical, true);
+            }
+            SplitDown => {
+                self.editors.split_active(Dir::Horizontal, true);
+            }
+            MoveRight => {
+                self.editors.split_active(Dir::Vertical, false);
+            }
+            MoveDown => {
+                self.editors.split_active(Dir::Horizontal, false);
+            }
+            MoveToOtherGroup => {
+                self.editors.move_to_other_group();
+            }
+            UnsplitAll => {
+                self.editors.merge_all();
+            }
+            NextGroup => self.editors.activate_group_relative(1),
+            PrevGroup => self.editors.activate_group_relative(-1),
+            _ => {}
+        }
+        self.ctx.request_repaint();
+    }
+
     fn run_editor_action(&mut self, id: ActionId) {
         use ActionId::*;
         let ctx = self.ctx.clone();
-        let Some(editor) = self.editors.active_editor_mut() else {
+        let Some((editor, view)) = self.editors.active_pair_mut() else {
             return;
         };
         match id {
@@ -1104,7 +1175,7 @@ impl JulieStormApp {
             }
             EditPaste => {
                 // Le texte arrive en `Event::Paste` à l'éditeur qui a le focus.
-                editor.view.request_focus();
+                view.request_focus();
                 ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
             }
             EditSelectAll => editor.document.select_all(),
@@ -1347,21 +1418,28 @@ impl JulieStormApp {
                 self.start_run(request, false);
             }
             CloseTab => {
-                if let Some(index) = self.editors.index_of(&first.path) {
-                    self.request_close(index);
+                // L'onglet du menu est dans le groupe actif (le clic droit l'a activé).
+                let group = self.editors.active_group;
+                let index = self
+                    .editors
+                    .active_group_paths()
+                    .iter()
+                    .position(|p| *p == first.path);
+                if let Some(index) = index {
+                    self.request_close(group, index);
                 }
             }
             TabCloseOthers | TabCloseAll | TabCloseUnmodified => {
+                // Dans le groupe actif : c'est celui de l'onglet du menu.
                 let paths: Vec<PathBuf> = self
                     .editors
-                    .items
-                    .iter()
-                    .filter(|e| match id {
-                        TabCloseOthers => e.path() != Some(first.path.as_path()),
-                        TabCloseUnmodified => !e.document.is_modified(),
+                    .active_group_paths()
+                    .into_iter()
+                    .filter(|path| match id {
+                        TabCloseOthers => path != &first.path,
+                        TabCloseUnmodified => self.editors.unsaved_text(path).is_none(),
                         _ => true,
                     })
-                    .filter_map(|e| e.path().map(Path::to_path_buf))
                     .collect();
                 self.close_tabs(paths);
             }
@@ -1379,10 +1457,13 @@ impl JulieStormApp {
             let Some(index) = self.editors.index_of(&path) else {
                 continue;
             };
-            if self.editors.items[index].document.is_modified() {
+            let doc = self.editors.items[index].id;
+            // Un document modifié encore montré ailleurs : seule cette vue se ferme.
+            if self.editors.items[index].document.is_modified() && self.editors.view_count(doc) <= 1
+            {
                 modified.push(path);
             } else {
-                self.editors.close(index);
+                self.editors.close_path_in_active_group(&path);
             }
         }
         if !modified.is_empty() {
@@ -1694,21 +1775,56 @@ impl JulieStormApp {
                 )
             }
             "tab" => {
-                let index = match rest.parse::<usize>() {
-                    Ok(n) => n.saturating_sub(1),
-                    Err(_) => self
-                        .editors
-                        .items
+                // Un numéro : l'onglet du groupe actif ; un fragment de chemin : le premier
+                // onglet qui le contient, d'abord dans le groupe actif, puis dans les autres
+                // (son groupe devient actif, comme un vrai clic droit).
+                let paths_of = |editors: &crate::tabs::Editors, gid| {
+                    editors
+                        .groups
                         .iter()
-                        .position(|e| e.path().is_some_and(|p| p.to_string_lossy().contains(rest)))
-                        .ok_or_else(|| format!("onglet introuvable : {rest}"))?,
+                        .find(|g| g.id == gid)
+                        .map(|g| {
+                            g.tabs
+                                .iter()
+                                .map(|t| {
+                                    editors
+                                        .items
+                                        .iter()
+                                        .find(|e| e.id == t.doc)
+                                        .and_then(|e| e.path().map(Path::to_path_buf))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
                 };
-                let path = self
-                    .editors
-                    .items
-                    .get(index)
-                    .and_then(|e| e.path().map(Path::to_path_buf))
+                let active = self.editors.active_group;
+                let found = match rest.parse::<usize>() {
+                    Ok(n) => (active, n.saturating_sub(1)),
+                    Err(_) => {
+                        let mut order = self.editors.group_order();
+                        order.sort_by_key(|g| *g != active);
+                        order
+                            .into_iter()
+                            .find_map(|gid| {
+                                paths_of(&self.editors, gid)
+                                    .iter()
+                                    .position(|p| {
+                                        p.as_ref()
+                                            .is_some_and(|p| p.to_string_lossy().contains(rest))
+                                    })
+                                    .map(|i| (gid, i))
+                            })
+                            .ok_or_else(|| format!("onglet introuvable : {rest}"))?
+                    }
+                };
+                let path = paths_of(&self.editors, found.0)
+                    .get(found.1)
+                    .cloned()
+                    .flatten()
                     .ok_or("onglet sans fichier")?;
+                if found.0 != active {
+                    self.editors.activate_tab(found.0, found.1);
+                }
                 (
                     Target::Files {
                         zone: Zone::Tab,

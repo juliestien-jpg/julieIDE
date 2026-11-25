@@ -1,0 +1,23 @@
+# Split view : construire une disposition (deux colonnes, la droite coupée en deux, le même fichier
+# dans deux groupes) puis quitter. À rejouer avec split-persistance-b.txt (critère 8).
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable)
+# La sauvegarde de la disposition (.juliestorm/layout.json) est désactivée par défaut en mode scénario.
+ui layout.persist on
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js
+file src/config.js
+file src/scenes/IntroScene.js:10
+file src/scenes/PauseScene.js
+file src/scenes/MapScene.js
+wait-idle
+action editor.move_right
+action editor.split_down
+ui group.activate 1
+file src/main.js:3
+wait-idle
+state target/essais/split/30-avant-fermeture.json
+screenshot target/essais/split/30-avant-fermeture.png
+wait 800
+quit

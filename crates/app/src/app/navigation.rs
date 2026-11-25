@@ -141,9 +141,10 @@ impl JulieStormApp {
             return;
         };
         let position = editor.document.cursor_position();
-        let anchor = editor
-            .view
-            .point_at(position)
+        let anchor = self
+            .editors
+            .active_view()
+            .and_then(|view| view.point_at(position))
             .unwrap_or_else(|| self.ctx.content_rect().center());
         self.nav_request(purpose, position, anchor);
     }
@@ -885,13 +886,12 @@ impl JulieStormApp {
         let (Some(Ok(line)), Some(Ok(column))) = (parts.next(), parts.next()) else {
             return Err("`ligne:colonne` attendu (base 1), par exemple 12:7".to_owned());
         };
-        let editor = self.editors.active_editor().ok_or("aucun éditeur ouvert")?;
+        let view = self.editors.active_view().ok_or("aucun éditeur ouvert")?;
         let position = TextPosition::new(line.saturating_sub(1), column.saturating_sub(1));
-        let bottom_left = editor
-            .view
+        let bottom_left = view
             .point_at(position)
             .ok_or("éditeur pas encore affiché")?;
-        let layout = editor.view.layout().ok_or("éditeur pas encore affiché")?;
+        let layout = view.layout().ok_or("éditeur pas encore affiché")?;
         let pos = Pos2::new(
             bottom_left.x + layout.char_width / 2.0,
             bottom_left.y - layout.line_height / 2.0,

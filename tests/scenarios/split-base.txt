@@ -1,0 +1,29 @@
+# Split view : fractionner à droite (même document, deux vues), frappe visible des deux côtés,
+# Ctrl+S une seule fois, déplacer en bas, ouverture dans le groupe actif.
+# Décor : git clone <labmate_paper> %TEMP%\jsessai-split\proj   (copie jetable : ce scénario écrit)
+# Captures et états : target\essais\split\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-split/proj
+resize 1280 720
+wait-idle
+file src/main.js:5
+file src/config.js:3
+file src/scenes/IntroScene.js:10
+wait-idle
+state target/essais/split/01-trois-onglets.json
+screenshot target/essais/split/01-trois-onglets.png
+# Critère 1 : Fractionner à droite sur l'onglet actif.
+action editor.split_right
+wait-idle
+state target/essais/split/02-fractionne.json
+screenshot target/essais/split/02-fractionne.png
+# Une frappe dans le groupe actif (le nouveau) : visible dans l'autre vue, marque de modification.
+type ZZ
+wait 300
+state target/essais/split/03-frappe.json
+screenshot target/essais/split/03-frappe.png
+# Ctrl+S : un seul enregistrement, les deux vues perdent la marque.
+key Ctrl+S
+wait-idle
+state target/essais/split/04-enregistre.json
+screenshot target/essais/split/04-enregistre.png
+quit
