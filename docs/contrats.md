@@ -1127,7 +1127,16 @@ Détail en tête de `crates/text/src/lib.rs` et de `crates/app/src/editor/mod.rs
   `Warning`, `Error`, `Info` ; `EditorOptions { read_only, … }` ;
   `EditorTheme` (palette claire/sombre par défaut, remplaçable par
   `view.theme`).
-- Sorties : `EditorIntent::GutterMarkClicked { line, id }`.
+- Sorties : `EditorIntent::GutterMarkClicked { line, id }` ; navigation (v1, 25/11/2026, ajoutée
+  à l'éditeur par `dev-interface` faute de `dev-editeur`) : `Navigate { position, anchor }`
+  (Ctrl+clic **ou** Ctrl+B ; le curseur ne bouge pas ; `position` = le caractère sous le pointeur,
+  `anchor` = point de l'écran sous la ligne, pour ancrer une liste), `Hover { position }` (pointeur
+  sur un autre caractère avec Ctrl enfoncé, rendu **seulement** quand la position change) et
+  `HoverEnd` (Ctrl relâché ou pointeur sorti du texte). Entrée : `Decorations::link:
+  Option<TextRange>` : plage soulignée (couleur `EditorTheme::link`) ; le pointeur devient une main
+  quand Ctrl est enfoncé au-dessus. `EditorView::point_at(position)` : point de l'écran (bas gauche
+  du caractère, d'après la dernière image ; approximatif avec des tabulations) ; `layout()` donne
+  la géométrie. Ctrl+Alt (AltGr) n'est jamais un Ctrl+clic.
 - Volets synchronisés : `split_panes(rect, n, largeur_gouttière) -> (volets,
   gouttières)`, `sync_scroll(&mut [vues], &[sorties], |de, vers, ligne_haut|
   …)`, `set_top_line`, `set_scroll_y`, `center_line`, et

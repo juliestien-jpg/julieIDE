@@ -24,6 +24,8 @@ pub struct EditorTheme {
     pub ime_underline: Color32,
     pub scrollbar: Color32,
     pub scrollbar_hover: Color32,
+    /// Soulignement d'un nom navigable (Ctrl enfoncé).
+    pub link: Color32,
     /// Couleur du texte par catégorie, dans l'ordre de [`HighlightKind::ALL`].
     pub syntax: [Color32; 15],
     /// Fond (plages, lignes) et teinte franche (gouttière) par [`Tone`], dans
@@ -58,6 +60,7 @@ impl EditorTheme {
             ime_underline: rgb(0xe6, 0xe8, 0xec),
             scrollbar: rgba(0xff, 0xff, 0xff, 0x22),
             scrollbar_hover: rgba(0xff, 0xff, 0xff, 0x44),
+            link: rgb(0x7f, 0xb4, 0xf5),
             syntax: [
                 rgb(0xd0, 0x8b, 0x5b), // mot-clé
                 rgb(0x8f, 0xb5, 0x73), // chaîne
@@ -108,6 +111,7 @@ impl EditorTheme {
             ime_underline: rgb(0x10, 0x10, 0x10),
             scrollbar: rgba(0, 0, 0, 0x22),
             scrollbar_hover: rgba(0, 0, 0, 0x44),
+            link: rgb(0x1a, 0x5f, 0xc8),
             syntax: [
                 rgb(0x00, 0x33, 0xb3), // mot-clé
                 rgb(0x06, 0x7d, 0x17), // chaîne

@@ -25,11 +25,13 @@ pub enum Step {
     Project { path: PathBuf, wait: bool },
     /// `fullscreen on|off`
     Fullscreen(bool),
-    /// `file <chemin>[:ligne[:colonne]]` (relatif à la racine du projet)
+    /// `file <chemin>[:ligne[:colonne]]` (relatif à la racine du projet) ; `file-nowait`
+    /// n'attend pas la fin des tâches de fond (essayer la navigation pendant l'indexation).
     File {
         path: PathBuf,
         line: Option<u32>,
         column: Option<u32>,
+        wait: bool,
     },
     /// `action <identifiant>`
     Action(String),
@@ -172,7 +174,7 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
                 "off" => Step::Fullscreen(false),
                 _ => return Err(fail("`fullscreen on` ou `fullscreen off`")),
             },
-            "file" if !rest.is_empty() => {
+            "file" | "file-nowait" if !rest.is_empty() => {
                 // `chemin:ligne:colonne` ; un `C:` de lecteur n'est pas un suffixe.
                 let mut path = rest.to_owned();
                 let mut numbers = Vec::new();
@@ -190,6 +192,7 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
                     path: PathBuf::from(path),
                     line: numbers.first().copied(),
                     column: numbers.get(1).copied(),
+                    wait: word == "file",
                 }
             }
             "action" if !rest.is_empty() => Step::Action(rest.to_owned()),
@@ -393,7 +396,8 @@ mod tests {
             Step::File {
                 path: PathBuf::from("src/a.php"),
                 line: Some(12),
-                column: Some(3)
+                column: Some(3),
+                wait: true
             }
         );
         assert_eq!(steps[3].1, Step::Type("usct".into()));
@@ -415,7 +419,8 @@ mod tests {
             Step::File {
                 path: PathBuf::from("C:/dossier/fichier.js"),
                 line: None,
-                column: None
+                column: None,
+                wait: true
             }
         );
         assert_eq!(
@@ -423,7 +428,8 @@ mod tests {
             Step::File {
                 path: PathBuf::from("C:/d/f.js"),
                 line: Some(7),
-                column: None
+                column: None,
+                wait: true
             }
         );
     }

@@ -78,13 +78,6 @@ impl ProjectTree {
         }
     }
 
-    /// Le service d'index a été remplacé (réglages) : les prochains listages l'utilisent.
-    pub fn set_index(&mut self, index: Arc<IndexService>) {
-        if let Some((current, _)) = &mut self.lister {
-            *current = index;
-        }
-    }
-
     /// Nouveau projet : l'arbre repart de zéro, racine dépliée.
     pub fn reset(&mut self, root: PathBuf, index: Arc<IndexService>, channel: Channel) {
         self.listings.clear();

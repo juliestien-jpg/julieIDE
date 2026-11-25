@@ -330,6 +330,10 @@ pub fn task_label(kind: &'static str) -> &'static str {
         "vcs.discard" => "Annulation des modifications",
         "terminal.profiles" => "Détection des terminaux",
         "phpunit.run" => "Exécution des tests",
+        "index.symbols" => "Indexation des symboles",
+        "index.unsaved" => "Prise en compte du texte non enregistré",
+        "index.usages" => "Recherche des usages",
+        "index.symbols_cache" => "Écriture du cache des symboles",
         other => other,
     }
 }
@@ -1828,7 +1832,6 @@ pub const MENU_TERM_NEW: &str = "Nouveau terminal";
 pub const ACTION_TERM_NEW_CMD: &str = "cmd";
 pub const ACTION_TERM_NEW_BASH: &str = "Git Bash";
 
-pub const REASON_SOON: &str = "Bientôt : la navigation arrive avec le prochain lot.";
 pub const REASON_READ_ONLY: &str = "Le document est en lecture seule.";
 pub const REASON_NOT_A_TEST: &str =
     "Ce n'est ni un fichier de test (*Test.php) ni une configuration PHPUnit.";
@@ -1917,6 +1920,152 @@ pub fn hit_excluded(name: &str) -> String {
     format!("{name} retiré des résultats de cette recherche.")
 }
 // ===== FIN DES TEXTES v1 bis =====
+
+// ----- Navigation : aller à la déclaration, trouver les usages ------------------------------
+pub const ACTION_NAV_BACK: &str = "Position précédente";
+pub const ACTION_NAV_FORWARD: &str = "Position suivante";
+pub const ACTION_USAGE_NEXT: &str = "Usage suivant";
+pub const ACTION_USAGE_PREVIOUS: &str = "Usage précédent";
+pub const ACTION_TOGGLE_USAGES: &str = "Usages";
+pub const TOOL_USAGES: &str = "Usages";
+pub const REASON_NO_CODE_FILE: &str = "Ouvrez un fichier PHP, JavaScript ou TypeScript.";
+pub const NAV_DYNAMIC_NAME: &str = "Nom calculé à l'exécution.";
+pub const NAV_NO_USAGES: &str = "Aucun usage trouvé.";
+pub const NAV_LIST_FILTER_HINT: &str = "Tapez pour filtrer par nom ou par fichier";
+pub const NAV_LIST_NO_MATCH: &str = "Aucune ligne ne correspond au filtre.";
+pub const NAV_LIST_KEYS: &str = "Entrée : ouvrir   Échap : fermer";
+pub const NAV_CONSTRUCTOR: &str = "constructeur";
+pub const NAV_LIBRARY: &str = "bibliothèque";
+
+pub fn nav_not_in_project(name: &str) -> String {
+    format!("Aucune déclaration dans le projet pour « {name} » (fonction du langage ?).")
+}
+
+pub fn nav_not_found(name: &str) -> String {
+    format!("Aucune déclaration trouvée pour « {name} ».")
+}
+
+pub fn nav_external_module(specifier: &str) -> String {
+    format!("Module externe : non résolu (« {specifier} »).")
+}
+
+pub fn nav_indexing(percent: u8) -> String {
+    format!("Indexation en cours ({percent} %), réessayez dans un instant.")
+}
+
+pub fn symbol_kind_label(kind: julie_index::SymbolKind) -> &'static str {
+    use julie_index::SymbolKind::*;
+    match kind {
+        Namespace => "espace de noms",
+        Class => "classe",
+        Interface => "interface",
+        Trait => "trait",
+        Enum => "énumération",
+        EnumCase => "cas",
+        Function => "fonction",
+        Method => "méthode",
+        Property => "propriété",
+        ClassConstant => "constante de classe",
+        Constant => "constante",
+        Variable => "variable",
+        Parameter => "paramètre",
+        Import => "import",
+        TypeAlias => "alias de type",
+    }
+}
+
+/// Titre de la liste surgissante des cibles.
+pub fn nav_list_title(guess: Option<&julie_index::Guess>, name: &str) -> String {
+    match guess {
+        Some(julie_index::Guess::UnknownReceiver {
+            receiver,
+            member,
+            kind,
+        }) => {
+            let what = match kind {
+                julie_index::SymbolKind::Property => "propriétés",
+                julie_index::SymbolKind::ClassConstant => "constantes",
+                _ => "méthodes",
+            };
+            // L'index peut ne pas donner le texte du receveur (`$this->model`) : on ne l'invente pas.
+            if receiver.trim().is_empty() {
+                format!("Type du receveur inconnu : {what} nommées {member}")
+            } else {
+                format!("Type de {receiver} inconnu : {what} nommées {member}")
+            }
+        }
+        Some(julie_index::Guess::GlobalName { name }) => {
+            format!("Nom global « {name} » : déclarations possibles (type inconnu)")
+        }
+        None => format!("Aller à « {name} »"),
+    }
+}
+
+pub fn nav_usages_pick_title(name: &str) -> String {
+    format!("Usages de quelle déclaration de « {name} » ?")
+}
+
+/// « 5 usages sûrs dans 3 fichiers, 1 appel possible » (le compte des appels possibles
+/// est toujours dit, même à 0 ; jamais « tous »).
+pub fn usages_headline(
+    name: &str,
+    sure: usize,
+    files_sure: usize,
+    possible: usize,
+    running: bool,
+) -> String {
+    let mut text = format!(
+        "{name} — {} dans {}, {}",
+        plural(sure, "usage sûr", "usages sûrs"),
+        plural(files_sure, "fichier", "fichiers"),
+        plural(possible, "appel possible", "appels possibles"),
+    );
+    if running {
+        text.push_str(" — recherche en cours…");
+    }
+    text
+}
+
+pub const USAGES_GROUP_SURE: &str = "Usages";
+pub const USAGES_GROUP_POSSIBLE: &str = "Appels possibles (type inconnu)";
+pub const USAGES_INCLUDE_LIBRARIES: &str = "Inclure les bibliothèques";
+pub const USAGES_INCLUDE_TIP: &str =
+    "Chercher aussi dans vendor et node_modules (plus lent) : relance la recherche.";
+pub const USAGES_RELAUNCH: &str = "Relancer";
+pub const USAGES_STOP: &str = "Arrêter";
+pub const USAGES_CLOSE_TAB: &str = "Fermer cet onglet";
+pub const USAGES_STOPPED: &str = "Recherche interrompue : résultats partiels.";
+pub const USAGES_HELP_MEMBER: &str = "Les appels sur des valeurs de type inconnu sont listés à part. Les appels dynamiques ($obj->$nom(), call_user_func, noms dans des chaînes) ne sont pas cherchés.";
+pub const USAGES_NONE_YET: &str = "Aucun usage pour l'instant.";
+pub const USAGES_EMPTY: &str =
+    "Aucune recherche d'usages : Alt+F7 sur un nom, ou Ctrl+clic sur sa déclaration.";
+pub const USAGES_LIBRARY_TAG: &str = "bibliothèque";
+pub const USAGES_UNSAVED_TAG: &str = "non enregistré";
+
+pub fn usages_indexing_banner(percent: u8) -> String {
+    format!("Indexation en cours ({percent} %) : résultats incomplets.")
+}
+
+pub const USAGES_INDEX_WAS_INCOMPLETE: &str =
+    "L'indexation n'était pas finie au lancement : résultats incomplets, relancez la recherche.";
+
+pub fn usages_files_read(n: usize) -> String {
+    format!("{} lus", plural(n, "fichier", "fichiers"))
+}
+
+pub fn usages_libraries_skipped(n: usize) -> String {
+    format!(
+        "{} de bibliothèques non cherchés (case « Inclure les bibliothèques »)",
+        plural(n, "fichier", "fichiers")
+    )
+}
+
+pub fn usages_unreadable(n: usize) -> String {
+    format!(
+        "{} illisibles, binaires ou trop gros ignorés",
+        plural(n, "fichier", "fichiers")
+    )
+}
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,38 @@
+# Navigation : liste surgissante et fenêtre Usages en 1280x720 à 150 %, en plein écran à 100 %,
+# thèmes sombre et clair.
+# Décor : bash tests/fixtures/navigation-copie.sh
+# Captures : target\essais\nav-ecrans\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+scale 1.5
+file src/Service/UserService.php:37:25
+ui nav.ctrl-click 37:25
+wait-idle
+screenshot target/essais/nav-ecrans/01-liste-150.png
+key Escape
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+screenshot target/essais/nav-ecrans/02-usages-150.png
+action view.bottom_tall
+wait 300
+screenshot target/essais/nav-ecrans/03-usages-150-haut.png
+
+scale 1.0
+fullscreen on
+wait 800
+theme light
+file src/Service/UserService.php:25:23
+ui nav.ctrl-click 25:23
+wait-idle
+screenshot target/essais/nav-ecrans/04-new-plein-ecran-clair.png
+key Escape
+ui nav.hover 33:37
+wait 600
+screenshot target/essais/nav-ecrans/05-survol-clair.png
+ui nav.hover-off
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+screenshot target/essais/nav-ecrans/06-usages-plein-ecran-clair.png
+fullscreen off
+quit

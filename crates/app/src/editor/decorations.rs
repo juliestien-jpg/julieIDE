@@ -91,11 +91,15 @@ pub struct Decorations {
     /// Trait horizontal au-dessus de la ligne (bloc supprimé dans un diff ; une
     /// ligne égale au nombre de lignes trace le trait sous la dernière).
     pub separators: Vec<(u32, Tone)>,
+    /// Mot navigable sous le pointeur (Ctrl enfoncé) : souligné, et le pointeur
+    /// devient une main au-dessus. L'éditeur ne sait pas d'où il vient.
+    pub link: Option<TextRange>,
 }
 
 impl Decorations {
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.link.is_none()
+            && self.lines.is_empty()
             && self.ranges.is_empty()
             && self.gutter.is_empty()
             && self.separators.is_empty()

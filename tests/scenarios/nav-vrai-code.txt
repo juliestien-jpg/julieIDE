@@ -1,0 +1,43 @@
+# Navigation sur du vrai code : copie jetable de quelques fichiers de `lab` (lecture seule sur lab).
+# Décor : bash tests/fixtures/navigation-lab-copie.sh  (dossier jsessai-lab\proj du dossier temporaire)
+# Captures et états : target\essais\nav-lab\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-lab/proj
+file classes/General/Controllers/RiskController.php:29:35
+
+# Propriété sans type : la cible est devinée (une seule candidate, mais présentée comme devinée).
+ui nav.ctrl-click 29:35
+wait-idle
+screenshot target/essais/nav-lab/01-devine.png
+state target/essais/nav-lab/01-devine.json
+key Escape
+
+# $this->méthode() : sûr, saut direct.
+file classes/General/Controllers/RiskController.php:55:35
+ui nav.ctrl-click 55:35
+wait-idle
+state target/essais/nav-lab/02-sur.json
+key Ctrl+Alt+Left
+wait-idle
+
+# new RiskModel() : la classe et son constructeur.
+file classes/General/Controllers/RiskController.php:24:31
+ui nav.ctrl-click 24:31
+wait-idle
+screenshot target/essais/nav-lab/03-new.png
+state target/essais/nav-lab/03-new.json
+key Escape
+
+# session_start() : fonction de PHP, aucun saut, message.
+file classes/General/Controllers/RiskController.php:10:12
+ui nav.ctrl-click 10:12
+wait-idle
+state target/essais/nav-lab/04-natif.json
+screenshot target/essais/nav-lab/04-natif.png
+
+# Usages de la méthode du modèle : l'appel passe par une propriété sans type -> « possible ».
+file classes/General/Models/RiskModel.php:32:21
+ui nav.ctrl-click 32:21
+wait-idle
+state target/essais/nav-lab/05-usages.json
+screenshot target/essais/nav-lab/05-usages.png
+quit

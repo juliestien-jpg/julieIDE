@@ -1,0 +1,40 @@
+# Navigation : un onglet modifié non enregistré est pris en compte (critère 17), puis
+# l'annulation et l'enregistrement rendent la main au disque ; copie jetable obligatoire
+# (le test enregistre le fichier).
+# Décor : bash tests/fixtures/navigation-copie.sh
+# Captures et états : target\essais\nav-modifie\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+file src/Service/UserService.php:28:1
+type $this->current->getName();
+wait 700
+state target/essais/nav-modifie/01-modifie.json
+
+# Usages de User::getName depuis la déclaration : 6 sûrs (le nouvel appel compte).
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+state target/essais/nav-modifie/02-six.json
+action view.bottom_tall
+screenshot target/essais/nav-modifie/02-six.png
+
+# Annuler la frappe (Ctrl+Z) : retour à 5 après la pause de frappe.
+file src/Service/UserService.php:28:1
+key Ctrl+Z
+wait 700
+state target/essais/nav-modifie/03-annule.json
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+state target/essais/nav-modifie/04-cinq.json
+
+# Retaper, enregistrer (Ctrl+S) : l'index relit le disque, toujours 6.
+file src/Service/UserService.php:28:1
+type $this->current->getName();
+key Ctrl+S
+wait 900
+state target/essais/nav-modifie/05-enregistre.json
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+state target/essais/nav-modifie/06-six-disque.json
+quit

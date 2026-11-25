@@ -1,0 +1,14 @@
+﻿# Navigation pendant la construction de l'index des symboles : progression dans la barre
+# d'état, message « Indexation en cours (n %) » si rien n'est trouvé.
+# Décor : python tests/fixtures/navigation-gros.py  (2 000 petits fichiers PHP dans jsessai-synth/proj ; supprimer son .juliestorm pour repartir sans cache).
+# Captures et états : target\essais\nav-indexation\
+project-nowait C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-synth/proj
+wait 800
+file-nowait src/d3/Class3_5.php:7:73
+ui nav.ctrl-click 7:73
+wait 1500
+screenshot target/essais/nav-indexation/01-progression.png
+state target/essais/nav-indexation/01-progression.json
+wait-idle
+state target/essais/nav-indexation/02-fini.json
+quit

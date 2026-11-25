@@ -1,0 +1,43 @@
+﻿# Navigation : liste surgissante (cibles devinées « type inconnu », new X avec constructeur),
+# filtre par frappe, choix au clavier, Échap.
+# Décor : bash tests/fixtures/navigation-copie.sh
+# Captures et états : target\essais\nav-liste\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+file src/Service/UserService.php:37:25
+
+# $other->getName() : trois candidats devinés, ordre de la spec (critère 3).
+ui nav.ctrl-click 37:25
+wait-idle
+screenshot target/essais/nav-liste/01-devine.png
+state target/essais/nav-liste/01-devine.json
+
+# Filtre par frappe, puis Échap : aucun saut.
+type admin
+wait 200
+screenshot target/essais/nav-liste/02-filtre.png
+state target/essais/nav-liste/02-filtre.json
+key Escape
+wait 200
+state target/essais/nav-liste/03-echap.json
+
+# Même liste, choisie par Bas, Bas, Entrée : Order::getName n'est pas la dernière ; on prend la 3e.
+ui nav.ctrl-click 37:25
+wait-idle
+key Down
+key Down
+key Enter
+wait-idle
+state target/essais/nav-liste/04-choisi.json
+key Ctrl+Alt+Left
+wait-idle
+
+# new User('a') : la classe, plus la ligne du constructeur (décision n° 9).
+file src/Service/UserService.php:25:23
+ui nav.ctrl-click 25:23
+wait-idle
+screenshot target/essais/nav-liste/05-new.png
+state target/essais/nav-liste/05-new.json
+ui nav.choose __construct
+wait-idle
+state target/essais/nav-liste/06-constructeur.json
+quit

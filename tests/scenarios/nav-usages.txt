@@ -1,0 +1,50 @@
+# Navigation : Ctrl+clic sur une déclaration -> fenêtre Usages (sûrs / possibles), Alt+F7,
+# bibliothèques (un seul usage : saut direct), case « Inclure les bibliothèques ».
+# Décor : bash tests/fixtures/navigation-copie.sh
+# Captures et états : target\essais\nav-usages\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+file src/Model/User.php:17:21
+
+# Ctrl+clic sur la déclaration de User::getName : 5 sûrs + 1 possible (critère 12).
+ui nav.ctrl-click 17:21
+wait-idle
+screenshot target/essais/nav-usages/01-getname.png
+state target/essais/nav-usages/01-getname.json
+
+# Parcours : Ctrl+Alt+Bas ouvre l'usage suivant.
+key Ctrl+Alt+Down
+wait-idle
+state target/essais/nav-usages/02-suivant.json
+
+# Alt+F7 sur la classe User : 7 usages dans 2 fichiers (critère 14).
+file src/Model/User.php:4:8
+key Alt+F7
+wait-idle
+screenshot target/essais/nav-usages/03-classe.png
+state target/essais/nav-usages/03-classe.json
+
+# Alt+F7 sur Admin::getName (1 sûr, 1 possible) et Order::getName (0 sûr, 1 possible) (critère 13).
+file src/Model/Admin.php:6:21
+key Alt+F7
+wait-idle
+state target/essais/nav-usages/04-admin.json
+file src/Legacy/Order.php:6:21
+key Alt+F7
+wait-idle
+screenshot target/essais/nav-usages/05-order.png
+state target/essais/nav-usages/05-order.json
+
+# Ctrl+clic sur Logger::log (vendor) : un seul usage -> saut direct (critère 16).
+file vendor/acme/logger/src/Logger.php:6:21
+state target/essais/nav-usages/06-logger-avant.json
+ui nav.ctrl-click 6:21
+wait-idle
+state target/essais/nav-usages/06-logger.json
+
+# Case « Inclure les bibliothèques » sur un onglet Usages.
+ui usages.tab 1
+ui usages.include on
+wait-idle
+state target/essais/nav-usages/07-include.json
+screenshot target/essais/nav-usages/07-include.png
+quit

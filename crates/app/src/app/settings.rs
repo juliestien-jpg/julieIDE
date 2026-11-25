@@ -108,19 +108,17 @@ impl JulieStormApp {
                 settings.excluded.insert(0, (*always).to_owned());
             }
         }
-        let tasks = self.tasks.clone();
         let Some(project) = &mut self.project else {
             return;
         };
+        // Le service reste le même : s'il y a un changement, tout est relancé (fichiers
+        // puis symboles) et la tâche d'indexation est rendue.
         project.index.cancel_search();
-        if let Some(id) = self.scan_task.take() {
-            tasks.cancel(id);
-        }
-        let index = Arc::new(IndexService::new(tasks, project.project.clone(), settings));
-        self.scan_task = Some(index.scan().id());
-        project.index = index.clone();
+        let Some(scan) = project.index.set_settings(settings) else {
+            return;
+        };
+        self.scan_task = Some(scan.id());
         project.index_ready = false;
-        self.tree.set_index(index);
         self.tree.refresh();
         self.find.refresh_now();
     }

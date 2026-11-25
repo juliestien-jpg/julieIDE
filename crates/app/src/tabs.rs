@@ -13,7 +13,7 @@ use julie_core::{Tasks, TextPosition};
 use julie_index::UnsavedFiles;
 use julie_text::{DiskState, Document, LoadedFile, SaveOutcome};
 
-use crate::editor::{Decorations, EditorView};
+use crate::editor::{Decorations, EditorIntent, EditorView};
 use crate::icons::{self, Icon};
 use crate::target::{FileRef, MenuRequest, Target, Zone};
 use crate::texts as t;
@@ -532,8 +532,15 @@ impl Editors {
     }
 
     /// L'éditeur actif, avec son éventuel bandeau. Rend ce que le bandeau demande.
-    pub fn show_active(&mut self, ui: &mut Ui, p: &Palette) -> Option<BannerIntent> {
-        let editor = self.items.get_mut(self.active)?;
+    pub fn show_active(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        link: Option<julie_core::TextRange>,
+    ) -> (Option<BannerIntent>, Vec<EditorIntent>) {
+        let Some(editor) = self.items.get_mut(self.active) else {
+            return (None, Vec::new());
+        };
         let mut intent = None;
         if let Some(notice) = editor.notice {
             let text = match notice {
@@ -573,8 +580,12 @@ impl Editors {
                     });
                 });
         }
-        let decorations = Decorations::default();
+        let decorations = Decorations {
+            link,
+            ..Decorations::default()
+        };
         let output = editor.view.show(ui, &mut editor.document, &decorations);
+        let editor_intents = output.intents.clone();
         if output.response.secondary_clicked() {
             if let Some(pos) = output.response.interact_pointer_pos() {
                 // Dans la sélection : on la garde ; ailleurs, le curseur ira au point cliqué.
@@ -593,6 +604,6 @@ impl Editors {
                 });
             }
         }
-        intent
+        (intent, editor_intents)
     }
 }

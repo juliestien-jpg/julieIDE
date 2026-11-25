@@ -16,9 +16,12 @@ pub enum BottomTool {
     Tests,
     Search,
     Terminal,
+    /// Résultats de « Trouver les usages » : visible seulement tant qu'il y a des recherches.
+    Usages,
 }
 
 impl BottomTool {
+    /// Les fenêtres toujours présentes (Usages s'ajoute quand elle a des onglets).
     pub const ALL: [BottomTool; 4] = [
         BottomTool::Git,
         BottomTool::Tests,
@@ -32,6 +35,7 @@ impl BottomTool {
             BottomTool::Tests => t::TOOL_TESTS,
             BottomTool::Search => t::TOOL_SEARCH,
             BottomTool::Terminal => t::TOOL_TERMINAL,
+            BottomTool::Usages => t::TOOL_USAGES,
         }
     }
 
@@ -41,6 +45,7 @@ impl BottomTool {
             BottomTool::Tests => "tests",
             BottomTool::Search => "search",
             BottomTool::Terminal => "terminal",
+            BottomTool::Usages => "usages",
         }
     }
 
@@ -50,6 +55,7 @@ impl BottomTool {
             BottomTool::Tests => Icon::Flask,
             BottomTool::Search => Icon::Search,
             BottomTool::Terminal => Icon::Terminal,
+            BottomTool::Usages => Icon::Search,
         }
     }
 
@@ -59,6 +65,7 @@ impl BottomTool {
             BottomTool::Tests => ActionId::ToggleTests,
             BottomTool::Search => ActionId::ToggleSearch,
             BottomTool::Terminal => ActionId::ToggleTerminal,
+            BottomTool::Usages => ActionId::ToggleUsages,
         }
     }
 }
@@ -132,12 +139,20 @@ pub fn side_strip(
 
 /// Ligne d'onglets de la fenêtre du bas. Rend l'onglet cliqué, et si la croix
 /// de repli a été cliquée.
-pub fn bottom_header(ui: &mut Ui, p: &Palette, tools: &ToolWindows) -> (Option<BottomTool>, bool) {
+pub fn bottom_header(
+    ui: &mut Ui,
+    p: &Palette,
+    tools: &ToolWindows,
+    has_usages: bool,
+) -> (Option<BottomTool>, bool) {
     let mut clicked = None;
     let mut close = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        for tool in BottomTool::ALL {
+        let shown = BottomTool::ALL
+            .into_iter()
+            .chain(has_usages.then_some(BottomTool::Usages));
+        for tool in shown {
             let selected = tools.bottom == tool;
             let galley = ui.painter().layout_no_wrap(
                 tool.label().to_owned(),

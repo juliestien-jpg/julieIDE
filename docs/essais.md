@@ -40,7 +40,7 @@ espaces des chemins sont donc permis).
 |---|---|
 | `project <dossier>` | Ouvre le projet, puis attend la fin des tâches de fond (index prêt, Git lu, arbre listé). |
 | `project-nowait <dossier>` | Idem sans attendre (pour photographier l'indexation en cours). |
-| `file <chemin>[:ligne[:colonne]]` | Ouvre un fichier (relatif à la racine du projet) à la ligne donnée (base 1), puis attend. |
+| `file <chemin>[:ligne[:colonne]]` | Ouvre un fichier (relatif à la racine du projet) à la ligne donnée (base 1), puis attend. `file-nowait` : idem sans attendre la fin des tâches de fond (navigation pendant la construction de l'index des symboles). |
 | `action <identifiant>` | Déclenche une action du registre (voir la liste ci-dessous). Échec si elle est indisponible dans l'état courant (grisée). |
 | `type <texte>` | Saisit le texte dans le champ qui a le focus (éditeur, champ d'une fenêtre flottante, terminal). Le texte est celui de la ligne, après le premier espace. |
 | `key <combinaison>` | Appuie sur une touche : `Enter`, `Escape`, `Tab`, `Down`/`Up`/`Left`/`Right` (ou `Bas`, `Haut`, `Gauche`, `Droite`), `F4`…, une lettre, un chiffre ; avec `Ctrl+`, `Alt+`, `Shift+` (ou `Maj+`). Ex. `key Ctrl+Maj+N`, `key Alt+Right`, `key Ctrl+A`. |
@@ -400,10 +400,65 @@ avant une capture où elles comptent.
 | `reglages-ecrire.txt` | `backoffice-copie.sh` | arguments et variable écrits, guillemet non fermé refusé, retour à l'héritage, thème clair écrit |
 | `menus-clics-droits.txt` | `phpunit-copy.sh` + `git init` + un non suivi `nouveau.txt` | menus de l'éditeur, de l'arbre (lancer les tests), des tests, du terminal, suppression vers la corbeille |
 
+### Navigation dans le code (v1 ter)
+
+Les étapes `ui nav.*` jouent de **vrais** événements de souris et de clavier, aux coordonnées d'un
+caractère du fichier **actif** (`ligne:colonne` à partir de 1, comme `file`) : le fichier doit être
+ouvert et la ligne visible (faire `file chemin:L:C` d'abord, qui centre la ligne).
+
+| Commande | Effet |
+|---|---|
+| `nav.ctrl-click L:C` | Ctrl+clic sur le caractère : aller à la déclaration (ou usages si c'est une déclaration). |
+| `nav.click L:C` / `nav.rclick L:C` | Clic gauche / droit (le clic droit place d'abord le curseur puis ouvre le menu : **attendre 1,5 s**, `wait-idle` ne couvre pas l'ouverture différée du menu). |
+| `nav.hover L:C` | Pointeur sur le caractère, **Ctrl maintenu** (soulignement et main si le mot a une cible). Laisser passer 300 à 600 ms (anti-rebond 60 ms, infobulle à 500 ms). |
+| `nav.hover-off` | Relâche Ctrl et sort le pointeur. |
+| `nav.mouse back\|forward` | Boutons « précédent » / « suivant » de la souris. |
+| `nav.choose <n\|texte>` | Choisit la n-ième ligne (base 1) de la liste surgissante, ou la première dont le nom qualifié contient le texte, puis presse Entrée. |
+| `usages.select <n>` / `usages.open` | Sélectionne le n-ième usage (base 1) de l'onglet affiché / l'ouvre. |
+| `usages.include on\|off` | Case « Inclure les bibliothèques » (relance la recherche). |
+| `usages.tab <n>` / `usages.close` / `usages.stop` | Onglet n (base 1) ; ferme l'onglet affiché ; arrête la recherche en cours. |
+
+Touches utiles par `key` : `Ctrl+B`, `Alt+F7`, `Ctrl+Alt+Left` / `Ctrl+Alt+Right`, `Ctrl+Alt+Down` /
+`Ctrl+Alt+Up` (usage suivant / précédent), et, pendant la liste surgissante, `Up`, `Down`, `Enter`,
+`Escape`, `type <filtre>`. `action view.bottom_tall` agrandit la fenêtre du bas pour photographier
+l'arbre des usages.
+
+État JSON : `nav` (`link` : mot souligné `{path, range}` ; `hover_info` : ligne de l'infobulle ;
+`popup` : `title`, `guessed`, `filter`, `selected`, `rows` = « genre | nom qualifié | fichier:ligne |
+code », `libraries` ; `history` : `back` / `forward` ; `indexing` : pourcentage de l'index des
+symboles ou nul ; `unsaved_sent` : onglets modifiés dont le texte est connu de l'index) et `usages`
+(`tabs`, chacun : `headline`, `running`, `sure`, `possible`, `files_with_sure`, `selected`, `summary`,
+`footer`, `rows` = l'arbre affiché : `# groupe`, `fichier (n)`, `ligne: extrait`). Le message d'une
+navigation sans cible est dans `status.message`.
+
+Décors : `bash tests/fixtures/navigation-copie.sh` (copie du projet d'essai dans
+`%TEMP%\jsessai-nav\proj`, à refaire entre deux scénarios qui écrivent) et
+`bash tests/fixtures/navigation-lab-copie.sh` (quelques fichiers de `lab`, **copiés** dans
+`%TEMP%\jsessai-lab\proj` : on n'ouvre jamais `lab` lui-même, le cache `.juliestorm\` y serait écrit).
+`python tests/fixtures/navigation-gros.py` génère 2 000 petites classes (index froid : supprimer
+leur `.juliestorm\`) pour `nav-indexation*.txt` ; sur 6 000 fichiers la construction dépasse 60 s en
+version de développement et `wait-idle` rend 2. Lancer les scénarios avec un `JULIESTORM_STATE_DIR`
+vide et neuf : un dossier qui garde un `last_project.txt` fait rouvrir ce projet en plus.
+
+| Scénario | Ce qu'il joue |
+|---|---|
+| `nav-saut-direct.txt` | survol avec Ctrl (soulignement, infobulle, `strlen` sans lien), Ctrl+clic sur `$user->getName()` (saut direct), Ctrl+Alt+Gauche / Droite, bouton précédent de la souris, `strlen` (message) |
+| `nav-liste.txt` | `$other->getName()` : liste « type inconnu » (ordre, filtre, Échap, choix au clavier), `new User('a')` : classe et constructeur |
+| `nav-usages.txt` | Ctrl+clic sur une déclaration → fenêtre Usages (sûrs / possibles), Ctrl+Alt+Bas, Alt+F7 sur classe / méthode, un seul usage dans `vendor` : saut direct, case « Inclure les bibliothèques » |
+| `nav-onglet-modifie.txt` | onglet modifié non enregistré pris en compte (5 puis 6 usages), annulation, enregistrement (**écrit dans la copie**) |
+| `nav-js.txt` | `fd`, `formatDate` (réexport), `Api`, `api.get`, chemin `'./util'`, usages de `formatDate` |
+| `nav-menu-contextuel.txt` | clic droit dans l'éditeur (curseur d'abord), « Aller à la déclaration », « Trouver les usages », Ctrl+B, `Broken.php` |
+| `nav-ecrans.txt` | liste et usages à 150 %, plein écran, thème clair, survol |
+| `nav-vrai-code.txt` | copie de quelques fichiers de `lab` : propriété sans type, `new`, fonction native, usages |
+| `nav-indexation.txt`, `nav-indexation-message.txt` | progression « Indexation des symboles… n % » dans la barre d'état, message « Indexation en cours (n %) » |
+
 ## Ce que le mode scénario ne couvre pas
 
 - Le **sélecteur de dossiers du système** (`file.open_folder`) : fenêtre native, hors
   de la fenêtre egui. Le reste du chemin (`project <dossier>`) est identique.
+- Une **vraie** frappe du clavier ou clic de la souris passant par le pilote graphique : les étapes
+  injectent les événements dans egui, après le système. Ce qu'un pilote ferait des touches
+  (Ctrl+Alt+flèches de certains pilotes Intel) ne s'y voit donc pas.
 - Le glisser-déposer, la molette, les infobulles (survol) : pas d'étape
   correspondante. `click` couvre le clic gauche, `rclick` le clic droit (les raisons des entrées
   grisées, normalement en infobulle, se lisent dans `context_menu.entries[].reason`). Le défilement des listes se

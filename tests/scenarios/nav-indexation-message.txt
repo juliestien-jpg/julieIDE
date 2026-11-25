@@ -1,0 +1,16 @@
+# Navigation pendant la construction de l index : rien trouve -> message avec le pourcentage.
+# Decor : python tests/fixtures/navigation-gros.py (puis supprimer jsessai-synth/proj/.juliestorm pour un index froid) ; le scenario reecrit un fichier de la copie.
+# Captures et etats : target\essais\nav-indexation\
+project-nowait C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-synth/proj
+wait 500
+external-write C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-synth/proj/src/d3/Class3_5.php <?php\nundefined_fn_xyz();\n
+file-nowait src/d3/Class3_5.php:2:3
+ui nav.ctrl-click 2:3
+wait 400
+state target/essais/nav-indexation/03-message.json
+screenshot target/essais/nav-indexation/03-message.png
+wait-idle
+ui nav.ctrl-click 2:3
+wait-idle
+state target/essais/nav-indexation/04-apres.json
+quit

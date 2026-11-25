@@ -41,6 +41,7 @@ use crate::gitdialogs::Dialog as GitDialog;
 use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, MergeCheck, RepoState};
 use crate::icons::{self, Icon};
 use crate::merge::{self, MergeDialog, MergeIntent};
+use crate::nav::NavState;
 use crate::project::{self, Channel, GitInfo, Msg, ProjectState};
 use crate::safety;
 use crate::scenario::{self, Injection, Scenario, Step};
@@ -57,10 +58,12 @@ use crate::texts as t;
 use crate::theme::{self, Palette};
 use crate::tools::{self, BottomTool, ToolWindows};
 use crate::tree::ProjectTree;
+use crate::usages::UsagesView;
 
 mod fsops;
 mod gitflow;
 mod menus;
+mod navigation;
 mod scenario_ui;
 mod settings;
 
@@ -218,6 +221,9 @@ pub struct JulieStormApp {
     /// Menu à ouvrir quelques images plus tard (le temps qu'un clic droit place le curseur).
     deferred_menu: Option<(u8, Target)>,
     deferred_click_pos: egui::Pos2,
+    // ----- v1 : navigation dans le code ------------------------------------------
+    nav: NavState,
+    usages: UsagesView,
 }
 
 impl JulieStormApp {
@@ -306,6 +312,8 @@ impl JulieStormApp {
             discard_delete_added: false,
             deferred_menu: None,
             deferred_click_pos: egui::Pos2::ZERO,
+            nav: NavState::default(),
+            usages: UsagesView::default(),
         };
         app.restart_settings_watcher(None);
 
@@ -473,6 +481,7 @@ impl JulieStormApp {
         if let Some(old) = &self.project {
             old.index.cancel_search();
         }
+        self.nav_reset_for_project();
         if let Some(id) = self.scan_task.take() {
             self.tasks.cancel(id);
         }
@@ -699,7 +708,13 @@ impl JulieStormApp {
                 if self.user_opens.remove(&loaded.path) {
                     self.clear_error_message();
                 }
+                let reloaded = loaded.path.clone();
+                let was_open = self.editors.index_of(&reloaded).is_some();
                 self.editors.on_loaded(loaded, &self.waker, self.dark);
+                // Un onglet rechargé : le fichier a changé hors de l'IDE, l'index le relit.
+                if let (true, Some(project)) = (was_open, &self.project) {
+                    project.index.update(vec![reloaded]);
+                }
             }
             TextEvent::LoadFailed { path, error } => {
                 self.editors.on_load_failed(&path);
@@ -765,8 +780,15 @@ impl JulieStormApp {
             IndexEvent::TextMatches(batch) => self.find.on_matches(task, batch),
             IndexEvent::TextSearchFinished(summary) => self.find.on_finished(task, summary),
             IndexEvent::Preview(preview) => self.find.on_preview(task, preview),
-            // Index des symboles et navigation : consommés au lot de la navigation.
-            _ => {}
+            // Index des symboles : la progression passe par la barre d'état (tâche de
+            // fond) ; les réponses de navigation et d'usages ignorent celles de
+            // demandes périmées (`task`).
+            IndexEvent::SymbolsReady(_) | IndexEvent::SymbolsUpdated { .. } => {
+                self.ctx.request_repaint();
+            }
+            IndexEvent::Navigation(result) => self.on_navigation(task, result),
+            IndexEvent::Usages(batch) => self.on_usages(task, batch),
+            IndexEvent::UsagesFinished(summary) => self.on_usages_finished(task, summary),
         }
     }
 
@@ -1061,6 +1083,14 @@ impl JulieStormApp {
             ActionId::GitCommit | ActionId::ToggleCommit | ActionId::GitRefresh => {
                 self.repo_state() == RepoState::Ready
             }
+            ActionId::NavBack => self.nav.history.can_back(),
+            ActionId::NavForward => self.nav.history.can_forward(),
+            ActionId::GotoDeclaration | ActionId::FindUsages => self.nav_available(),
+            ActionId::UsageNext | ActionId::UsagePrevious => self
+                .usages
+                .active_tab()
+                .is_some_and(|tab| !tab.usages.is_empty()),
+            ActionId::ToggleUsages => !self.usages.is_empty(),
             ActionId::TestsRun => self.tests.service.is_some(),
             ActionId::TestsStop => self.tests.is_running(),
             ActionId::TestsRerun => self.tests.service.is_some() && self.tests.has_run(),
@@ -1166,6 +1196,13 @@ impl JulieStormApp {
             ActionId::ToggleTests => self.toggle_bottom(BottomTool::Tests),
             ActionId::ToggleSearch => self.toggle_bottom(BottomTool::Search),
             ActionId::ToggleTerminal => self.toggle_bottom(BottomTool::Terminal),
+            ActionId::ToggleUsages => self.toggle_bottom(BottomTool::Usages),
+            ActionId::NavBack => self.nav_back(),
+            ActionId::NavForward => self.nav_forward(),
+            ActionId::UsageNext => self.usage_step(1),
+            ActionId::UsagePrevious => self.usage_step(-1),
+            ActionId::GotoDeclaration => self.nav_at_cursor(crate::nav::Purpose::Jump),
+            ActionId::FindUsages => self.nav_at_cursor(crate::nav::Purpose::Usages),
             ActionId::ToggleTheme => {
                 let dark = !self.dark;
                 self.set_dark(dark);
@@ -1327,6 +1364,10 @@ impl JulieStormApp {
             if self.action_enabled(id) {
                 self.run_action(id);
             }
+        }
+        // Boutons précédent / suivant de la souris : l'historique (sauf dans le terminal).
+        if !terminal_focus {
+            self.nav_mouse_buttons(ctx);
         }
     }
 
@@ -1567,6 +1608,12 @@ impl JulieStormApp {
         let mut open_file: Option<(PathBuf, Option<Goto>)> = None;
         let mut git_intents = Vec::new();
         let mut tests_intents = Vec::new();
+        let mut usages_intents = Vec::new();
+        let indexing = self
+            .project
+            .as_ref()
+            .and_then(|p| p.index.symbols_progress());
+        let has_usages = !self.usages.is_empty();
         let repo_state = self.repo_state();
         let shortcut = |id: ActionId| self.registry.shortcut_text(id).unwrap_or_default();
         let commit_shortcut = shortcut(ActionId::GitCommit);
@@ -1588,7 +1635,7 @@ impl JulieStormApp {
                     .inner_margin(Margin::symmetric(0, 0)),
             )
             .show(ui, |ui| {
-                let (clicked, close) = tools::bottom_header(ui, p, &tools);
+                let (clicked, close) = tools::bottom_header(ui, p, &tools, has_usages);
                 selected_tab = clicked;
                 collapse = close;
                 ui.painter().hline(
@@ -1636,6 +1683,9 @@ impl JulieStormApp {
                     BottomTool::Tests => {
                         tests_intents = self.tests.show(ui, p, &run_shortcut, &stop_shortcut);
                     }
+                    BottomTool::Usages => {
+                        usages_intents = self.usages.show(ui, p, indexing);
+                    }
                 }
             });
         if let Some(tool) = selected_tab {
@@ -1657,6 +1707,7 @@ impl JulieStormApp {
         self.run_git_intents(intents);
         let intents = std::mem::take(&mut tests_intents);
         self.run_tests_intents(intents);
+        self.usages_intents(usages_intents);
     }
 
     fn draw_left(&mut self, ui: &mut egui::Ui, p: &Palette) -> Vec<ActionId> {
@@ -1718,7 +1769,16 @@ impl JulieStormApp {
         let editor_bg = theme::editor_theme(self.dark).background;
         let mut tab_intents = Vec::new();
         let mut banner = None;
+        let mut editor_intents = Vec::new();
         let mut welcome_action = None;
+        // Le mot navigable souligné (survol avec Ctrl) ne concerne que le fichier affiché.
+        let link = self
+            .nav
+            .hover
+            .link
+            .as_ref()
+            .filter(|l| self.editors.active_editor().and_then(|e| e.path()) == Some(&l.path))
+            .map(|l| l.range);
         egui::CentralPanel::default()
             .frame(Frame::new().fill(editor_bg))
             .show(ui, |ui| {
@@ -1726,7 +1786,7 @@ impl JulieStormApp {
                     welcome_action = self.draw_welcome(ui, p);
                 } else {
                     tab_intents = self.editors.show_tab_bar(ui, p, editor_bg);
-                    banner = self.editors.show_active(ui, p);
+                    (banner, editor_intents) = self.editors.show_active(ui, p, link);
                 }
             });
         for intent in tab_intents {
@@ -1738,6 +1798,7 @@ impl JulieStormApp {
         if let Some(BannerIntent::Reload(path)) = banner {
             julie_text::spawn_load(&self.tasks, path);
         }
+        self.nav_editor_intents(editor_intents);
         if let Some(action) = welcome_action {
             self.run_action(action);
         }
@@ -2018,6 +2079,13 @@ impl JulieStormApp {
             && self.find.is_settled()
             && self.goto.as_ref().is_none_or(GotoFile::is_settled)
             && self.editors.is_loaded()
+            && self
+                .project
+                .as_ref()
+                .is_none_or(|p| p.index.symbols_progress().is_none())
+            && !self.nav.busy()
+            && !self.usages.running()
+            && !self.unsaved_pending()
             && !self.tree.is_loading()
             && self.git.merge_loading.is_none()
             && self
@@ -2102,6 +2170,7 @@ impl JulieStormApp {
                 path,
                 line: l,
                 column,
+                wait,
             } => {
                 let path = match &self.project {
                     Some(project) if path.is_relative() => project.project.root().join(path),
@@ -2115,7 +2184,12 @@ impl JulieStormApp {
                     end: None,
                 });
                 self.open_file(path, goto);
-                sc.start_idle_wait();
+                if wait {
+                    sc.start_idle_wait();
+                } else {
+                    // Le temps que le fichier arrive (un chargement n'est pas de l'indexation).
+                    sc.wait_ms(300);
+                }
             }
             Step::Action(key) => match self.registry.by_key(&key) {
                 Some(id) => {
@@ -2310,6 +2384,8 @@ impl JulieStormApp {
             "merge": self.merge.as_ref().map(MergeDialog::state),
             "diff_window": self.diff_window.as_ref().map(|w| w.pane.state()),
             "tests": self.tests.state(),
+            "nav": self.nav_state(),
+            "usages": self.usages_state(),
             "goto": self.goto.as_ref().map(GotoFile::state),
             "find": { "open": self.find_open, "details": self.find.state() },
             "palette": self.palette.as_ref().map(|p| serde_json::json!({
@@ -2494,9 +2570,11 @@ impl eframe::App for JulieStormApp {
         }
 
         actions.extend(self.draw_left(ui, &p));
+        self.nav_popup_keys(&ctx);
         self.draw_bottom(ui, &p);
         self.draw_project_panel(ui, &p);
         self.draw_central(ui, &p);
+        self.nav_tick(&ctx);
 
         // Échap dans l'arbre : retour à l'éditeur.
         if self.tree.has_focus(&ctx)
@@ -2507,6 +2585,8 @@ impl eframe::App for JulieStormApp {
 
         self.collect_menu_requests();
         self.draw_overlays(&ctx, &p);
+        self.draw_nav_popup(&ctx, &p);
+        self.draw_hover_tooltip(&ctx, &p);
         self.draw_branch_popup(&ctx, &p);
         self.draw_ctx_menu(&ctx, &p);
         if let Some(terminal) = &mut self.terminal {

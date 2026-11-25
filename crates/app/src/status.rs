@@ -23,6 +23,8 @@ const IGNORED_KINDS: &[&str] = &[
     "text.check_disk",
     "index.find_files",
     "index.preview",
+    "index.navigate",
+    "index.symbols_cache",
 ];
 
 #[derive(Debug, Clone)]
@@ -263,7 +265,11 @@ fn task_widget(ui: &mut Ui, p: &Palette, task: &TaskInfo, progress_text: Option<
         }
     }
     if let Some((done, total)) = task.progress {
-        if total > 0 {
+        if task.kind == "index.symbols" {
+            if let Some(percent) = (done * 100).checked_div(total) {
+                label.push_str(&format!("… {} %", percent.min(99)));
+            }
+        } else if total > 0 {
             label.push_str(&format!(" {}/{}", done, total));
         } else if done > 0 {
             label.push_str(&format!(" — {}", t::files_count(done)));

@@ -1,0 +1,45 @@
+# Navigation : clic droit dans l'éditeur (le curseur se place d'abord), entrées « Aller à la
+# déclaration » et « Trouver les usages » actives, puis leur exécution ; Ctrl+B ; Broken.php.
+# Décor : bash tests/fixtures/navigation-copie.sh
+# Captures et états : target\essais\nav-menu\
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-nav/proj
+file src/Service/UserService.php:1:1
+file src/Service/UserService.php:35:25
+ui nav.rclick 35:25
+wait 1500
+state target/essais/nav-menu/01-menu.json
+screenshot target/essais/nav-menu/01-menu.png
+ui menu.choose nav.declaration
+wait-idle
+state target/essais/nav-menu/02-declaration.json
+
+# Retour, puis Ctrl+B au curseur (placé par un clic gauche) : même cible.
+key Ctrl+Alt+Left
+wait-idle
+ui nav.click 35:25
+wait 200
+key Ctrl+B
+wait-idle
+state target/essais/nav-menu/03-ctrl-b.json
+key Ctrl+Alt+Left
+wait-idle
+
+# Clic droit puis « Trouver les usages » sur un appel : usages de la déclaration visée.
+ui nav.rclick 34:33
+wait 1500
+ui menu.choose nav.usages
+wait-idle
+state target/essais/nav-menu/04-usages-menu.json
+
+# Broken.php : Ctrl+clic partout sans paniquer ; l'index du reste est intact (critère 23).
+file src/Broken.php:1:8
+ui nav.ctrl-click 1:8
+wait-idle
+ui nav.ctrl-click 1:20
+wait-idle
+state target/essais/nav-menu/05-broken.json
+file src/Service/UserService.php:33:37
+ui nav.ctrl-click 33:37
+wait-idle
+state target/essais/nav-menu/06-apres-broken.json
+quit

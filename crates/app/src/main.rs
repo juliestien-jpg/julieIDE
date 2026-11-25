@@ -25,6 +25,7 @@ mod icons;
 mod kit;
 mod logview;
 mod merge;
+mod nav;
 mod project;
 mod safety;
 mod scenario;
@@ -39,6 +40,7 @@ mod texts;
 mod theme;
 mod tools;
 mod tree;
+mod usages;
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;

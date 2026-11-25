@@ -32,6 +32,9 @@ impl JulieStormApp {
         if let Some(result) = self.fs_dialog_command(command, arg) {
             return result;
         }
+        if let Some(result) = self.nav_ui_command(command, arg) {
+            return result;
+        }
         match command {
             // ----- Git ----------------------------------------------------------
             "git.tab" => {

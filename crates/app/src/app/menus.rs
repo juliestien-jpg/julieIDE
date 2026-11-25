@@ -381,7 +381,10 @@ impl JulieStormApp {
             if matches!(target, Target::Branch(_)) {
                 self.branch_popup = None;
             }
-            if matches!(id, ActionId::FindInFiles) {
+            if matches!(
+                id,
+                ActionId::FindInFiles | ActionId::GotoDeclaration | ActionId::FindUsages
+            ) {
                 // Action globale ; la recherche part de la sélection de l'éditeur.
                 self.run_action(id);
             } else {
@@ -740,7 +743,7 @@ impl JulieStormApp {
         use ActionId::*;
         // Les entrées propres à l'éditeur, aux tests, à la recherche et au terminal.
         match (id, target) {
-            (GotoDeclaration | FindUsages, _) => return Some(t::REASON_SOON.to_owned()),
+            (GotoDeclaration | FindUsages, _) => return self.nav_unavailable_reason(),
             (FindInFiles, _) => {
                 return self
                     .project
@@ -1016,10 +1019,10 @@ impl JulieStormApp {
             UpdateProject | Push | NewBranch | BranchesPopup | Fetch => self.git_status().is_some(),
             ContextMenuKey => true,
             // Entrées propres à une zone : seulement par son menu contextuel.
-            EditCut | EditCopy | EditPaste | EditSelectAll | GotoDeclaration | FindUsages
-            | TestRunNode | TestGoto | TestCompare | TestCopyName | HitOpen | HitCopyLine
-            | HitExclude | TermCopy | TermPaste | TermSelectAll | TermClear | TermRename
-            | TermClose | TermNewCmd | TermNewGitBash => false,
+            EditCut | EditCopy | EditPaste | EditSelectAll | TestRunNode | TestGoto
+            | TestCompare | TestCopyName | HitOpen | HitCopyLine | HitExclude | TermCopy
+            | TermPaste | TermSelectAll | TermClear | TermRename | TermClose | TermNewCmd
+            | TermNewGitBash => false,
             TestRerunFailed => {
                 self.tests.service.is_some() && self.tests.failures_request().is_some()
             }

@@ -48,10 +48,23 @@ impl Default for EditorOptions {
 }
 
 /// Ce que l'éditeur demande à son hôte de faire : il ne sait pas le faire seul.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EditorIntent {
     /// Clic sur une marque de gouttière (`GutterMark::id`).
     GutterMarkClicked { line: u32, id: u64 },
+    /// Ctrl+clic (ou Ctrl+B, au curseur) sur le caractère à `position`. Le curseur
+    /// ne bouge pas. `anchor` : point de l'écran sous le caractère (où ancrer une
+    /// liste surgissante).
+    Navigate {
+        position: TextPosition,
+        anchor: Pos2,
+    },
+    /// Le pointeur survole le caractère à `position` avec Ctrl enfoncé (rendu
+    /// quand la position change ; l'hôte temporise et répond par
+    /// [`super::Decorations::link`]).
+    Hover { position: TextPosition },
+    /// Ctrl relâché, ou pointeur sorti du texte : plus de survol.
+    HoverEnd,
 }
 
 /// Résultat d'une image.
@@ -173,6 +186,10 @@ pub struct EditorView {
     pending_center_line: Option<u32>,
     external_scroll: bool,
     layout: Option<EditorLayout>,
+    /// Dernier caractère survolé avec Ctrl (pour ne rendre que les changements).
+    last_hover: Option<TextPosition>,
+    /// Ctrl+B pressé à cette image.
+    navigate_key: bool,
 }
 
 impl EditorView {
@@ -193,7 +210,19 @@ impl EditorView {
             pending_center_line: None,
             external_scroll: false,
             layout: None,
+            last_hover: None,
+            navigate_key: false,
         }
+    }
+
+    /// Point de l'écran (bas gauche du caractère) à `position`, d'après la dernière
+    /// image. Approximatif si la ligne contient des tabulations.
+    pub fn point_at(&self, position: TextPosition) -> Option<Pos2> {
+        let layout = self.layout.as_ref()?;
+        let x = layout.text_rect.left() + TEXT_PADDING + position.column as f32 * layout.char_width
+            - self.scroll.x;
+        let y = layout.line_top(position.line) + layout.line_height;
+        Some(pos2(x, y))
     }
 
     pub fn id(&self) -> Id {
@@ -380,6 +409,16 @@ impl EditorView {
             }
         }
         selection_changed |= *document.selections() != selections_before;
+        if std::mem::take(&mut self.navigate_key) {
+            let position = document.cursor_position();
+            let x = text_rect.left() + TEXT_PADDING + position.column as f32 * char_width
+                - self.scroll.x;
+            let y = text_rect.top() + (position.line + 1) as f32 * line_height - self.scroll.y;
+            intents.push(EditorIntent::Navigate {
+                position,
+                anchor: pos2(x, y),
+            });
+        }
 
         // ----- Bornes du défilement, curseur à l'écran ----------------------
         let line_count = document.buffer().len_lines();
@@ -508,6 +547,34 @@ impl EditorView {
         buffer.line_start(line) + geometry.column_at(x, metrics.char_width)
     }
 
+    /// Caractère sous un point de l'écran (celui qu'on voit, pas la frontière la
+    /// plus proche) ; `None` au-delà de la fin de la ligne ou hors du texte.
+    fn char_at(
+        &self,
+        ui: &Ui,
+        document: &Document,
+        pos: Pos2,
+        metrics: &Metrics,
+        theme: &EditorTheme,
+    ) -> Option<TextPosition> {
+        let buffer = document.buffer();
+        let y = pos.y - metrics.text_rect.top() + self.scroll.y;
+        let x = pos.x - metrics.text_rect.left() - TEXT_PADDING + self.scroll.x;
+        if y < 0.0 || x < 0.0 {
+            return None;
+        }
+        let line = (y / metrics.line_height).floor() as usize;
+        if line >= buffer.len_lines() {
+            return None;
+        }
+        let geometry = self.geometry(ui, document, line, metrics, theme);
+        let mut column = geometry.column_at(x, metrics.char_width);
+        if column > 0 && x < geometry.x_of(column, metrics.char_width) {
+            column -= 1;
+        }
+        (column < geometry.line_len).then(|| TextPosition::new(line as u32, column as u32))
+    }
+
     fn scroll_to_cursor(
         &mut self,
         ui: &Ui,
@@ -549,11 +616,40 @@ impl EditorView {
         theme: &EditorTheme,
         intents: &mut Vec<EditorIntent>,
     ) {
+        // Survol avec Ctrl : l'hôte décide si le mot est navigable (`Decorations::link`).
+        let plain_ctrl =
+            ui.input(|i| i.modifiers.command && !i.modifiers.alt && !i.modifiers.shift);
+        let hovered_char = if plain_ctrl && self.drag.is_none() && response.hovered() {
+            ui.input(|i| i.pointer.hover_pos())
+                .filter(|p| metrics.text_rect.contains(*p))
+                .and_then(|p| self.char_at(ui, document, p, metrics, theme))
+        } else {
+            None
+        };
+        let mut hand = false;
+        match hovered_char {
+            Some(position) => {
+                if self.last_hover != Some(position) {
+                    self.last_hover = Some(position);
+                    intents.push(EditorIntent::Hover { position });
+                }
+                hand = decorations.link.is_some_and(|l| l.contains(position));
+            }
+            None => {
+                if self.last_hover.take().is_some() {
+                    intents.push(EditorIntent::HoverEnd);
+                }
+            }
+        }
         let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else {
             return;
         };
         if response.hovered() && metrics.text_rect.contains(pointer) {
-            ui.ctx().set_cursor_icon(CursorIcon::Text);
+            ui.ctx().set_cursor_icon(if hand {
+                CursorIcon::PointingHand
+            } else {
+                CursorIcon::Text
+            });
         }
         let (pressed, down, modifiers, time) = ui.input(|i| {
             (
@@ -567,6 +663,19 @@ impl EditorView {
         if pressed && response.hovered() {
             ui.memory_mut(|m| m.request_focus(self.id));
             let in_gutter = metrics.gutter_rect.contains(pointer);
+            // Ctrl+clic : naviguer, sans déplacer le curseur ni la sélection.
+            if plain_ctrl && !in_gutter {
+                if let Some(position) = self.char_at(ui, document, pointer, metrics, theme) {
+                    let bottom = metrics.text_rect.top()
+                        + (position.line + 1) as f32 * metrics.line_height
+                        - self.scroll.y;
+                    intents.push(EditorIntent::Navigate {
+                        position,
+                        anchor: pos2(pointer.x, bottom),
+                    });
+                }
+                return;
+            }
             let offset = self.offset_at(ui, document, pointer, metrics, theme);
             let line = document.buffer().line_of(offset) as u32;
 
@@ -680,6 +789,18 @@ impl EditorView {
         let mut changed = false;
         let mut moved = false;
         for event in events {
+            if let Event::Key {
+                key: Key::B,
+                pressed: true,
+                modifiers,
+                ..
+            } = &event
+            {
+                if modifiers.command && !modifiers.alt && !modifiers.shift {
+                    self.navigate_key = true;
+                    continue;
+                }
+            }
             match event {
                 Event::Text(text) if editable => {
                     self.preedit = None;
@@ -1008,6 +1129,33 @@ impl EditorView {
             if let Some(galley) = &g.galley {
                 let pos = pos2(origin_x + g.x0, line_top(line) + text_offset);
                 painter.galley(pos, galley.clone(), theme.text);
+            }
+        }
+
+        // Nom navigable sous le pointeur (Ctrl) : souligné.
+        if let Some(link) = decorations.link {
+            for line in link.start.line..=link.end.line {
+                if !visible.contains(&line) {
+                    continue;
+                }
+                let from = if line == link.start.line {
+                    link.start.column as usize
+                } else {
+                    0
+                };
+                let to = if line == link.end.line {
+                    link.end.column as usize
+                } else {
+                    buffer.line_len(line as usize)
+                };
+                if from < to {
+                    let y = line_top(line) + text_offset + metrics.row_height - 1.0;
+                    painter.hline(
+                        column_x(line, from)..=column_x(line, to),
+                        y,
+                        Stroke::new(1.0, theme.link),
+                    );
+                }
             }
         }
 

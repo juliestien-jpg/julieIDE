@@ -2,7 +2,8 @@
 //!
 //! Le composant ne connaît ni Git, ni PHPUnit, ni la recherche : il reçoit des
 //! [`Decorations`] (fonds de lignes et de plages, marques de gouttière,
-//! séparateurs) et rend des [`EditorIntent`] (clic sur une marque). Les couleurs
+//! séparateurs, mot navigable souligné) et rend des [`EditorIntent`] (clic sur une marque,
+//! Ctrl+clic ou Ctrl+B, survol avec Ctrl : l'éditeur ne sait pas ce que l'hôte en fait). Les couleurs
 //! viennent d'un [`EditorTheme`], jamais du code.
 //!
 //! # Utilisation
