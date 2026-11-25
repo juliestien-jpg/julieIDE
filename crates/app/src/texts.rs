@@ -27,7 +27,7 @@ pub const MENU_TESTS: &str = "Tests";
 pub const ACTION_OPEN_FOLDER: &str = "Ouvrir un dossier…";
 pub const ACTION_SAVE_ALL: &str = "Tout enregistrer";
 pub const ACTION_CLOSE_TAB: &str = "Fermer l'onglet";
-pub const ACTION_RELOAD_DISK: &str = "Relire le disque";
+pub const ACTION_RELOAD_DISK: &str = "Recharger depuis le disque";
 pub const ACTION_QUIT: &str = "Quitter";
 pub const ACTION_GOTO_FILE: &str = "Aller au fichier…";
 pub const ACTION_FIND_IN_FILES: &str = "Rechercher dans les fichiers…";
@@ -40,7 +40,7 @@ pub const ACTION_TOGGLE_GIT: &str = "Git";
 pub const ACTION_TOGGLE_TESTS: &str = "Tests";
 pub const ACTION_TOGGLE_SEARCH: &str = "Résultats de recherche";
 pub const ACTION_TOGGLE_TERMINAL: &str = "Terminal";
-pub const ACTION_TOGGLE_THEME: &str = "Basculer thème sombre / clair";
+pub const ACTION_TOGGLE_THEME: &str = "Changer de thème (sombre / clair)";
 pub const ACTION_TOGGLE_COMMIT: &str = "Panneau de validation";
 pub const ACTION_BOTTOM_TALL: &str = "Agrandir / réduire la fenêtre du bas";
 pub const ACTION_GIT_COMMIT: &str = "Valider les changements…";
@@ -50,14 +50,15 @@ pub const ACTION_TESTS_STOP: &str = "Arrêter les tests";
 pub const ACTION_TESTS_RERUN: &str = "Relancer les tests";
 
 // ----- Accueil, projet, arbre -------------------------------------------------------
-pub const WELCOME_NO_PROJECT: &str = "Aucun projet ouvert.";
+pub const WELCOME_NO_PROJECT: &str =
+    "Aucun projet ouvert. Ouvrez un dossier depuis le menu Fichier.";
 pub const PICK_FOLDER_TITLE: &str = "Ouvrir un dossier";
-pub const TREE_NO_PROJECT: &str = "Aucun projet ouvert.";
+pub const TREE_NO_PROJECT: &str = "Aucun projet ouvert. Ouvrez un dossier depuis le menu Fichier.";
 pub const TERMINAL_NO_PROJECT: &str = "Ouvrez un projet pour lancer un terminal dans son dossier.";
 
 pub fn project_open_failed(path: &Path, error: &str) -> String {
     format!(
-        "Impossible d'ouvrir le dossier {} : {error}",
+        "Impossible d'ouvrir le dossier {} : {error}. Vérifiez qu'il existe et que vous pouvez le lire.",
         path.display()
     )
 }
@@ -69,21 +70,24 @@ pub fn settings_failed(error: &str) -> String {
 // ----- Onglets, éditeur ---------------------------------------------------------------
 pub const UNTITLED: &str = "Sans titre";
 pub const BANNER_CHANGED: &str = "Le fichier a changé sur le disque.";
-pub const BANNER_DELETED: &str = "Supprimé du disque. Enregistrer le recrée.";
+pub const BANNER_DELETED: &str = "Le fichier a été supprimé du disque. L'enregistrer le recrée.";
 pub const BANNER_RELOAD: &str = "Recharger";
 pub const BANNER_RELOAD_CONFIRM: &str = "Perdre mes modifications ?";
 pub const BANNER_KEEP: &str = "Garder les miennes";
 pub const BANNER_DISMISS: &str = "Fermer ce message";
 pub const EOL_MIXED: &str = "mixte";
-pub const ERR_BINARY: &str = "Fichier binaire";
-pub const ERR_TOO_LARGE: &str = "Fichier trop gros";
+pub const ERR_BINARY: &str = "Fichier binaire : impossible à ouvrir dans l'éditeur.";
+pub const ERR_TOO_LARGE: &str = "Fichier trop gros pour l'éditeur.";
 
 pub fn load_failed(path: &Path, reason: &str) -> String {
     format!("{} : {reason}", path.display())
 }
 
 pub fn save_failed(path: &Path, reason: &str) -> String {
-    format!("Enregistrement impossible, {} : {reason}", path.display())
+    format!(
+        "Enregistrement impossible pour {} : {reason}. Le fichier sur le disque n'a pas été modifié : réessayez, ou fermez le programme qui l'utilise.",
+        path.display()
+    )
 }
 
 pub fn git_failed(error: &str) -> String {
@@ -360,7 +364,7 @@ pub const DIFF_REV_ABSENT: &str = "(absent)";
 pub const DIFF_REV_HEAD: &str = "Version validée (HEAD)";
 pub const DIFF_REV_INDEX: &str = "Index";
 pub const DIFF_REV_STAGE: &str = "Version de l'index";
-pub const DIFF_REV_WORKTREE: &str = "Fichier de travail";
+pub const DIFF_REV_WORKTREE: &str = "Copie de travail";
 pub const DIFF_CLOSE_HINT: &str =
     "Échap pour fermer — F7 / Maj+F7 : différence suivante / précédente";
 pub const COMPARE_EXPECTED: &str = "Attendu";
@@ -430,7 +434,7 @@ pub fn git_head_summary(head: &Head, upstream: Option<&Upstream>) -> String {
         match upstream.ahead_behind {
             Some((0, 0)) => {}
             Some((ahead, behind)) => text.push_str(&format!("  (avance {ahead}, retard {behind})")),
-            None => text.push_str("  (amont disparu)"),
+            None => text.push_str("  (amont supprimé)"),
         }
     }
     text
@@ -505,7 +509,7 @@ fn operation_name(kind: OperationKind) -> &'static str {
         OperationKind::Merge => "Fusion",
         OperationKind::Rebase => "Rebase",
         OperationKind::CherryPick => "Cherry-pick",
-        OperationKind::Revert => "Annulation de commit (revert)",
+        OperationKind::Revert => "Revert",
     }
 }
 
@@ -536,11 +540,11 @@ pub fn confirm_keep_title(side: ConflictSide, names: &[String]) -> String {
 pub fn confirm_keep_detail(side: ConflictSide, deleted: &[String]) -> String {
     let mut text = match side {
         ConflictSide::Ours => {
-            "Le fichier de travail est remplacé par notre version, marqueurs de conflit compris."
+            "La copie de travail est remplacée par notre version, marqueurs de conflit compris."
                 .to_owned()
         }
         ConflictSide::Theirs => {
-            "Le fichier de travail est remplacé par leur version, marqueurs de conflit compris."
+            "La copie de travail est remplacée par leur version, marqueurs de conflit compris."
                 .to_owned()
         }
     };
@@ -586,7 +590,7 @@ pub const MERGE_APPLY_LEFT_TIP: &str = "Applique les changements de gauche et le
 pub const MERGE_APPLY_RIGHT_TIP: &str = "Applique les changements de droite et les identiques";
 pub const MERGE_UNDO: &str = "Annuler (Ctrl+Z)";
 pub const MERGE_REDO: &str = "Rétablir (Ctrl+Maj+Z)";
-pub const MERGE_SAVE: &str = "Appliquer";
+pub const MERGE_SAVE: &str = "Enregistrer le résultat";
 pub const MERGE_SAVE_TIP: &str =
     "Enregistrer le résultat et marquer le fichier résolu (Ctrl+Entrée)";
 pub const MERGE_SAVING: &str = "Enregistrement…";
@@ -730,7 +734,8 @@ pub const TESTS_NO_OUTPUT: &str = "Aucune sortie pour ce nœud.";
 pub const TESTS_COMPARE: &str = "Comparer attendu / obtenu";
 pub const TESTS_COMPARE_TIP: &str = "Ouvre les deux valeurs côte à côte, différences en couleur";
 pub const TESTS_RESTART_TITLE: &str = "Une exécution est en cours";
-pub const TESTS_RESTART_DETAIL: &str = "L'arrêter et relancer toute la suite ?";
+pub const TESTS_RESTART_DETAIL: &str =
+    "L'arrêter et relancer toute la suite ? Les résultats déjà obtenus seront remplacés.";
 pub const TESTS_RESTART_YES: &str = "Arrêter et relancer";
 
 pub fn tests_run_tip(shortcut: &str) -> String {
@@ -783,17 +788,17 @@ pub fn tests_process_exited(code: Option<i32>) -> String {
 pub fn tests_counts(counts: &Counts, elapsed: Duration) -> String {
     let total = counts.total.map_or("?".to_owned(), |n| n.to_string());
     let mut text = format!(
-        "{} réussis, {} échoués, {} en erreur, {} ignorés sur {total}",
+        "Réussis : {}, échoués : {}, en erreur : {}, ignorés : {} sur {total}",
         counts.passed,
         counts.failed,
         counts.errors,
         counts.ignored()
     );
     if counts.risky > 0 {
-        text.push_str(&format!(", {} risqués", counts.risky));
+        text.push_str(&format!(", risqués : {}", counts.risky));
     }
     if counts.interrupted > 0 {
-        text.push_str(&format!(", {} interrompus", counts.interrupted));
+        text.push_str(&format!(", interrompus : {}", counts.interrupted));
     }
     text.push_str(&format!(" — {}", crate::kit::format_duration(elapsed)));
     text
@@ -809,7 +814,7 @@ pub fn tests_summary(summary: &RunSummary, elapsed: Duration) -> String {
             let mut text = format!("Tests réussis : {} sur {total} — {duration}", counts.passed);
             if counts.ignored() + counts.risky > 0 {
                 text.push_str(&format!(
-                    " ({} ignorés, {} risqués)",
+                    " (ignorés : {}, risqués : {})",
                     counts.ignored(),
                     counts.risky
                 ));
@@ -868,11 +873,11 @@ pub fn problem_text(problem: &Problem) -> String {
     };
     match problem {
         Problem::PhpNotFound { tried } => format!(
-            "PHP introuvable. Indiquez son chemin dans les réglages ([phpunit] php_path) ou ajoutez-le au PATH. Cherché : {}",
+            "PHP introuvable. Indiquez son chemin dans Réglages, page PHPUnit, ou ajoutez-le au PATH. Cherché : {}",
             list(tried)
         ),
         Problem::PhpPathInvalid(path) => {
-            format!("Le chemin de PHP réglé n'existe pas : {}", path.display())
+            format!("Le chemin de PHP indiqué dans les réglages n'existe pas : {}", path.display())
         }
         Problem::PhpNotRunnable { path, reason } => {
             format!("PHP ne s'exécute pas ({}) : {reason}", path.display())
@@ -882,20 +887,20 @@ pub fn problem_text(problem: &Problem) -> String {
             list(searched)
         ),
         Problem::PhpUnitPathInvalid(path) => {
-            format!("Le chemin de PHPUnit réglé n'existe pas : {}", path.display())
+            format!("Le chemin de PHPUnit indiqué dans les réglages n'existe pas : {}", path.display())
         }
         Problem::NoConfiguration { root } => {
-            format!("Aucun phpunit.xml à la racine du projet ({})", root.display())
+            format!("Aucun phpunit.xml à la racine du projet ({}). Créez-le, ou indiquez le bon fichier dans Réglages, page PHPUnit.", root.display())
         }
         Problem::ConfigurationPathInvalid(path) => format!(
-            "Le fichier de configuration PHPUnit réglé n'existe pas : {}",
+            "Le fichier de configuration PHPUnit indiqué dans les réglages n'existe pas : {}",
             path.display()
         ),
     }
 }
 
 // ===== Lot v1 : branches, distant, opérations Git, menus contextuels, réglages =====
-// (anciennement texts_v1.rs ; relecture à faire par `redacteur`)
+// (anciennement texts_v1.rs ; relu par `redacteur`)
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n > 1 { many } else { one })
 }
@@ -1015,7 +1020,7 @@ pub const REASON_DELETED: &str = "Ce fichier est supprimé du disque.";
 pub const REASON_MERGE_COMMIT: &str = "Commit de fusion : non pris en charge.";
 pub const REASON_OPERATION: &str = "Terminez ou abandonnez l'opération en cours.";
 pub const REASON_DETACHED: &str = "HEAD est détachée : pas de branche courante.";
-pub const REASON_NO_UPSTREAM: &str = "Cette branche n'a pas de branche distante associée.";
+pub const REASON_NO_UPSTREAM: &str = "Cette branche n'a pas d'amont.";
 pub const REASON_CURRENT_BRANCH: &str = "C'est la branche courante.";
 pub const REASON_PROTECTED: &str = "Branche protégée.";
 
@@ -1045,7 +1050,8 @@ pub const HDR_ACTIONS: &str = "Actions";
 pub const HDR_RECENT: &str = "Récentes";
 pub const HDR_LOCAL: &str = "Locales";
 pub const HDR_REMOTE: &str = "Distantes";
-pub const TIP_FETCH: &str = "Récupérer : git fetch --all --prune";
+pub const TIP_FETCH: &str =
+    "Récupérer (git fetch --all --prune) : met à jour les distants et retire les branches qui n'existent plus.";
 pub const UPSTREAM_GONE_MARK: &str = "amont supprimé";
 pub const TREE_ALL: &str = "Toutes les branches";
 
@@ -1053,7 +1059,7 @@ pub const TREE_ALL: &str = "Toutes les branches";
 pub const DLG_NEW_BRANCH: &str = "Nouvelle branche";
 pub const DLG_FORCE_SWITCH: &str = "Forcer la bascule ?";
 pub const DLG_UPDATE_METHOD: &str = "Mettre à jour le projet";
-pub const DLG_PUSH_REJECTED: &str = "Le distant a des commits que vous n'avez pas";
+pub const DLG_PUSH_REJECTED: &str = "Le distant a des commits que vous n'avez pas encore";
 
 pub fn dlg_rename(old: &str) -> String {
     format!("Renommer la branche {old}")
@@ -1116,7 +1122,7 @@ pub const BTN_PUSH_TO_RECREATE: &str = "Pousser pour la recréer…";
 pub const TIP_NAME_NOT_VALID: &str = "Le nom de la branche n'est pas valable.";
 pub const TIP_NOTHING_TO_PUSH: &str = "Rien à pousser.";
 pub const TIP_PROTECTED_BRANCH: &str =
-    "Branche protégée : le push forcé est interdit (réglage [vcs] protected_branches).";
+    "Branche protégée : le push forcé est interdit (réglage « Branches protégées », page Git).";
 
 pub const LABEL_BRANCH_NAME: &str = "Nom de la branche";
 pub const HINT_BRANCH_NAME: &str = "feature/ma-branche";
@@ -1156,9 +1162,9 @@ pub fn branch_name_problem(problem: &BranchNameProblem) -> String {
 
 pub const SWITCH_OVERWRITE_INTRO: &str =
     "Ces fichiers ont des changements locaux que la bascule écraserait :";
-pub const SWITCH_OVERWRITE_STASH_NOTE: &str = "« Mettre de côté et basculer » range vos changements (git stash), bascule, puis les remet. Si la remise entre en conflit, l'entrée reste dans git stash list.";
+pub const SWITCH_OVERWRITE_STASH_NOTE: &str = "« Mettre de côté et basculer » met vos changements de côté (git stash), bascule, puis les remet. Si la remise entre en conflit, ils restent mis de côté (git stash list).";
 pub const FORCE_SWITCH_WARNING: &str =
-    "Les changements locaux de ces fichiers seront jetés : ils ne reviendront pas.";
+    "Les changements locaux de ces fichiers seront jetés de votre copie de travail.";
 pub const FORCE_SWITCH_SAFETY: &str =
     "Une copie est gardée 7 jours dans .juliestorm/annulations/ avant d'écraser.";
 
@@ -1225,7 +1231,7 @@ pub fn delete_unmerged_text(n: u32) -> String {
 }
 pub fn delete_unmerged_restore(tip: &str) -> String {
     let short: String = tip.chars().take(7).collect();
-    format!("Récupérable : « Restaurer » juste après, ou git branch <nom> {short}.")
+    format!("Récupérable : « Restaurer » juste après, ou avec git branch <nom> {short}.")
 }
 pub fn delete_remote_text(remote: &str, branch: &str) -> String {
     format!(
@@ -1365,11 +1371,11 @@ pub const TIP_CANCEL_TASK: &str = "Annuler cette opération";
 
 pub const AUTH_TITLE: &str = "Authentification requise";
 pub const AUTH_TEXT: &str = "Git demande une authentification qu'il ne peut pas obtenir ici. Lancez la commande une fois dans le terminal intégré pour enregistrer vos identifiants : JulieStorm ne demande ni ne garde jamais de mot de passe.";
-pub const NO_UPSTREAM_TITLE: &str = "Pas de branche distante associée";
-pub const UPSTREAM_GONE_TITLE: &str = "La branche distante n'existe plus";
+pub const NO_UPSTREAM_TITLE: &str = "Pas d'amont";
+pub const UPSTREAM_GONE_TITLE: &str = "L'amont n'existe plus";
 
 pub fn no_upstream_text(branch: &str) -> String {
-    format!("{branch} n'a pas de branche distante associée. Aucune fusion ni rebase n'a été lancé.")
+    format!("{branch} n'a pas d'amont. Aucune fusion ni rebase n'a été lancé.")
 }
 pub fn upstream_gone_text(branch: &str, upstream: &str) -> String {
     format!("La branche distante {upstream} n'existe plus (supprimée sur le distant). {branch} reste intacte.")
@@ -1425,7 +1431,7 @@ pub fn switched_behind(name: &str, behind: u32) -> String {
     )
 }
 pub fn stash_kept(message: &str) -> String {
-    format!("Remise en conflit : l'entrée « {message} » reste dans git stash list.")
+    format!("Remise en conflit : « {message} » reste mis de côté (git stash list).")
 }
 pub fn fetched(updated: usize, pruned: usize, empty: bool) -> String {
     if empty {
@@ -1527,7 +1533,7 @@ pub fn progress_text(progress: &RemoteProgress) -> String {
 pub fn reset_done(head: &str, stashed: bool) -> String {
     let short: String = head.chars().take(7).collect();
     if stashed {
-        format!("Branche réinitialisée sur {short} ; vos changements sont dans git stash.")
+        format!("Branche réinitialisée sur {short} ; vos changements sont mis de côté (git stash list).")
     } else {
         format!("Branche réinitialisée sur {short}.")
     }
@@ -1582,7 +1588,10 @@ pub const BTN_RESTORE: &str = "Restaurer";
 
 // ----- Fermer des onglets ------------------------------------------------------------------------
 pub fn close_many_title(n: usize) -> String {
-    format!("Fermer {} modifié(s) ?", plural(n, "onglet", "onglets"))
+    format!(
+        "Fermer {} avec des modifications non enregistrées ?",
+        plural(n, "onglet", "onglets")
+    )
 }
 
 pub fn widget_tooltip(
@@ -1633,7 +1642,7 @@ pub fn operation_done(kind: OperationKind) -> String {
 }
 
 // ===== Lot v1 bis : réglages, menus contextuels de l'éditeur, des tests, de la recherche, du terminal =====
-// (écrit par dev-interface ; relecture à faire par `redacteur`)
+// (écrit par dev-interface ; relu par `redacteur`)
 
 // ----- Fenêtre de réglages ------------------------------------------------------------
 pub const ACTION_SETTINGS: &str = "Réglages…";
@@ -1654,7 +1663,7 @@ pub const SETTINGS_NO_USER_FILE: &str =
 pub const SETTINGS_NO_PROJECT: &str =
     "Aucun projet ouvert : seuls les réglages de tous mes projets existent.";
 pub const SETTINGS_OPEN_FILE: &str = "Ouvrir le fichier de réglages";
-pub const SETTINGS_OK: &str = "OK";
+pub const SETTINGS_OK: &str = "Enregistrer et fermer";
 pub const SETTINGS_CANCEL: &str = "Annuler";
 pub const SETTINGS_APPLY: &str = "Appliquer";
 pub const SETTINGS_BROWSE: &str = "Parcourir…";
@@ -1682,9 +1691,9 @@ pub const SETTINGS_BLOCKED_PREFIX: &str = "Impossible d'enregistrer : ";
 pub const SETTINGS_WRITE_FAILED_PREFIX: &str = "Réglages non enregistrés : ";
 pub const SETTINGS_UNREADABLE_OPEN: &str = "Ouvrir le fichier";
 pub const SETTINGS_REMEMBER_SAVED_TOAST: &str =
-    "Choix enregistré : réglage [vcs] update_method de ce projet.";
+    "Choix enregistré pour ce projet : « Méthode de mise à jour du projet » (page Git).";
 pub const SETTINGS_REMEMBER_NOTE: &str =
-    "Enregistré dans les réglages de ce projet ([vcs] update_method).";
+    "Enregistré dans les réglages de ce projet : « Méthode de mise à jour du projet ».";
 
 pub fn settings_label(key: &str) -> &'static str {
     match key {
@@ -1723,7 +1732,7 @@ pub fn settings_detected(path: &str) -> String {
 }
 pub const SETTINGS_NOT_DETECTED: &str = "non détecté";
 pub fn settings_default_path_in_path(name: &str) -> String {
-    format!("par défaut : {name} cherché dans le PATH")
+    format!("par défaut : {name}, cherché dans le PATH")
 }
 pub fn settings_arguments_count(n: usize, shown: &str) -> String {
     match n {
@@ -1739,7 +1748,7 @@ pub const SETTINGS_ERR_RELATIVE_USER: &str =
 pub const SETTINGS_ERR_ENV_NAME: &str = "Nom de variable vide ou contenant « = ».";
 pub const SETTINGS_ERR_ENV_DUP: &str = "Nom de variable en double.";
 pub fn settings_reserved_arg(arg: &str) -> String {
-    format!("L'IDE pose déjà l'option {arg} : elle casse la commande ou la lecture des résultats.")
+    format!("JulieStorm passe déjà l'option {arg} : la répéter casserait la commande ou la lecture des résultats.")
 }
 pub const SETTINGS_EMPTY_ARG: &str = "Argument vide : PHPUnit le prendrait pour un chemin.";
 
@@ -1772,7 +1781,7 @@ pub fn probe_text(result: &julie_phpunit::ProbeResult) -> (u8, String) {
         Err(ProbeFailure::Unreadable { reason, .. }) => (1, format!("Illisible : {reason}")),
         Err(ProbeFailure::PhpUnavailable) => (
             1,
-            "PHP est inutilisable : version de PHPUnit non lue".to_owned(),
+            "PHP ne répond pas correctement : version de PHPUnit impossible à lire".to_owned(),
         ),
     }
 }
@@ -1871,7 +1880,7 @@ pub fn dlg_delete(n: usize) -> String {
 pub const DELETE_TRASH_NOTE: &str =
     "Ils iront dans la corbeille de Windows : vous pourrez les restaurer.";
 pub fn delete_folder_files(name: &str, files: usize) -> String {
-    format!("{name}  —  dossier et ses {files} fichiers")
+    format!("{name} — dossier, nombre de fichiers : {files}")
 }
 pub fn delete_unsaved(name: &str) -> String {
     format!("Les modifications non enregistrées de {name} resteront dans l'onglet (marqué « supprimé du disque »).")
@@ -1938,7 +1947,9 @@ pub const NAV_CONSTRUCTOR: &str = "constructeur";
 pub const NAV_LIBRARY: &str = "bibliothèque";
 
 pub fn nav_not_in_project(name: &str) -> String {
-    format!("Aucune déclaration dans le projet pour « {name} » (fonction du langage ?).")
+    format!(
+        "Aucune déclaration dans le projet pour « {name} » (peut-être une fonction du langage)."
+    )
 }
 
 pub fn nav_not_found(name: &str) -> String {
@@ -1946,7 +1957,7 @@ pub fn nav_not_found(name: &str) -> String {
 }
 
 pub fn nav_external_module(specifier: &str) -> String {
-    format!("Module externe : non résolu (« {specifier} »).")
+    format!("Module externe (« {specifier} ») : rien à ouvrir dans le projet.")
 }
 
 pub fn nav_indexing(percent: u8) -> String {
@@ -1961,7 +1972,7 @@ pub fn symbol_kind_label(kind: julie_index::SymbolKind) -> &'static str {
         Interface => "interface",
         Trait => "trait",
         Enum => "énumération",
-        EnumCase => "cas",
+        EnumCase => "cas d'énumération",
         Function => "fonction",
         Method => "méthode",
         Property => "propriété",
@@ -1989,7 +2000,7 @@ pub fn nav_list_title(guess: Option<&julie_index::Guess>, name: &str) -> String 
             };
             // L'index peut ne pas donner le texte du receveur (`$this->model`) : on ne l'invente pas.
             if receiver.trim().is_empty() {
-                format!("Type du receveur inconnu : {what} nommées {member}")
+                format!("Type de l'objet inconnu : {what} nommées {member}")
             } else {
                 format!("Type de {receiver} inconnu : {what} nommées {member}")
             }
