@@ -1,0 +1,27 @@
+# Recette v1 menus 2 : Annuler les modifications sur modifié + supprimé + ajouté, onglet modifié, Annuler puis confirmer, Rétablir
+project @A@
+file a.txt
+type XYZ
+ui git.tab changes
+wait-idle
+ui menu.open changes a.txt,added.txt,LISEZMOI.md
+ui menu.choose vcs.discard
+wait 300
+state @OUT@/m2-confirm.json
+screenshot @OUT@/m2-confirm.png
+ui dialog.choose cancel
+wait 300
+state @OUT@/m2-annule.json
+ui menu.open changes a.txt,added.txt,LISEZMOI.md
+ui menu.choose vcs.discard
+wait 300
+ui dialog.choose discard
+wait-idle
+wait 1000
+state @OUT@/m2-fait.json
+screenshot @OUT@/m2-fait.png
+ui toast.action
+wait-idle
+wait 1000
+state @OUT@/m2-retabli.json
+quit

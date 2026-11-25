@@ -1,0 +1,14 @@
+# Recette v1 branches 5 : Ctrl+T (méthode @METHODE@ : le scénario pose le choix par dialog.choose)
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+state @OUT@/b05-methode.json
+ui dialog.set remember on
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/b05-apres.json
+screenshot @OUT@/b05-apres.png
+quit

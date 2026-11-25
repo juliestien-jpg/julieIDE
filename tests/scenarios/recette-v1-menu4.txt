@@ -1,0 +1,21 @@
+# Recette v1 menus 4 : Ajouter à Git / Retirer de l'index par le menu et par Ctrl+Alt+A, dossier hors dépôt
+project @A@
+ui menu.open tree src/nouveau.php
+ui menu.expand sub.git
+ui menu.choose vcs.add
+wait-idle
+wait 2200
+state @OUT@/m4-apres-ajout.json
+ui menu.open tree src/nouveau.php
+ui menu.expand sub.git
+ui menu.choose vcs.unstage
+wait-idle
+wait 2200
+state @OUT@/m4-apres-retrait.json
+ui git.tab changes
+ui git.select src/nouveau.php
+key Ctrl+Alt+A
+wait-idle
+wait 2200
+state @OUT@/m4-ctrl-alt-a.json
+quit

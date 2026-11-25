@@ -1,0 +1,18 @@
+# Recette v1 branches 1 : widget, fenêtre surgissante, récupérer (décor : branches.sh <d> tout)
+project @A@
+resize 1280 720
+wait-idle
+state @OUT@/b01-avant.json
+action vcs.fetch
+wait-idle
+wait 800
+state @OUT@/b01-apres-fetch.json
+ui branches.open
+wait-idle
+state @OUT@/b01-popup.json
+screenshot @OUT@/b01-popup.png
+ui branches.query fe/se
+wait 300
+state @OUT@/b01-fe-se.json
+ui branches.close
+quit

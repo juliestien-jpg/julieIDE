@@ -1,0 +1,39 @@
+# Recette v1 branches 16 : supprimer une branche non fusionnée avec la case « aussi sur le distant », puis Restaurer ; renommer
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.delete
+wait 500
+state @OUT@/b16-dialogue.json
+ui dialog.set also_remote on
+ui dialog.choose delete
+wait 800
+state @OUT@/b16-seconde.json
+ui dialog.choose force_delete
+wait-idle
+wait 1000
+state @OUT@/b16-supprimee.json
+ui toast.action
+wait-idle
+wait 800
+state @OUT@/b16-restauree.json
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.rename
+wait 500
+state @OUT@/b16-renommer.json
+ui dialog.set name feature/connexion
+ui dialog.choose rename
+wait-idle
+wait 800
+state @OUT@/b16-renommee.json
+ui branches.open
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.delete
+state @OUT@/b16-courante.json
+quit

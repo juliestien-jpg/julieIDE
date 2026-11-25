@@ -1,0 +1,35 @@
+# Recette v1 branches 21 : mise à jour d'une autre branche locale (avance rapide), divergée, tirer
+project @A@
+resize 1280 720
+wait-idle
+action vcs.fetch
+wait-idle
+wait 1000
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+state @OUT@/b21-menu-login.json
+ui menu.choose branch.update
+wait-idle
+wait 1000
+state @OUT@/b21-login.json
+ui branches.open
+ui branches.select feature/search
+ui branches.menu
+state @OUT@/b21-menu-search.json
+ui menu.choose branch.update
+wait-idle
+wait 1000
+state @OUT@/b21-search.json
+screenshot @OUT@/b21-search.png
+ui dialog.choose close
+ui branches.open
+ui branches.select origin/feature/search
+ui branches.menu
+state @OUT@/b21-menu-origin-search.json
+ui menu.choose branch.pull_merge
+wait-idle
+wait 1500
+state @OUT@/b21-pull.json
+screenshot @OUT@/b21-pull.png
+quit

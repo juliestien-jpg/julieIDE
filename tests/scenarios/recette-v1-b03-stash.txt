@@ -1,0 +1,17 @@
+# Recette v1 branches 3 : bascule refusée, mettre de côté et basculer, restauration en conflit
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+state @OUT@/b03-dialogue.json
+screenshot @OUT@/b03-dialogue.png
+ui dialog.choose stash
+wait-idle
+wait 800
+state @OUT@/b03-apres.json
+screenshot @OUT@/b03-apres.png
+quit

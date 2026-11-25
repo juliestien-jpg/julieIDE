@@ -1,0 +1,15 @@
+# Recette v1 réglages 5 : fichier en lecture seule (16), exclusion docs (14), édition à la main (11)
+project @A@
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.extra_args --RO2
+ui settings.apply
+wait 800
+state @OUT@/r5-ro.json
+screenshot @OUT@/r5-ro.png
+ui settings.cancel
+wait 300
+file .juliestorm/settings.toml
+wait 500
+state @OUT@/r5-fichier-ouvert.json
+quit

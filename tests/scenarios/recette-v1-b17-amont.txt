@@ -1,0 +1,39 @@
+# Recette v1 branches 17 : amont supprimé, pas d'amont, distant injoignable
+project @A@
+resize 1280 720
+wait-idle
+action vcs.fetch
+wait-idle
+wait 1000
+ui branches.open
+ui branches.select feature/search
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 500
+key Ctrl+T
+wait 800
+state @OUT@/b17-gone.json
+screenshot @OUT@/b17-gone.png
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/b17-gone-apres.json
+screenshot @OUT@/b17-gone-apres.png
+action vcs.new_branch
+wait 300
+ui dialog.set name sans-amont
+wait 600
+ui dialog.choose create
+wait-idle
+wait 500
+key Ctrl+T
+wait 800
+state @OUT@/b17-sans-amont.json
+screenshot @OUT@/b17-sans-amont.png
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/b17-sans-amont-apres.json
+screenshot @OUT@/b17-sans-amont-apres.png
+quit

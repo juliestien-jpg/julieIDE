@@ -1,0 +1,17 @@
+# Recette v1 branches 11 : pousser main (protégée) avec retard : force grisé, refus, Rebaser puis pousser
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+Maj+K
+wait 800
+state @OUT@/b11-dialogue.json
+ui dialog.choose push
+wait-idle
+wait 1200
+state @OUT@/b11-refuse.json
+ui dialog.choose rebase_push
+wait-idle
+wait 1500
+state @OUT@/b11-apres.json
+screenshot @OUT@/b11-apres.png
+quit

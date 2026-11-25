@@ -1,0 +1,21 @@
+# Recette v1 branches 8 : mise à jour par rebase qui s'arrête sur un conflit (changements locaux) puis Continuer
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose rebase
+wait-idle
+wait 1000
+state @OUT@/b08-conflit.json
+screenshot @OUT@/b08-conflit.png
+ui git.keep ours a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+ui op.continue
+wait-idle
+wait 1000
+state @OUT@/b08-fini.json
+quit

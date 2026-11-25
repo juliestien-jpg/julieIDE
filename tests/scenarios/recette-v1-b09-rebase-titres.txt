@@ -1,0 +1,17 @@
+# Recette v1 branches 9 : titres des volets pendant un rebase
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose rebase
+wait-idle
+wait 1000
+ui merge.open a.txt
+wait-idle
+wait 500
+state @OUT@/b09-merge.json
+screenshot @OUT@/b09-merge.png
+ui merge.close
+state @OUT@/b09-etat.json
+quit

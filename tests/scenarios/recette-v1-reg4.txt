@@ -1,0 +1,40 @@
+# Recette v1 réglages 4 : chemin de PHP faux/juste, priorité utilisateur/projet, git invalide
+project @A@
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.php_path C:\nexiste\pas\php.exe
+wait 1000
+state @OUT@/r4-php-faux.json
+ui settings.set phpunit.php_path C:\Program Files (x86)\AgileBio\LabCollector\php\php.exe
+wait 2000
+state @OUT@/r4-php-juste.json
+ui settings.unset phpunit.php_path
+ui settings.scope user
+ui settings.set phpunit.extra_args --USER
+ui settings.apply
+wait 500
+ui settings.scope project
+ui settings.set phpunit.extra_args --PROJET
+ui settings.apply
+wait 500
+state @OUT@/r4-priorite.json
+ui settings.unset phpunit.extra_args
+ui settings.apply
+wait 500
+state @OUT@/r4-priorite-retiree.json
+ui settings.page git
+ui settings.scope user
+ui settings.set vcs.git_path C:\invalide\git.exe
+ui settings.apply
+wait 1500
+state @OUT@/r4-git-invalide.json
+action view.git
+wait 1500
+state @OUT@/r4-git-fenetre.json
+screenshot @OUT@/r4-git-fenetre.png
+ui settings.open git
+ui settings.unset vcs.git_path
+ui settings.apply
+wait 2500
+state @OUT@/r4-git-retabli.json
+quit

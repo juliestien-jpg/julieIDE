@@ -1,0 +1,48 @@
+# Recette v1 navigation : usages (critères 12 à 16, 20). Décor : copie de tests/fixtures/navigation (@A@ = la copie)
+project @A@
+file src/Model/User.php:17:21
+ui nav.ctrl-click 17:21
+wait-idle
+wait 500
+state @OUT@/u12.json
+file src/Model/Admin.php:6:21
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u13a.json
+file src/Legacy/Order.php:6:21
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u13b.json
+file src/Model/User.php:4:8
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u14.json
+file src/functions.php:6:12
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u15a.json
+file src/Service/UserService.php:40:29
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u15b.json
+file src/Model/Entity.php:13:21
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u15c.json
+file vendor/acme/logger/src/Logger.php:6:21
+ui nav.ctrl-click 6:21
+wait-idle
+wait 500
+state @OUT@/u16.json
+file web/js/util.js:1:17
+key Alt+F7
+wait-idle
+wait 500
+state @OUT@/u20.json
+quit

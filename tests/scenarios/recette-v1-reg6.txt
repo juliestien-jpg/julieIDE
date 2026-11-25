@@ -1,0 +1,28 @@
+# Recette v1 réglages 6 : exclusion de docs (critère 14), .git non retirable
+project @A@
+action nav.goto_file
+type a.php
+wait-idle
+state @OUT@/r6-avant.json
+key Escape
+ui settings.open search
+ui settings.scope project
+ui settings.set index.excluded docs
+wait 300
+state @OUT@/r6-saisi.json
+ui settings.apply
+wait 3000
+action nav.goto_file
+type a.php
+wait-idle
+state @OUT@/r6-apres.json
+key Escape
+action nav.find_in_files
+type contenu-docs
+wait-idle
+state @OUT@/r6-recherche.json
+key Escape
+ui settings.open search
+ui settings.set index.excluded
+state @OUT@/r6-vide.json
+quit

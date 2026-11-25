@@ -1,0 +1,18 @@
+# Recette v1 : l'arbre du projet après une bascule qui retire des fichiers
+project @A@
+resize 1280 720
+wait-idle
+state @OUT@/b14-0.json
+ui git.tab log
+wait-idle
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 500
+ui dialog.choose checkout
+wait-idle
+state @OUT@/b14-1.json
+wait 4000
+state @OUT@/b14-2.json
+wait 8000
+state @OUT@/b14-3.json
+quit

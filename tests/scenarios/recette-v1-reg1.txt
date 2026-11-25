@@ -1,0 +1,11 @@
+# Recette v1 réglages 1 : Ctrl+Alt+S sur la copie de backoffice, rien écrit
+project @A@
+key Ctrl+Alt+S
+wait-idle
+wait 500
+state @OUT@/r1-ouvert.json
+screenshot @OUT@/r1-ouvert.png
+key Escape
+wait 300
+state @OUT@/r1-ferme.json
+quit

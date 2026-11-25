@@ -1,0 +1,24 @@
+# Recette v1 branches 2 : bascule distante seule, création depuis une branche (décor : branches.sh <d> distante-seule)
+project @A@
+resize 1280 720
+wait-idle
+action vcs.fetch
+wait-idle
+wait 800
+ui branches.open
+ui branches.select origin/feature/remote-only
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+state @OUT@/b02-remote-only.json
+ui branches.open
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.new_from
+wait 300
+ui dialog.set name feature/x
+state @OUT@/b02-nom-ok.json
+ui dialog.choose create
+wait-idle
+state @OUT@/b02-creee.json
+quit

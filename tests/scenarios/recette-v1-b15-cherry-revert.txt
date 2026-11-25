@@ -1,0 +1,41 @@
+# Recette v1 branches 15 : cherry-pick, cherry-pick en conflit puis abandon, revert
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+ui git.log-filter branch feature/search
+wait-idle
+wait 500
+state @OUT@/b15-journal-search.json
+ui menu.open log 1
+state @OUT@/b15-menu.json
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+state @OUT@/b15-pick1.json
+ui git.log-filter branch feature/login
+wait-idle
+wait 500
+state @OUT@/b15-journal-login.json
+# commit 2 du sujet « Connexion : a.txt ligne 2 » = le deuxième en partant du sommet
+ui menu.open log 2
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+state @OUT@/b15-pick2-conflit.json
+screenshot @OUT@/b15-pick2-conflit.png
+ui git.abort
+wait 300
+ui confirm
+wait-idle
+wait 800
+state @OUT@/b15-pick2-abandon.json
+ui git.log-filter clear
+wait-idle
+wait 500
+ui menu.open log 1
+ui menu.choose log.revert
+wait-idle
+wait 1200
+state @OUT@/b15-revert.json
+quit

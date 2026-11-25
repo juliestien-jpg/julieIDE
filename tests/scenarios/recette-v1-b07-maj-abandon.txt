@@ -1,0 +1,17 @@
+# Recette v1 branches 7 : mise à jour par fusion en conflit, puis Abandonner la fusion
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 1000
+ui git.abort
+wait 300
+state @OUT@/b07-confirm.json
+ui confirm
+wait-idle
+wait 800
+state @OUT@/b07-apres.json
+quit

@@ -1,0 +1,18 @@
+# Recette v1 réglages 2 : fichier de projet écrit à la main (CRLF, commentaires, table inconnue), une clé modifiée
+project @A@
+ui settings.open phpunit
+ui settings.scope project
+wait 500
+state @OUT@/r2-ouvert.json
+ui settings.set phpunit.extra_args --stop-on-failure --group "très lent"
+wait 300
+state @OUT@/r2-saisi.json
+ui settings.apply
+wait 800
+state @OUT@/r2-apres.json
+ui settings.unset phpunit.extra_args
+ui settings.apply
+wait 800
+state @OUT@/r2-unset.json
+ui settings.ok
+quit

@@ -1,0 +1,17 @@
+# Recette v1 branches 20 : journal de ~10 000 commits avec 30 fusions
+project @A@
+resize 1280 720
+wait-idle
+action view.bottom_tall
+ui git.tab log
+wait-idle
+state @OUT@/b20-0.json
+ui git.log-select 1
+key End
+wait 1500
+state @OUT@/b20-fin.json
+key Home
+wait 800
+state @OUT@/b20-debut.json
+screenshot @OUT@/b20-debut.png
+quit

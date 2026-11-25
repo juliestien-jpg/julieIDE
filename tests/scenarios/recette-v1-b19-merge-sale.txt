@@ -1,0 +1,31 @@
+# Recette v1 branches 19 : fusionner / rebaser / basculer-rebaser avec un a.txt modifié localement
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 1000
+state @OUT@/b19-merge.json
+screenshot @OUT@/b19-merge.png
+ui dialog.choose close
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.rebase_onto
+wait-idle
+wait 1000
+state @OUT@/b19-rebase-onto.json
+screenshot @OUT@/b19-rebase-onto.png
+ui dialog.choose close
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout_rebase
+wait-idle
+wait 1000
+state @OUT@/b19-checkout-rebase.json
+screenshot @OUT@/b19-checkout-rebase.png
+quit

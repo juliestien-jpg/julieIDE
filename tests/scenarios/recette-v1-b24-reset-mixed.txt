@@ -1,0 +1,18 @@
+# Recette v1 branches 24 : reset (mode @mixed@) de 2 commits
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.reset
+wait 500
+ui dialog.set mode mixed
+wait 300
+state @OUT@/b24-dialogue.json
+ui dialog.choose reset
+wait-idle
+wait 1200
+state @OUT@/b24-apres.json
+quit

@@ -1,0 +1,20 @@
+# Recette v1 branches 18 : distant injoignable : mise à jour avec changements locaux
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 2000
+state @OUT@/b18-maj.json
+screenshot @OUT@/b18-maj.png
+ui dialog.choose close
+wait 300
+key Ctrl+T
+wait 600
+ui dialog.choose rebase
+wait-idle
+wait 2000
+state @OUT@/b18-maj2.json
+quit

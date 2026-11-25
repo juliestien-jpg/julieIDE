@@ -1,0 +1,11 @@
+# Recette v1 navigation : critère 24 (Order.php réécrit hors de l'IDE : 2 candidats)
+project @A@
+file src/Legacy/Order.php:6:21
+external-write src/Legacy/Order.php <?php\nnamespace App\Legacy;\n\nclass Order\n{\n    public function title(): string\n    {\n        return 'x';\n    }\n}\n
+wait 2500
+file src/Service/UserService.php:37:24
+ui nav.ctrl-click 37:24
+wait-idle
+wait 500
+state @OUT@/m24.json
+quit

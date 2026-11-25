@@ -1,0 +1,22 @@
+# Recette v1 branches 6 : mise à jour par fusion qui s'arrête sur un conflit, avec changements locaux mis de côté
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/b06-conflit.json
+screenshot @OUT@/b06-conflit.png
+ui git.keep ours a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+ui git.commit
+wait-idle
+wait 1000
+state @OUT@/b06-valide.json
+screenshot @OUT@/b06-valide.png
+quit

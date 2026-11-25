@@ -1,0 +1,20 @@
+# Recette v1 navigation : critère 17 (onglet modifié), 24 (modif externe), 25 (cache), 23 (Broken.php)
+project @A@
+file src/Service/UserService.php:33:9
+type $this->current->getName();
+key Enter
+wait 1500
+file src/Model/User.php:17:21
+key Alt+F7
+wait-idle
+wait 800
+state @OUT@/m17.json
+file src/Legacy/Order.php:6:21
+external-write src/Legacy/Order.php <?php\nnamespace App\Legacy;\n\nclass Order\n{\n    public function title(): string\n    {\n        return 'x';\n    }\n}\n
+wait 3000
+file src/Service/UserService.php:37:24
+ui nav.ctrl-click 37:24
+wait-idle
+wait 500
+state @OUT@/m24.json
+quit

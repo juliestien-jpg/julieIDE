@@ -1,0 +1,50 @@
+# Recette v1 menus 3 : nouveau fichier, noms refusés, renommer (casse), supprimer vers la corbeille, copier le chemin
+project @A@
+file src/user.php
+ui menu.open tree src
+ui menu.choose tree.new_file
+wait 300
+ui dialog.set name sous/dos/a.php
+wait 300
+state @OUT@/m3-new-ok.json
+ui dialog.choose create
+wait-idle
+wait 500
+state @OUT@/m3-new-cree.json
+ui menu.open tree src
+ui menu.choose tree.new_file
+ui dialog.set name con.php
+wait 300
+state @OUT@/m3-new-con.json
+ui dialog.set name a?.php
+wait 300
+state @OUT@/m3-new-qm.json
+ui dialog.set name user.php
+wait 300
+state @OUT@/m3-new-pris.json
+ui dialog.choose cancel
+ui menu.open tree src/user.php
+ui menu.choose tree.rename
+ui dialog.set name User.php
+wait 300
+ui dialog.choose rename
+wait-idle
+wait 800
+state @OUT@/m3-renomme.json
+ui menu.open tree src/essai-corbeille.txt
+ui menu.choose tree.delete
+wait 300
+state @OUT@/m3-suppr-dialogue.json
+ui dialog.choose trash
+wait-idle
+wait 800
+state @OUT@/m3-supprime.json
+ui menu.open tree src/User.php
+ui menu.expand sub.copy
+ui menu.choose file.copy_relative_path
+state @OUT@/m3-copie-rel.json
+ui menu.open tree src/User.php
+ui menu.expand sub.copy
+ui menu.choose file.copy_path
+state @OUT@/m3-copie-abs.json
+quit

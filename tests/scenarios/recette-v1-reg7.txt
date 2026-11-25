@@ -1,0 +1,19 @@
+# Recette v1 réglages 7 : variable d'environnement et arguments (critères 9, 10), exécution partielle
+project @A@
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.extra_args --testsuite env --group "très lent
+wait 300
+state @OUT@/r7-erreur.json
+ui settings.set phpunit.extra_args --testsuite env --group "très lent"
+wait 300
+state @OUT@/r7-deux.json
+ui settings.set phpunit.extra_args --testsuite env
+ui settings.env APP_ENV=test
+ui settings.ok
+wait 500
+ui tests.run
+wait-idle
+wait 1500
+state @OUT@/r7-run.json
+quit

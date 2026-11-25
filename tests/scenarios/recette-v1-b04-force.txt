@@ -1,0 +1,28 @@
+# Recette v1 branches 4 : forcer la bascule, annuler à la seconde confirmation, puis forcer
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+ui dialog.choose force
+wait 300
+state @OUT@/b04-conf.json
+ui dialog.choose cancel
+wait 300
+state @OUT@/b04-apres-annul.json
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+ui dialog.choose force
+wait 300
+ui dialog.choose force_confirm
+wait-idle
+wait 800
+state @OUT@/b04-force.json
+screenshot @OUT@/b04-force.png
+quit

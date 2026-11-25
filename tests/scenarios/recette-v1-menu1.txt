@@ -1,0 +1,59 @@
+# Recette v1 menus 1 : toutes les zones, entrées grisées et raisons (décor : branches.sh <d> tout + fichiers de recette-v1)
+project @A@
+file a.txt
+ui git.tab changes
+wait-idle
+ui menu.open tree src/nouveau.php
+state @OUT@/m1-tree-untracked.json
+ui menu.close
+ui menu.open tree a.txt
+state @OUT@/m1-tree-modified.json
+ui menu.close
+ui menu.open tree LISEZMOI.md
+state @OUT@/m1-tree-tracked.json
+ui menu.close
+ui menu.open tree .
+state @OUT@/m1-tree-root.json
+ui menu.close
+ui menu.open tree src
+state @OUT@/m1-tree-dir.json
+ui menu.close
+ui menu.open tree a.txt,LISEZMOI.md
+state @OUT@/m1-tree-multi.json
+ui menu.close
+ui menu.open tree src,a.txt
+state @OUT@/m1-tree-multi-mixte.json
+ui menu.close
+ui menu.open changes a.txt
+state @OUT@/m1-changes-1.json
+ui menu.close
+ui menu.open changes a.txt,added.txt,LISEZMOI.md
+state @OUT@/m1-changes-3.json
+ui menu.close
+ui menu.open changes src/nouveau.php
+state @OUT@/m1-changes-untracked.json
+ui menu.close
+ui menu.open tab 1
+state @OUT@/m1-tab.json
+ui menu.close
+ui menu.open editor
+state @OUT@/m1-editor.json
+ui menu.close
+ui menu.open terminal
+state @OUT@/m1-terminal.json
+ui menu.close
+ui git.tab log
+wait-idle
+ui menu.open log 1
+state @OUT@/m1-log-1.json
+ui menu.close
+ui menu.open log 2
+state @OUT@/m1-log-2.json
+ui menu.close
+ui menu.open branch main
+state @OUT@/m1-branch-main.json
+ui menu.close
+ui menu.open branch feature/login
+state @OUT@/m1-branch-login.json
+ui menu.close
+quit

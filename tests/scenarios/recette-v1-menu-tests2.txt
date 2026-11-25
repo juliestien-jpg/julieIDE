@@ -1,0 +1,22 @@
+# Recette v1 menus : relancer les échecs, lancer un jeu de données piégé
+project @A@
+ui menu.open tree tests/Main/CalculatorTest.php
+ui menu.choose tests.run_here
+wait-idle
+wait 2500
+ui menu.open test testEqualsFailsWithExpectedAndActual
+state @OUT@/mt2-menu-test.json
+ui menu.close
+ui menu.open test CalculatorTest
+state @OUT@/mt2-menu-classe.json
+ui menu.choose tests.rerun_failed
+wait-idle
+wait 2500
+state @OUT@/mt2-echecs.json
+ui menu.open test l'apostrophe | la barre [et] les crochets
+state @OUT@/mt2-menu-piege.json
+ui menu.choose tests.run_node
+wait-idle
+wait 2500
+state @OUT@/mt2-piege.json
+quit

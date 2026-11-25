@@ -1,0 +1,34 @@
+# Recette v1 branches 26 : fusionner feature/login dans main, conflit, Abandonner la fusion
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 800
+state @OUT@/b26-conflit.json
+ui git.abort
+wait 300
+ui confirm
+wait-idle
+wait 800
+state @OUT@/b26-abandon.json
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 800
+ui git.keep theirs a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+ui git.message Fusion de login
+ui git.commit
+wait-idle
+wait 1000
+state @OUT@/b26-valide.json
+quit

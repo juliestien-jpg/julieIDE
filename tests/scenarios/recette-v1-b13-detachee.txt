@@ -1,0 +1,40 @@
+# Recette v1 branches 13 : HEAD détachée, commit orphelin, quitter, créer une branche ici
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 500
+state @OUT@/b13-confirm.json
+screenshot @OUT@/b13-confirm.png
+ui dialog.choose checkout
+wait-idle
+wait 800
+state @OUT@/b13-detachee.json
+screenshot @OUT@/b13-detachee.png
+key Ctrl+Maj+K
+wait 600
+state @OUT@/b13-push-detachee.json
+ui dialog.choose cancel
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+state @OUT@/b13-commit.json
+screenshot @OUT@/b13-commit.png
+ui branches.open
+wait-idle
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 600
+state @OUT@/b13-quitter.json
+screenshot @OUT@/b13-quitter.png
+quit

@@ -1,0 +1,17 @@
+# Recette v1 réglages 3 : fichier de projet mal formé (critère 12)
+project @A@
+wait 1500
+state @OUT@/r3-demarre.json
+screenshot @OUT@/r3-demarre.png
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.extra_args --stop-on-failure
+wait 300
+ui settings.apply
+wait 800
+state @OUT@/r3-apres.json
+screenshot @OUT@/r3-apres.png
+ui settings.ok
+wait 500
+state @OUT@/r3-ok.json
+quit

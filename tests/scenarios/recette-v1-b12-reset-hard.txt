@@ -1,0 +1,25 @@
+# Recette v1 branches 12 : réinitialiser main de 2 commits, tout jeter, avec changements locaux
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.reset
+wait 500
+ui dialog.set mode hard
+ui dialog.set stash_first off
+wait 300
+state @OUT@/b12-dialogue.json
+screenshot @OUT@/b12-dialogue.png
+ui dialog.choose reset
+wait 500
+state @OUT@/b12-confirm.json
+screenshot @OUT@/b12-confirm.png
+ui dialog.choose reset
+wait-idle
+wait 1000
+state @OUT@/b12-apres.json
+screenshot @OUT@/b12-apres.png
+quit

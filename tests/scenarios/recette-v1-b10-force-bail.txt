@@ -1,0 +1,16 @@
+# Recette v1 branches 10 : forcer avec bail directement (bail périmé si B a poussé entre-temps)
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+Maj+K
+wait 800
+ui dialog.choose force
+wait 400
+state @OUT@/b10-force-conf.json
+screenshot @OUT@/b10-force-conf.png
+ui dialog.choose force_confirm
+wait-idle
+wait 1200
+state @OUT@/b10-apres.json
+screenshot @OUT@/b10-apres.png
+quit

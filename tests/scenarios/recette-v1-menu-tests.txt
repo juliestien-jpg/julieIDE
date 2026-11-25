@@ -1,0 +1,25 @@
+# Recette v1 menus : lancement partiel par clic droit (arbre), relancer les échecs
+project @A@
+ui menu.open tree tests/Main/CalculatorTest.php
+state @OUT@/mt-menu-arbre.json
+ui menu.choose tests.run_here
+wait-idle
+wait 2500
+state @OUT@/mt-partiel.json
+ui menu.open tree tests/Main
+state @OUT@/mt-menu-dossier.json
+ui menu.close
+ui menu.open tree phpunit.xml
+state @OUT@/mt-menu-xml.json
+ui menu.close
+ui menu.open tree .
+state @OUT@/mt-menu-racine.json
+ui menu.close
+action tests.rerun
+wait 600
+state @OUT@/mt-rerun.json
+ui confirm
+wait-idle
+wait 2500
+state @OUT@/mt-apres-rerun.json
+quit

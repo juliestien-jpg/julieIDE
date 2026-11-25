@@ -1,0 +1,31 @@
+# Recette v1 branches 23 : pre-push refusé (sortie du crochet), cherry-pick d'un commit déjà présent, reset soft
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+Maj+K
+wait 2000
+ui dialog.choose push
+wait-idle
+wait 1500
+state @OUT@/b23-crochet.json
+screenshot @OUT@/b23-crochet.png
+ui dialog.choose close
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 1
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+state @OUT@/b23-pick-present.json
+ui menu.open log 2
+ui menu.choose log.reset
+wait 500
+ui dialog.set mode soft
+wait 300
+state @OUT@/b23-reset-dialogue.json
+ui dialog.choose reset
+wait-idle
+wait 1000
+state @OUT@/b23-reset-soft.json
+quit

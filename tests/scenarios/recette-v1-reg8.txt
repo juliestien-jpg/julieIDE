@@ -1,0 +1,14 @@
+# Recette v1 réglages 8 : phar relatif réglé dans la fenêtre (critère 4), suite main de la fixture
+project @A@
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.phpunit_path outils\phpunit.phar
+wait 1500
+state @OUT@/r8-saisi.json
+ui settings.ok
+wait 500
+ui tests.run
+wait-idle
+wait 2500
+state @OUT@/r8-run.json
+quit
