@@ -1,0 +1,14 @@
+# Contre-recette M1 : rouvrir après un « git merge --abort » fait au terminal : bandeau « Remettre mes changements ».
+project @A@
+resize 1280 720
+wait-idle
+wait 800
+ui git.tab changes
+state @OUT@/deux-d-ouverture.json
+screenshot @OUT@/deux-d-ouverture.png
+ui git.banner stash
+wait-idle
+wait 1500
+state @OUT@/deux-d-remis.json
+screenshot @OUT@/deux-d-remis.png
+quit

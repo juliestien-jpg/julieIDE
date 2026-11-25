@@ -1,0 +1,34 @@
+# Contre-recette M1, opérations successives (2/3) : reprendre l'IDE avec une 1re mise de côté « opération finie », refaire un cherry-pick avec mise de côté, abandonner.
+project @A@
+resize 1280 720
+wait-idle
+wait 800
+ui git.tab changes
+state @OUT@/succ-b-ouverture.json
+ui git.tab log
+ui git.log-filter branch feature/login
+wait-idle
+wait 500
+ui menu.open log 2
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+ui dialog.choose stash
+wait-idle
+wait 1500
+ui git.tab changes
+state @OUT@/succ-b-conflit2.json
+screenshot @OUT@/succ-b-conflit2.png
+ui git.abort
+wait 300
+ui confirm
+wait-idle
+wait 1500
+state @OUT@/succ-b-abandon2.json
+screenshot @OUT@/succ-b-abandon2.png
+ui git.banner stash
+wait-idle
+wait 1500
+state @OUT@/succ-b-remise1.json
+screenshot @OUT@/succ-b-remise1.png
+quit

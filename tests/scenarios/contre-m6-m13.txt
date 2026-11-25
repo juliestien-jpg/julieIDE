@@ -1,0 +1,18 @@
+# Contre-recette m6 (Ctrl+Maj+B) et m13 (non suivi écrasé lors de la remise). Décor : recette-v1-corrections.sh <dossier> force
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+Maj+B
+wait 600
+state @OUT@/m6-popup.json
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+state @OUT@/m13-dialogue.json
+ui dialog.choose stash
+wait-idle
+wait 1500
+state @OUT@/m13-apres.json
+screenshot @OUT@/m13-apres.png
+quit

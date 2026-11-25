@@ -1,0 +1,25 @@
+# Contre-recette M5 : titres des volets pendant un revert en conflit. Décor : contre-recette.sh <dossier> revert
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+ui git.log-filter branch main
+wait-idle
+wait 500
+ui menu.open log 2
+ui menu.choose log.revert
+wait-idle
+wait 1200
+ui dialog.choose stash
+wait-idle
+wait 1500
+ui git.tab changes
+state @OUT@/m5-revert-etat.json
+ui merge.open a.txt
+wait-idle
+wait 800
+state @OUT@/m5-revert-merge.json
+screenshot @OUT@/m5-revert-merge.png
+ui merge.close
+wait 300
+quit

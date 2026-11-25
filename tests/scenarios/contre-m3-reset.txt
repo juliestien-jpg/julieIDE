@@ -1,0 +1,39 @@
+# Contre-recette M3 : HEAD détachée avec un commit, réinitialisation dure vers un ancien commit.
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+state @OUT@/pre.json
+ui git.tab log
+wait 500
+ui menu.open log 3
+ui menu.choose log.reset
+wait 500
+ui dialog.set mode hard
+wait 300
+state @OUT@/reset-dlg.json
+screenshot @OUT@/reset-dlg.png
+ui dialog.choose reset
+wait 500
+state @OUT@/reset-dlg2.json
+ui dialog.choose reset
+wait-idle
+wait 1200
+state @OUT@/apres.json
+screenshot @OUT@/apres.png
+quit

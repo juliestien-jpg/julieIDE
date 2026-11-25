@@ -1,0 +1,52 @@
+# Contre-recette M3 : HEAD détachée avec un commit, « Nouvelle branche » à partir de main avec bascule.
+# Décor : contre-recette.sh <dossier> detachee-branche (3 commits, orphelin.txt à créer : voir ci-dessous)
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+state @OUT@/pre.json
+ui branches.open
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.new_from
+wait 300
+ui dialog.set name essai-nouvelle
+ui dialog.set switch on
+wait 300
+state @OUT@/dlg.json
+ui dialog.choose create
+wait-idle
+wait 1000
+state @OUT@/apres.json
+screenshot @OUT@/apres.png
+
+ui dialog.choose create_first
+wait-idle
+wait 1200
+state @OUT@/create-first.json
+screenshot @OUT@/create-first.png
+
+state @OUT@/create-first-dlg.json
+ui dialog.set name sauve
+wait 300
+ui dialog.choose create
+wait-idle
+wait 1500
+state @OUT@/create-first-fin.json
+screenshot @OUT@/create-first-fin.png
+quit

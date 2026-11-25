@@ -1,0 +1,41 @@
+# Contre-recette M5 : titres des volets quand la remise de la mise de côté tombe en conflit (aucune opération). Décor : contre-recette.sh <dossier> pick
+# Décor : tests/fixtures/contre-recette.sh <dossier> pick
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+ui git.log-filter branch feature/login
+wait-idle
+wait 500
+ui menu.open log 2
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+state @OUT@/pick-refus.json
+screenshot @OUT@/pick-refus.png
+ui dialog.choose stash
+wait-idle
+wait 1500
+state @OUT@/pick-conflit.json
+screenshot @OUT@/pick-conflit.png
+ui git.keep incoming a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+ui op.continue
+wait-idle
+wait 1500
+state @OUT@/pick-fini.json
+screenshot @OUT@/pick-fini.png
+
+ui git.tab changes
+state @OUT@/remise-etat.json
+ui git.keep yours a.txt
+wait 300
+ui confirm
+wait-idle
+wait-idle
+state @OUT@/remise-merge.json
+screenshot @OUT@/remise-merge.png
+quit

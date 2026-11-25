@@ -354,7 +354,10 @@ PHP, aller à la déclaration (Ctrl+clic, puis le même avec Ctrl+B au curseur) 
    `$this->getId()` (User) → `Entity::getId` ; `parent::getName()` (Admin) →
    `User::getName`.
 5. `User` dans `use App\Model\User;` → classe `User` ; `Boss` dans `new Boss('b')`
-   → classe `Admin` ; `static` dans `new static($name)` → classe `User`.
+   → classe `Admin` ; `static` dans `new static($name)` → classe `User`. Pour
+   `new X(...)`, la cible est proposée dans une liste avec le constructeur en
+   seconde ligne quand il existe (décision n°9 de `decisions-v1.md`) : la classe
+   attendue est la première ligne de cette liste.
 6. `create` dans `User::create('root')` → `User::create` ; `ROLE_ADMIN` →
    la constante ; `check` dans `self::check()` et dans `static::check()` →
    `UserService::check`.

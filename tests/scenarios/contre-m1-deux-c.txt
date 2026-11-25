@@ -1,0 +1,15 @@
+# Contre-recette M1 : rouvrir en pleine fusion et ABANDONNER depuis l'IDE (après redémarrage).
+project @A@
+resize 1280 720
+wait-idle
+wait 800
+ui git.tab changes
+state @OUT@/deux-c-ouverture.json
+ui git.abort
+wait 300
+ui confirm
+wait-idle
+wait 1500
+state @OUT@/deux-c-abandon.json
+screenshot @OUT@/deux-c-abandon.png
+quit

@@ -1,0 +1,34 @@
+# Contre-recette split x Git (C) : a.txt (en conflit, avec marqueurs) ouvert dans deux groupes ; le dialogue de fusion à trois volets s'ouvre dessus,
+# on accepte le bloc et on enregistre : les deux vues doivent se recharger (un seul document), sans marqueurs.
+# Décor : recette-v1-corrections.sh <dossier> maj-conflit
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 1000
+file a.txt:1
+action editor.split_right
+wait 500
+state @OUT@/c0-split.json
+screenshot @OUT@/c0.png
+ui git.tab changes
+wait 300
+ui merge.open a.txt
+wait-idle
+wait 800
+state @OUT@/c1-merge.json
+screenshot @OUT@/c1-merge.png
+ui merge.accept 0 right
+wait 300
+ui merge.save
+wait-idle
+wait 1500
+state @OUT@/c2-g2.json
+screenshot @OUT@/c2.png
+ui group.activate 1
+wait 400
+state @OUT@/c2-g1.json
+quit

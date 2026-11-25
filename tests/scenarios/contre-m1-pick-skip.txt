@@ -1,0 +1,33 @@
+# Contre-recette M1 : cherry-pick refusé, mise de côté, conflit résolu en gardant « votre version » (pick vide), Continuer échoue, Passer ce commit.
+# Décor : tests/fixtures/contre-recette.sh <dossier> pick
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+ui git.log-filter branch feature/login
+wait-idle
+wait 500
+ui menu.open log 2
+ui menu.choose log.cherry_pick
+wait-idle
+wait 1200
+ui dialog.choose stash
+wait-idle
+wait 1500
+ui git.keep yours a.txt
+wait 300
+ui confirm
+wait-idle
+wait 500
+ui op.continue
+wait-idle
+wait 1000
+state @OUT@/pick-vide-continue.json
+ui op.skip
+wait 400
+ui confirm
+wait-idle
+wait 1500
+state @OUT@/pick-vide-skip.json
+screenshot @OUT@/pick-vide-skip.png
+quit

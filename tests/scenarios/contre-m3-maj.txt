@@ -1,0 +1,26 @@
+# Contre-recette M3 : HEAD détachée avec un commit, mise à jour Ctrl+T.
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+state @OUT@/pre.json
+key Ctrl+T
+wait 800
+state @OUT@/apres.json
+screenshot @OUT@/apres.png
+quit

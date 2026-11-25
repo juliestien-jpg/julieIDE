@@ -1,0 +1,12 @@
+# Contre-recette M4 : l'arbre voit les fichiers arrivés par une mise à jour (décor : branches.sh <dossier> retard).
+project @A@
+resize 1280 720
+wait-idle
+state @OUT@/avant.json
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 400
+state @OUT@/apres.json
+quit

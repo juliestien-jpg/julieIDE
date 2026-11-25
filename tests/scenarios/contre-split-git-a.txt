@@ -1,0 +1,35 @@
+# Contre-recette split x Git (A) : c3.txt ouvert dans deux groupes, puis supprimé par une bascule (journal), puis rétabli par le retour sur main.
+# Décor : recette-v1-corrections.sh <dossier> arbre
+project @A@
+resize 1280 720
+wait-idle
+file a.txt:1
+file c3.txt:1
+action editor.split_right
+wait 500
+state @OUT@/a0-split.json
+ui git.tab log
+wait-idle
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 500
+ui dialog.choose checkout
+wait-idle
+wait 2500
+state @OUT@/a1-g2.json
+screenshot @OUT@/a1.png
+ui group.activate 1
+wait 400
+state @OUT@/a1-g1.json
+ui branches.open
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 2500
+state @OUT@/a2-g1.json
+ui group.activate 2
+wait 400
+state @OUT@/a2-g2.json
+screenshot @OUT@/a2.png
+quit

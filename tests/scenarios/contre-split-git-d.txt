@@ -1,0 +1,30 @@
+# Contre-recette split x Git (D) : a.txt (modifié, non validé) ouvert dans deux groupes, texte tapé non enregistré dans le groupe 1, puis « Annuler les modifications » depuis la liste des changements.
+# Décor : recette-v1-corrections.sh <dossier> force
+project @A@
+resize 1280 720
+wait-idle
+file a.txt:1
+action editor.split_right
+ui group.activate 1
+type QQ
+wait 300
+ui git.tab changes
+wait 500
+ui menu.open changes a.txt
+ui menu.choose vcs.discard
+wait 500
+state @OUT@/d-dialogue.json
+ui dialog.choose discard
+wait-idle
+wait 2500
+state @OUT@/d-g1.json
+screenshot @OUT@/d1.png
+ui group.activate 2
+wait 300
+state @OUT@/d-g2.json
+ui toast.action
+wait-idle
+wait 1500
+state @OUT@/d-retabli.json
+screenshot @OUT@/d2.png
+quit

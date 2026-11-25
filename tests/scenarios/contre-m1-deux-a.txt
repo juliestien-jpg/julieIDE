@@ -1,0 +1,12 @@
+# Contre-recette M1 : mise à jour en conflit (mise de côté), l'IDE se ferme en cours d'opération.
+# Décor : contre-recette.sh <dossier> deux. Suite : contre-m1-deux-b.txt ou -c.txt
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/deux-a-conflit.json
+quit

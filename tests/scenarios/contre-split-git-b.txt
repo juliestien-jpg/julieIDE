@@ -1,0 +1,38 @@
+# Contre-recette split x Git (B) : a.txt ouvert dans deux groupes ; la bascule vers feature/login le réécrit sur le disque ;
+# variante modifié non enregistré. Décor : recette-v1-corrections.sh <dossier> arbre
+project @A@
+resize 1280 720
+wait-idle
+file a.txt:1
+action editor.split_right
+wait 500
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 2500
+state @OUT@/b1-g2.json
+screenshot @OUT@/b1.png
+ui group.activate 1
+wait 300
+state @OUT@/b1-g1.json
+# frappe non enregistrée dans le groupe 1, puis retour sur main
+type XYZ
+wait 300
+state @OUT@/b2-modifie.json
+ui branches.open
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 2500
+state @OUT@/b3-g1.json
+screenshot @OUT@/b3.png
+key Ctrl+S
+wait 800
+state @OUT@/b4-apres-ctrl-s.json
+screenshot @OUT@/b4.png
+ui group.activate 2
+state @OUT@/b4-g2.json
+quit

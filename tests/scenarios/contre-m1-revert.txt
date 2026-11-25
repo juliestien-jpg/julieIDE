@@ -1,0 +1,29 @@
+# Contre-recette M1 : revert refusé, mise de côté, conflit, Abandonner.
+# Décor : tests/fixtures/contre-recette.sh <dossier> revert
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+ui git.log-filter branch main
+wait-idle
+wait 500
+state @OUT@/revert-journal.json
+ui menu.open log 2
+ui menu.choose log.revert
+wait-idle
+wait 1200
+state @OUT@/revert-refus.json
+screenshot @OUT@/revert-refus.png
+ui dialog.choose stash
+wait-idle
+wait 1500
+state @OUT@/revert-conflit.json
+screenshot @OUT@/revert-conflit.png
+ui git.abort
+wait 300
+ui confirm
+wait-idle
+wait 1500
+state @OUT@/revert-abandon.json
+screenshot @OUT@/revert-abandon.png
+quit

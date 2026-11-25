@@ -186,3 +186,130 @@ Les conflits en trop sont tous du côté sûr (lignes répétées : on garde un 
 ## Fichiers livrés (dans `tests/`)
 
 `tests/fixtures/recette-v1-run.sh`, `recette-v1-nav.py`, `recette-v1-nav-reel.py`, `fusion-enum.py`, et `tests/scenarios/recette-v1-*.txt` (branches `b01` à `b26`, réglages `reg1` à `reg8`, menus `menu1` à `menu4` et `menu-tests*`, navigation `nav-*`).
+
+---
+
+# Contre-recette
+
+Faite le 25/11/2026 par la testeuse sur `target\debug\juliestorm.exe` reconstruit au commit `c27b431` (arbre propre au départ : les
+corrections de la recette et le fractionnement des éditeurs sont dedans). Mêmes règles que plus haut : mode scénario, dossiers
+jetables de `%TEMP%` (`jsqa2\…`, `jsessai-*`), `JULIESTORM_STATE_DIR` neuf à chaque lancement, dépôts nus locaux comme seuls distants,
+aucun commit ni push, aucune modification du code de l'application. `labmate_paper` n'a servi qu'à un `git clone` (jamais ouvert dans
+l'IDE) ; `backoffice` n'a été que lu (copie de `phpunit.xml` et du phar par `backoffice-copie.sh`).
+
+Ajouts dans `tests/` : `tests/fixtures/contre-recette.sh` (cas `pick`, `revert`, `deux`, `detachee-branche`) et 26
+scénarios `tests/scenarios/contre-*.txt` (`contre-m1-*`, `contre-m3-*`, `contre-m4-pull`, `contre-m5-*`, `contre-m6-m13`,
+`contre-split-git-a` à `d`).
+
+## Verdict de la contre-recette
+
+**Les cinq majeurs sont clos, y compris sur les variantes que la développeuse n'avait pas jouées, et je n'ai trouvé aucune perte de
+travail : ni bloquant, ni majeur nouveau.** Douze mineurs sont clos, un l'est en partie (m13), deux ne le sont pas (m10, m15), m16
+reste inexpliqué. Le fractionnement des éditeurs tient ses 10 critères et ses interactions avec Git. Il reste six mineurs nouveaux,
+tous cosmétiques ou de texte, sauf un comportement de Ctrl+S à trancher (N4). **La v1 peut être déclarée terminée**, sous la réserve
+que les scénarios devenus périmés par les corrections elles-mêmes (b17, b19) soient réécrits et que m10 (une phrase de spécification)
+soit corrigé.
+
+## Chiffres tenus
+
+| Contrôle | Résultat |
+|---|---|
+| `cargo test --workspace` | **700 réussis, 0 échec, 14 ignorés** (33 suites, une seule exécution) |
+| `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` | propres |
+| Scénarios non-split lancés en lot (110 sur 133) | 97 réussis, 13 échecs tous expliqués (décor non reconstitué ou scénario périmé par une correction), 0 régression du produit |
+| Scénarios `split-*` | **8 sur 8 réussis** |
+| Scénarios de cette contre-recette | 26, états relus un à un |
+| Processus restants | aucun `juliestorm`, `cargo`, `rustc` de ma part |
+
+## Tableau des écarts
+
+| Écart | Verdict | Preuve |
+|---|---|---|
+| **M1** mise de côté jamais remise (mise à jour en conflit) | **Clos** | `recette-v1-b06` : après « Résoudre » puis « Valider », `git status` = `M LISEZMOI.md`, `?? nv.txt`, `git stash list` vide, `a.txt` fusionné, notification « Fusion terminée ; vos changements locaux ont été remis. ». `b07` (abandon) : « Fusion abandonnée ; vos changements locaux ont été remis. » (m12 aussi). `b08` (rebase, « Garder votre version ») : « Rebase terminé ; vos changements locaux ont été remis. », `a.txt` = `DEUX (A)`. Pendant le conflit, le bandeau et la notification disent que le travail est mis de côté et reviendra (capture regardée) |
+| M1, variante **cherry-pick refusé puis mise de côté** (`contre-m1-pick*.txt`) | **Clos** | dialogue « Mettre de côté et reprendre le commit » ; conflit : bandeau « reviendront à la fin du cherry-pick » ; résolu côté « Prendre » : la remise tombe en conflit, `UU a.txt` avec les deux versions dans le fichier, l'entrée reste dans `git stash list` (état `Kept`), notification « Remise de vos changements en conflit… reste mise de côté » : rien perdu. Cherry-pick devenu vide (« Garder votre version ») : « La validation a échoué » (voir N6), puis « Passer ce commit » : « …vos changements locaux ont été remis », `a.txt` et `nv.txt` revenus |
+| M1, variante **revert en conflit** (`contre-m1-revert.txt`) | **Clos** | refus, mise de côté, `AwaitingOperation(Revert)`, « Abandonner » : « Revert abandonné ; vos changements locaux ont été remis », `a.txt` = `deux (final)` + `trois (local)`, `LISEZMOI.md` modifié, `nv.txt` présent, `stash list` vide |
+| M1, variante **mise à jour en conflit, fermeture de l'IDE, réouverture** (`contre-m1-deux-a` à `d`) | **Clos** | le lien est dans `.git/JULIESTORM_PENDING_STASH` ; rouvert en pleine fusion : bandeau encore là (`AwaitingOperation(Merge)`) ; résoudre + valider : remise ; abandonner après redémarrage : remise ; `git merge --abort` fait au terminal : bandeau « Remettre mes changements » (`OperationOver`), un clic remet tout |
+| M1, **deux opérations successives** (`contre-m1-succ-a`, `-b`) | **Clos ; la limite annoncée existe mais sans perte** | cherry-pick en conflit avec mise de côté n°1, IDE fermé, `git cherry-pick --abort` au terminal ; nouveaux changements locaux ; rouvert : bandeau `OperationOver` pour n°1 ; deuxième cherry-pick avec mise de côté n°2 ; « Abandonner » : n°2 remise (`a.txt` = `trois (local2)`, `nv2.txt` présent) ; n°1 reste dans `git stash list`, son bandeau passe de `OperationOver` à `Kept` (voir N5) ; « Remettre » la n°1 ne s'applique pas sur des fichiers déjà modifiés : « n'ont pas pu être remis… reste mise de côté », entrée gardée. Aucune n'est perdue ni mélangée |
+| **M2** bascule forcée / reset dur sans copie visible | **Clos** | `b04` : « Basculé sur feature/login. Jetés : a.txt, login.txt (copie gardée, « Rétablir » les remet). Ont suivi : n.txt, u.txt. », `toast.action = restore_copy:…`, « Rétablir » : « 2 fichiers rétablis », contenus identiques aux originaux. `b12` : « Branche réinitialisée sur c72432e. Jetés : a.txt, c3.txt, n.txt (copie gardée… ) », « 3 fichiers rétablis ». `corr-reset-stash` : bandeau « Mise de côté gardée » + « Remettre » |
+| **M3** HEAD détachée sans avertissement | **Clos** | `b13` : après le commit, bandeau « Vos commits ne sont sur aucune branche (1 commit) » + « Créer une branche ici » ; sortie vers `main` : dialogue « 1 commit n'est sur aucune branche » (sujet nommé), 3 boutons ; Annuler : HEAD toujours sur le commit. `corr-detachee-branche` : « Créer une branche d'abord » puis bascule, la branche `sauvetage/orphelin` existe. `quand-meme` : « 1 commit laissé sur aucune branche, récupérable : « Créer une branche » sur e9918dd », le bouton ouvre « Nouvelle branche » sur ce commit |
+| M3, variante **Nouvelle branche avec bascule depuis une HEAD détachée qui porte un commit** (`contre-m3-nouvelle-bascule`) | **Clos (rien n'est quitté en silence)** | avec « basculer » coché et le départ `bugfix/crash` : dialogue « 1 commit n'est sur aucune branche », **sans « Basculer quand même »** (`can_anyway: false`), HEAD reste sur le commit orphelin, la branche demandée n'existe pas. Texte du dialogue : voir N1 |
+| M3, variantes **bascule sur une distante, mise à jour, reset dur** | **Clos** | `origin/main` : même dialogue, HEAD inchangée ; Ctrl+T : « HEAD est détachée : créez d'abord une branche. » ; reset dur vers un ancien commit : le dialogue annonce `commits_leaving: 1, unreachable: 1` avant la seconde confirmation (le commit reste ensuite dans le reflog) |
+| **M4** arbre du projet périmé | **Clos** | `b14` : l'arbre est juste dès le premier état après la bascule (`c1`, sans `c2` ni `c3`) ; `corr-onglet-bascule` : onglet de `c3.txt` en `notice: Deleted`, arbre à jour ; mise à jour qui apporte `b1.txt`, `b2.txt` : l'arbre les montre aussitôt (`contre-m4-pull`) |
+| **M5** « notre / leur » inversé pendant un rebase | **Clos** | rebase (`b09`, capture regardée) : volets « **Votre commit** — main : A : ligne 2 », « Résultat », « **Amont** — origin/main : B : ligne 2 », aide « … à gauche votre commit, à droite l'amont (Git les nomme à l'envers) » ; « Garder votre version » donne `DEUX (A)` (vérifié dans le fichier). **Cherry-pick** : « Votre version — main : … » / « Commit repris — 5ad6777 : Connexion : a.txt ligne 2 », boutons « Garder votre version » / « Prendre 5ad6777 ». **Revert** : « Annulation du commit — 79bb19b : Main : a.txt ligne 2 ». **Remise d'une mise de côté en conflit** : « Vos changements mis de côté » / « Branche mise à jour — main… », « Garder votre version » = le contenu de la mise de côté (vérifié : `trois (local)` conservé) |
+| **m1** texte `Debug` dans la barre d'état | **Clos** | fusion avec `a.txt` modifié : dialogue « Des changements locaux gênent la fusion de feature/login » (fichier nommé), « Mettre de côté et fusionner » (idem cherry-pick et revert) |
+| **m2** cherry-pick d'un commit déjà présent | **Clos** | `pick-present` : « Cherry-pick » grisé, raison « Déjà sur la branche courante (ce commit ou le même changement). » |
+| **m3** « Restaurer » perd l'amont | **Clos** | `git branch -vv` : `bugfix/crash … [origin/bugfix/crash]` après Restaurer |
+| **m4** sous-menu de branche | **Clos** | « Voir le diff avec l'arbre de travail » présent (liste « M a.txt, A c1.txt, D login.txt… » puis diff) ; aucune entrée « Basculer et rebaser » sur `origin/feature/login` |
+| **m5** branche sans amont | **Clos** | Ctrl+T : « sans-amont n'a pas de branche distante associée… » **avant** toute question ; boutons « Choisir l'amont… », « Pousser pour la créer… » ; choisir `origin/main` : « sans-amont suit maintenant origin/main » ; « Retirer l'amont » : « n'a plus d'amont » |
+| **m6** pas de remplacement AZERTY | **Clos** | `Ctrl+Maj+B` ouvre la fenêtre des branches (`vcs.branches_alt`) |
+| **m7** dialogue Pousser lent | **Clos** | états toutes les 0,15 s : boutons grisés à +0,1 s, **utilisable avec le commit sortant listé à +0,3 s** (avant : 0,9 à 1,6 s) ; `branches-push-crochet` réussit |
+| **m8** `menus-arbre.txt` périmé | **Clos** | réécrit (`ui menu.open tree`), joué : réussi |
+| **m9** textes | **Clos** | fichier de réglages illisible : « table non fermée (« ] » attendu) » ; « Git est introuvable : « … ». Vérifiez le réglage « Exécutable Git » (Réglages, page Git). » ; « 1 commit du distant sera remplacé… » / « n commits… seront remplacés » (lus dans `texts.rs`, non rejoués à l'écran) |
+| **m10** critère 5 de `navigation.md` | **Pas clos** | `docs/specs/navigation.md` ligne 356 dit toujours « `Boss` dans `new Boss('b')` → classe `Admin` » (saut direct) alors que le code ouvre une liste (décision 9) ; `specialiste-produit` |
+| **m11** JavaScript d'un `<script>` | **Clos** | Ctrl+clic et Alt+F7 : « Le JavaScript d'un <script> écrit dans un fichier PHP n'est pas encore indexé : pas de déclaration à trouver. » ; une fonction PHP du même fichier saute (ligne 2) |
+| **m12** message d'état périmé | **Clos** | après « Abandonner » le message est remplacé (« Fusion abandonnée ; vos changements locaux ont été remis. », « Cherry-pick abandonné… », « Revert abandonné… ») |
+| **m13** non suivi écrasé lors de la remise | **Partiel** | rien n'est perdu (la version de l'utilisatrice reste dans `stash@{0}^3`, l'entrée est gardée, le bandeau « Mise de côté gardée… Remettre » reste), mais **la notification ne nomme pas le fichier** : `login.txt` non suivi + bascule vers `feature/login` : « Vos changements n'ont pas pu être remis : « avant bascule… » reste mise de côté. » (sans conflit) ou « Remise… en conflit » (avec conflit). `untracked_note` n'est appelé que quand la remise réussit. Dans les deux cas `login.txt` vaut la version de `feature/login` sur le disque |
+| **m14** `.juliestorm/` à l'ouverture | **Clos** | la décision 8 de `decisions-v1.md` dit maintenant qu'ouvrir un projet crée `.juliestorm/` (ignoré par Git) |
+| **m15** « Rétablir » ne remet pas l'index | **Pas clos** (cosmétique) | inchangé : un fichier ajouté (`A `) rétabli redevient non suivi (`??`) ; le contenu est exact |
+| **m16** lancement bloqué | **Non reproduit** | un lancement (`contre-m3-reset`) est resté plus de 4 min avec un seul état écrit, **pendant que je faisais tourner un second IDE en parallèle** (erreur de ma part) ; trois rejeux seuls : 12 s chacun. Même signature que le blocage d'origine (premier lancement, rien d'écrit). Hypothèse : deux IDE simultanés peuvent s'étouffer ; à ne pas écarter |
+
+## Fractionnement des éditeurs (`docs/specs/split.md`)
+
+Les 8 scénarios `split-*` réussissent (rc 0, 0 échec) ; états relus un à un (`target\essais\split\`).
+
+| Critère | Verdict | Preuve |
+|---|---|---|
+| 1 fractionner à droite, frappe visible des deux côtés, Ctrl+S une seule fois | Conforme | deux groupes de 482 px, `IntroScene.js` à `views: 2`, `modified: true` dans les deux vues après la frappe, `false` partout après Ctrl+S |
+| 2 déplacer en bas | Conforme | `LevelScene.js` seul dans le groupe du bas, absent du haut |
+| 3 Ctrl+Maj+N + Entrée dans le groupe actif | Conforme | `PauseScene.js` ouvert dans le groupe 1 actif |
+| 4 séparateur à la souris, proportion gardée | Conforme | `drag` : 482 → 206 px ; 1280×720 → 1920×1080 : proportions gardées |
+| 5 trois niveaux en 1280×720 | Conforme | `depth: 4` utilisable à 100 % et 150 %, thème clair, plein écran |
+| 6 fermer le dernier onglet d'un groupe | Conforme | le groupe disparaît, les autres restent |
+| 7 tout regrouper | Conforme | un groupe, chaque fichier une fois |
+| 8 persistance | Conforme | trois groupes avant fermeture, les mêmes (rectangles et onglets) après réouverture |
+| 9 fermer une vue d'un document modifié | Conforme | aucune question ; la dernière pose `close_tab:…/config.js` |
+| 10 aucune régression | Conforme | voir la section suivante |
+
+Interactions avec Git (scénarios `contre-split-git-a` à `d`, plus essais au clic) :
+- **Fichier ouvert dans deux groupes puis supprimé par une bascule** (`c3.txt`, via le journal) : un seul document, le bandeau « Supprimé du disque » est dans les **deux** vues (`notice: Deleted`), l'arbre est à jour ; retour sur `main` : `notice: Changed` dans les deux vues, rien perdu.
+- **Modifié par une bascule** : non modifié, les deux vues se rechargent. Modifié non enregistré : bandeau « Le fichier a changé sur le disque » dans les **deux** vues (capture regardée), le texte tapé est gardé. Voir N4 pour Ctrl+S.
+- **Dialogue de fusion à trois volets ouvert pendant que le fichier est ouvert en split** (`a.txt` avec marqueurs) : accepter le bloc et enregistrer : les **deux vues se rechargent** (8 lignes → 4, sans marqueurs), disque = `DEUX (B)`. Avec du texte non enregistré dans un groupe : bandeau `Changed` dans les deux vues, le texte tapé est conservé, le disque porte la fusion : aucun écrasement.
+- **Annuler les modifications** sur un fichier ouvert dans deux groupes avec une frappe non enregistrée : la confirmation nomme l'onglet non enregistré ; après confirmation les deux vues montrent `HEAD` ; « Rétablir » rend le contenu.
+- **Ctrl+clic dans un groupe inactif** (clic aux coordonnées relevées sur capture) : le groupe devient actif et le saut a lieu dans le groupe cliqué. Saut dans le même fichier : ligne 40 dans le groupe cliqué, l'autre groupe garde sa position (33:37). Saut vers `User.php` : nouvel onglet dans le groupe cliqué, pas dans l'autre.
+
+## Non-régression des scénarios
+
+Lot de 133 scénarios non-split (hors `contre-*` et `split-*`), chacun sur son décor reconstitué, un seul IDE à la fois.
+
+- **110 lancés en lot : 97 réussis, 13 échecs.** Réussis : `git-*`, `nav-*`, `ecarts-*`, `recette-*` (v0, terminal compris), `branches-*` (15 sur 15 après relance de `branches-ecrans`), `journal-graphe`, `menus-arbre`, `menus-clics-droits`, `tests-*`, `reglages-*`, `recette-v1-reg1` à `reg8`, `recette-v1-nav-*`, `recette-v1-b01` à `b05`, `b11`, `b22` à `b26`.
+- **Les 13 échecs, tous expliqués, aucun n'est une régression du produit** :
+  - `branches-ecrans` : 1 échec sur 4 passes (« aucun dialogue Git ouvert » après 500 ms) ; 3 relances seules réussies. Fragile sous charge, comme avant.
+  - `journal-graphe` : décor trompé (je lui avais donné `tout`) ; sans option : réussi.
+  - **`recette-v1-b17-amont` et `recette-v1-b19-merge-sale` : périmés par les corrections** (m5 : le message « pas d'amont » arrive avant le dialogue Fusion / Rebase ; m1 : fusion sale = dialogue « Mettre de côté… » au lieu du bouton « close »). À réécrire ; `corr-sans-amont` et `corr-merge-sale` les remplacent.
+  - `b10`, `b15` (avec un mauvais décor), `b16`, `b18`, `b21`, `menu-tests2`, `menu1`, `menu2`, `menu4` : **décors de ma recette précédente (dépôts divergés, fichiers `added.txt`, `src/nouveau.php`, test « l'apostrophe… », distant cassé à la main) que je n'ai pas su reconstituer**. `b15` rejoué sur `branches.sh` sans option : réussi. Les autres sont **non revérifiés**.
+- **Hors lot, rejoués sur le bon décor et réussis** : `recette-v1-b04`, `b06` à `b09`, `b12` à `b14`, les 14 `recette-v1-corr-*` (dont `corr-ecrans-a` / `-b` et `corr-m1-terminal-a` / `-b`, à 100 et 150 %, thème clair, plein écran).
+- **Non rejoué** : `recette-v1-b20-graphe-gros` (dépôt de ~10 000 commits).
+- **Blocages : 1** (m16, causé par deux IDE simultanés). **Paniques : 0** sur plusieurs centaines de lancements. Erreur de ma part : deux pilotes de lot ont tourné ensemble quelques minutes au départ ; je les ai arrêtés, vidé les résultats et recommencé : les chiffres viennent de la seconde exécution, seule.
+
+## Nouveaux constats
+
+Aucun bloquant, aucun majeur.
+
+- **N1 (mineur) — texte du dialogue de HEAD détachée pour « Nouvelle branche avec bascule »** : « « Créer une branche d'abord » en crée une sur ce commit, puis la bascule reprend. » Pour une *création* de branche avec bascule (`contre-m3-nouvelle-creer-d-abord`), rien ne reprend : on crée `sauve` sur le commit orphelin et on est dessus ; la branche demandée au départ (`essai-nouvelle` depuis `bugfix/crash`) n'est pas créée. Rien n'est perdu ; le texte promet plus que l'action. `redacteur` / `dev-interface`.
+- **N2 (mineur) — titre du dialogue de réinitialisation en HEAD détachée** : « Réinitialiser  sur c460bab » (deux espaces : le nom de branche est vide). `redacteur`.
+- **N3 (mineur) — bandeau de conflit à 150 %** : « Rebase en cours — commit 1 sur 1 — 1 fichier en c » est coupé par le bouton « Résoudre » (capture `ecrans-a-1280-150.png`) et le message de la barre d'état est tronqué. `dev-interface`.
+- **N4 (mineur, à trancher) — Ctrl+S pendant le bandeau « changé sur le disque »** (`contre-split-git-b`) : après une bascule qui réécrit `a.txt`, un onglet modifié non enregistré montre le bandeau (Recharger / Garder les miennes) dans les deux vues ; **Ctrl+S sans avoir cliqué** écrit le contenu de l'éditeur (`XYZun / deux (côté login) / trois`) par-dessus la version de `main` (`git status` : ` M a.txt`). La spec dit « Garder les miennes (le prochain Ctrl+S écrase) », ce qui laisse penser que c'est le clic qui arme l'écrasement. Récupérable ici par `git checkout` (fichier suivi), mais la bascule de branche rend ce cas facile à rencontrer. `dev-editeur` / `specialiste-produit`.
+- **N5 (mineur) — état d'une mise de côté après une autre opération** : la n°1 passe de `OperationOver` à `Kept` ; le bouton passe de « Remettre mes changements » à « Remettre ». Cohérent avec la limite annoncée, sans perte ; seulement surprenant.
+- **N6 (mineur) — « La validation a échoué »** : « Continuer » sur un cherry-pick devenu vide (on a gardé « votre version » partout) répond par ce titre générique ; la sortie de Git (« The previous cherry-pick is now empty… ») n'est que dans `commit_error`. La sortie réelle passe par « Passer ce commit », mais le message ne le dit pas. `redacteur` / `dev-interface`.
+
+## Non vérifié
+
+- `recette-v1-b20` et les décors perdus de `b10`, `b16`, `b18`, `b21`, `menu-tests2`, `menu1`, `menu2`, `menu4` : leurs critères ne sont pas revus par ce biais.
+- Les textes de m9 ne sont lus que dans `texts.rs`, pas photographiés.
+- Le glisser d'un onglet vers un autre groupe pendant une opération Git ; `split-glisser` ne fait que `drag` au pointeur synthétique.
+- Concurrence : deux IDE sur le même dépôt, ou un IDE et la ligne de commande qui écrivent en même temps (hors `merge --abort` et `cherry-pick --abort` faits entre deux lancements).
+- Comparaison avec PhpStorm (rien n'y a été touché) ; authentification, `git worktree`, distant réel.
+
+## État laissé
+
+`labmate_paper` : seulement cloné (copie jetable), jamais ouvert dans l'IDE, aucune branche créée dessus. `backoffice` : lu. Dossiers `%TEMP%\jsqa2`, `jsessai-*`, `jsetat-*` créés par moi : supprimés. Aucun commit, aucun push.
