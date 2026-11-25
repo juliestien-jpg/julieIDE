@@ -134,6 +134,128 @@ pub const FIND_SCOPE: &str = "Portée";
 pub const FIND_SCOPE_PROJECT: &str = "Projet";
 pub const FIND_INVALID_REGEX: &str = "Expression régulière invalide";
 pub const FIND_MIN_CHARS: &str = "Saisissez au moins 2 caractères.";
+
+/// Message complet pour une expression régulière refusée : le début est toujours
+/// français ; la cause est celle du crate `regex`, traduite, avec un repli
+/// lisible pour les erreurs que la table ne connaît pas.
+pub fn find_invalid_regex(raw: &str) -> String {
+    let cause = raw
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map_or(raw, |l| l.trim().trim_start_matches("error:").trim());
+    format!("{FIND_INVALID_REGEX} : {}", regex_cause_fr(cause))
+}
+
+/// Traduit la cause d'une erreur de syntaxe du crate `regex`.
+pub fn regex_cause_fr(cause: &str) -> String {
+    let lower = cause.to_lowercase();
+    const TABLE: &[(&str, &str)] = &[
+        (
+            "unclosed capture group name",
+            "nom de groupe de capture non fermé",
+        ),
+        (
+            "unclosed group",
+            "groupe non fermé (il manque une parenthèse fermante)",
+        ),
+        (
+            "unopened group",
+            "parenthèse fermante en trop (aucun groupe ouvert)",
+        ),
+        (
+            "unclosed character class",
+            "classe de caractères non fermée (il manque un crochet fermant)",
+        ),
+        (
+            "unclosed counted repetition",
+            "répétition {n,m} non fermée (il manque une accolade fermante)",
+        ),
+        (
+            "repetition operator missing expression",
+            "répétition sans rien à répéter (*, + ou ? ne peut pas commencer le motif)",
+        ),
+        (
+            "repetition quantifier expects a valid decimal",
+            "la répétition {…} attend un nombre",
+        ),
+        (
+            "invalid repetition count range",
+            "intervalle de répétition invalide (le minimum dépasse le maximum)",
+        ),
+        (
+            "unrecognized escape sequence",
+            "séquence d'échappement inconnue (caractère inattendu après la barre oblique inverse)",
+        ),
+        (
+            "incomplete escape sequence",
+            "échappement incomplet (le motif se termine par une barre oblique inverse)",
+        ),
+        (
+            "invalid escape sequence found in character class",
+            "échappement invalide dans une classe de caractères",
+        ),
+        (
+            "invalid character class range",
+            "intervalle invalide dans la classe (le début dépasse la fin)",
+        ),
+        (
+            "invalid range boundary",
+            "borne d'intervalle invalide (un caractère simple est attendu)",
+        ),
+        ("hexadecimal literal empty", "nombre hexadécimal vide"),
+        ("invalid hexadecimal digit", "chiffre hexadécimal invalide"),
+        ("invalid hexadecimal literal", "nombre hexadécimal invalide"),
+        ("decimal literal empty", "nombre vide"),
+        ("invalid decimal literal", "nombre invalide"),
+        (
+            "dangling flag negation",
+            "option « - » sans option derrière",
+        ),
+        ("flag negation operator repeated", "option « - » répétée"),
+        ("duplicate flag", "option en double"),
+        (
+            "unrecognized flag",
+            "option inconnue (les options valides sont i, m, s, U, u, x)",
+        ),
+        (
+            "expected flag but got end of regex",
+            "option attendue, mais le motif se termine",
+        ),
+        (
+            "duplicate capture group name",
+            "nom de groupe de capture en double",
+        ),
+        ("empty capture group name", "nom de groupe de capture vide"),
+        (
+            "invalid capture group",
+            "caractère invalide dans un nom de groupe de capture",
+        ),
+        ("special word boundary", "limite de mot spéciale mal écrite"),
+        (
+            "backreferences are not supported",
+            "les références arrière (\\1) ne sont pas prises en charge",
+        ),
+        (
+            "look-around",
+            "les assertions avant et arrière ((?=…), (?<=…)) ne sont pas prises en charge",
+        ),
+        (
+            "nested parentheses",
+            "trop de parenthèses ou de crochets imbriqués",
+        ),
+        ("capturing groups", "trop de groupes de capture"),
+        ("size limit", "expression trop complexe"),
+        ("unicode", "propriété ou classe Unicode inconnue"),
+        ("empty character class", "classe de caractères vide"),
+    ];
+    for (needle, fr) in TABLE {
+        if lower.contains(needle) {
+            return (*fr).to_owned();
+        }
+    }
+    "syntaxe non reconnue".to_owned()
+}
 pub const FIND_RUNNING: &str = "recherche en cours";
 pub const FIND_LIMIT: &str = "Plus de 10 000 résultats, précisez la recherche";
 pub const FIND_NO_PREVIEW: &str = "Sélectionnez un résultat pour voir son contexte.";
@@ -518,6 +640,23 @@ pub fn merge_eol_banner(style: &str) -> String {
     )
 }
 
+/// Bandeau du dialogue de fusion quand les versions ne sont pas d'accord sur la
+/// marque d'ordre des octets (BOM). `with_bom` : le résultat en porte une.
+/// `theirs_dropped` : leur version avait ajouté ou retiré la marque, et le résultat
+/// ne suit pas ce changement.
+pub fn merge_bom_banner(with_bom: bool, theirs_dropped: bool) -> String {
+    let result = if with_bom {
+        "le résultat garde la marque BOM de notre version"
+    } else {
+        "le résultat reste sans marque BOM, comme notre version"
+    };
+    if theirs_dropped {
+        format!("Leur version change la marque BOM en tête de fichier ; {result}.")
+    } else {
+        format!("Les versions diffèrent sur la marque BOM en tête de fichier ; {result}.")
+    }
+}
+
 pub fn merge_tip_accept(left: bool, shortcut: &str) -> String {
     if left {
         format!("Accepter la version de gauche ({shortcut})")
@@ -541,6 +680,13 @@ pub fn merge_tip_ignore(left: bool, shortcut: &str) -> String {
 pub fn merge_refused(reason: &str, file: &str) -> String {
     format!(
         "Fusion de {file} impossible : {reason}. Choisissez un côté (Garder la nôtre / Prendre la leur)."
+    )
+}
+
+/// Infobulle du bouton « Fusionner… » grisé d'après le contenu des versions.
+pub fn merge_disabled_tip(reason: &str) -> String {
+    format!(
+        "Fusion à trois volets impossible : {reason}. Choisissez un côté (Garder la nôtre / Prendre la leur)."
     )
 }
 
@@ -734,5 +880,30 @@ mod tests {
     fn summary_agrees_in_number() {
         assert_eq!(find_summary(1, 1), "1 occurrence dans 1 fichier");
         assert_eq!(find_summary(12, 3), "12 occurrences dans 3 fichiers");
+    }
+
+    #[test]
+    fn common_regex_errors_are_in_french() {
+        for (pattern, expected) in [
+            ("(", "groupe non fermé"),
+            (")", "parenthèse fermante en trop"),
+            ("[a", "classe de caractères non fermée"),
+            ("*a", "répétition sans rien à répéter"),
+            ("a{2", "répétition {n,m} non fermée"),
+            (r"\q", "séquence d'échappement inconnue"),
+            (r"a\", "échappement incomplet"),
+            // Fin de motif sur une barre oblique inverse.
+            ("(?<=a)b", "assertions avant et arrière"),
+            (r"(a)\1", "références arrière"),
+            ("[z-a]", "intervalle invalide"),
+            ("a{3,1}", "intervalle de répétition invalide"),
+            (r"\p{Nope}", "Unicode"),
+        ] {
+            let raw = regex::Regex::new(pattern).unwrap_err().to_string();
+            let text = find_invalid_regex(&raw);
+            assert!(text.contains(expected), "{pattern:?} : {raw:?} -> {text}");
+            assert!(!text.contains("unclosed") && !text.contains("unopened"));
+        }
+        assert_eq!(regex_cause_fr("something new"), "syntaxe non reconnue");
     }
 }

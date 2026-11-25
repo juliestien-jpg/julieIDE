@@ -1,0 +1,12 @@
+function load(id) {
+  const sample = find(id);
+  return sample;
+}
+
+function remove(id) {
+  drop(id);
+}
+
+function save(sample) {
+  store(sample);
+}

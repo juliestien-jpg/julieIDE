@@ -588,6 +588,7 @@ let texte = session.result_text();                     // à écrire tel quel
 | `counts()`, `is_all_resolved()`, `is_touched()` | Compteur ; état « tout est traité » ; « quelque chose a été fait » (confirmation à la fermeture). |
 | `next_pending(courant)`, `previous_pending(courant)`, `block_at_result_line(ligne)` | F7 / Maj+F7, bloc courant. |
 | `line_endings() -> LineEndingReport { base, ours, theirs, result, differ }` | `differ` : afficher le bandeau. |
+| `bom() -> BomReport { base, ours, theirs, result, differ }` | Présence de la BOM dans chaque version (`bool`) et dans le résultat (`result` = notre version, toujours). `differ` : les versions ne sont pas d'accord, **afficher un bandeau** comme pour les fins de ligne (une version vide — pas d'ancêtre, fichier vidé — n'a pas d'avis). `report.their_change_is_dropped()` : leur côté a ajouté ou retiré la BOM et le résultat ne le suit pas (cas où le bandeau doit le dire nettement ; Git y verrait un conflit sur la première ligne). Ne dépend pas des gestes : à lire une fois à l'ouverture. |
 | `merge_last_two_steps()` | Regrouper une rafale de frappe en une seule étape annulable. |
 | `ours()`, `theirs()`, `base()`, `chunks()` | Les textes des volets et le découpage d'origine. |
 
@@ -609,13 +610,38 @@ et `merge(base, ours, theirs, cancel) -> MergeOutcome { text, conflicts }`
   spécification (dernière ligne venue d'une version : comme dans cette version ;
   dernière ligne tapée : comme notre version). `edit` accepte la position
   `(nombre de lignes, 0)` pour « la fin du texte ».
-- **Plus prudent que Git, exprès** : un changement dont la place est ambiguë
-  (ligne vide retirée d'une série, fonction insérée entre deux accolades, ligne
-  déplacée) est testé sur toute sa zone d'ambiguïté. D'où parfois un conflit là
-  où `git merge-file` fusionne, et parfois un seul bloc pour deux changements
-  voisins du même côté. Jamais l'inverse sur le corpus et les tirages aléatoires.
+- **Changements qui peuvent glisser : jugés là où Git les range** (écart M1 de
+  la recette de la v0). Une méthode ajoutée après une accolade, une ligne vide
+  retirée d'une série, une ligne banale commune à la méthode modifiée et à la
+  méthode ajoutée : ces lectures ne diffèrent que par un glissement, et Git
+  range toujours le changement à la même place (le plus bas possible, ou en
+  face d'un changement de l'autre fichier). Le moteur range de même son diff et
+  tous les alignements aussi courts avant de décider du contact entre les deux
+  côtés (`crates/diff/src/canonical.rs`). Les blocs sont donc placés comme dans
+  `git diff`.
+- **Plus prudent que Git, exprès** — ce qui reste un conflit alors que
+  `git merge-file` fusionne :
+  - un changement qui a **plusieurs lectures qu'aucun glissement ne ramène
+    l'une à l'autre** (ligne déplacée, motif répété décalé d'un cran entre deux
+    changements) est testé sur toute sa zone d'ambiguïté ; deux changements
+    voisins du même côté peuvent alors former un seul bloc ;
+  - une **ligne retirée d'une série de lignes identiques** quand l'autre côté
+    touche à une ligne de la série (laquelle a été retirée ?) ;
+  - un côté dont le diff remue **plus de 400 lignes banales** (lignes qui
+    existent aussi de l'autre côté) : le diff de Git n'y est plus forcément le
+    plus court, on en reste à l'analyse stricte.
+  Jamais l'inverse sur le corpus ni sur les tirages aléatoires contre Git
+  (`tests/git_compare.rs`, version longue `--ignored`). L'analyse compte les
+  alignements sur le fichier entier (`crates/diff/src/band.rs`) ; au-delà de
+  son budget (très gros fichier et très gros diff de lignes banales), elle se
+  rabat sur une analyse par fenêtres, approximation documentée en tête de
+  `merge.rs`.
 - **Fins de ligne** : `\r\n` et `\n` sont la même ligne (cas 15) ; Git, lui, y
   voit un changement. Écarts listés dans `tests/fixtures/diff/merge/cases.txt`.
+- **BOM** : elle n'entre pas dans les comparaisons et le résultat porte celle
+  de notre version, quoi qu'ait fait l'autre côté (Git, lui, y voit une première
+  ligne modifiée). Ce n'est plus silencieux : `session.bom().differ` demande un
+  bandeau (écart M7 de la recette).
 - Les limites de taille (20 Mio, 200 000 lignes), la détection du binaire et du
   non-UTF-8 sont à la charge de l'appelant (`julie-vcs` les donne) : la crate ne
   refuse rien.
@@ -1023,8 +1049,10 @@ dans un objet « job ».
 
 ### Processus
 
-- Lancement : `CreatePseudoConsole` + `CreateProcessW` **suspendu**, placé dans
-  un job `KILL_ON_JOB_CLOSE`, puis relâché : aucun descendant n'échappe au job.
+- Lancement : `CreatePseudoConsole` + `CreateProcessW` avec l'attribut
+  `PROC_THREAD_ATTRIBUTE_JOB_LIST` : l'interpréteur **naît** dans un job
+  `KILL_ON_JOB_CLOSE` créé juste avant (pas un instant hors du job, même si
+  l'IDE meurt pendant le lancement) ; aucun descendant n'échappe au job.
   Entrées-sorties standard nulles dans `STARTUPINFO` (sinon un IDE lancé depuis
   une console y attacherait l'enfant). Environnement hérité + variables du
   profil ; Git Bash : `--login -i`, `TERM=xterm-256color`, `COLORTERM=truecolor`,
@@ -1037,7 +1065,28 @@ dans un objet « job ».
   (2 s au plus), on tue ce qui reste dans le job, on ferme ; `Exited { code }`
   arrive après toute la sortie.
 - IDE tué brutalement : Windows ferme le job (arbre tué) et conhost s'arrête
-  (vérifié par `host_killed_leaves_no_orphan`).
+  (vérifié par `host_killed_leaves_no_orphan`). IDE qui se ferme : rien
+  n'attend (`TerminalPanel::close_all` / `Drop`) ; `close()` sur chaque session
+  tue son job tout de suite, la fermeture des pseudo-consoles finit dans les
+  fils de session ou, si le processus se termine avant, Windows s'en charge
+  (vérifié par `closing_without_waiting_then_exiting_leaves_no_orphan`, sessions
+  occupées et session fermée avant d'avoir démarré). Une session fermée avant
+  son démarrage ne lance rien (`Closed` directement).
+- **Ctrl+C et parent qui l'ignore** (écart M2) : l'état « ignorer Ctrl+C »
+  (bit 0 de `RTL_USER_PROCESS_PARAMETERS.ConsoleFlags`) s'hérite à la création
+  de chaque processus, pseudo-console comprise, et aucun drapeau de création ne
+  l'évite. Un IDE lancé par un parent qui ignore Ctrl+C (Git Bash de l'outil
+  d'agent, `CREATE_NEW_PROCESS_GROUP`) le transmettait à cmd puis à ping, qui ne
+  s'interrompaient plus. Avant le premier lancement, si le processus ignore
+  Ctrl+C, `julie-terminal` installe un gestionnaire qui n'avale que
+  `CTRL_C_EVENT` (l'IDE garde donc son comportement) puis remet le drapeau à
+  zéro (`SetConsoleCtrlHandler(NULL, FALSE)`), comme Windows Terminal. Une fois
+  par processus ; rien n'est touché si Ctrl+C n'était pas ignoré. Essai :
+  `ctrl_c_works_when_the_ide_ignores_ctrl_c` (hôte lancé avec
+  `CREATE_NEW_PROCESS_GROUP`, cmd + ping, Git Bash + sleep, et l'hôte survit à
+  un Ctrl+C envoyé à sa propre console).
+- `TerminalPanel::shutdown(délai)` ne bloque plus (délai ignoré) : préférer
+  `close_all()`.
 
 ### Composant (`crates/app/src/terminal`)
 

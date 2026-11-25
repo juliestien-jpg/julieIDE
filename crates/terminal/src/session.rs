@@ -273,6 +273,13 @@ fn run_session(
     commands: Sender<Command>,
 ) {
     let id = shared.id;
+    if shared.closing.load(Ordering::Acquire) {
+        // Fermée avant d'avoir démarré : rien à lancer.
+        *lock(&shared.status) = SessionStatus::Closed;
+        shared.finished.store(true, Ordering::Release);
+        ctx.publish(TerminalEvent::Closed { session: id });
+        return;
+    }
     let (pty, mut reader) = match Pty::spawn(&spec) {
         Ok(parts) => parts,
         Err(error) => {
@@ -285,6 +292,11 @@ fn run_session(
     };
     let pty = Arc::new(pty);
     let _ = shared.pty.set(pty.clone());
+    if shared.closing.load(Ordering::Acquire) {
+        // `close` est passé pendant le lancement, avant que la pseudo-console
+        // soit visible : on tue l'arbre ici (la commande Close suit aussi).
+        pty.kill_tree();
+    }
     let pid = pty.pid();
     *lock(&shared.status) = SessionStatus::Running { pid };
     ctx.publish(TerminalEvent::Started { session: id, pid });

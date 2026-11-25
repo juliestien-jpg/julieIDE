@@ -524,15 +524,22 @@ impl TerminalPanel {
         }
     }
 
-    /// Ferme tous les terminaux et attend leur fin (au plus `timeout` chacun).
-    /// **Bloquant** : à la fermeture de l'IDE seulement.
-    pub fn shutdown(&mut self, timeout: std::time::Duration) {
-        for tab in &self.tabs {
+    /// Ferme tous les terminaux **sans attendre** : chaque arbre de processus
+    /// est tué tout de suite (`TerminateJobObject`, appel qui ne bloque pas),
+    /// la fermeture des pseudo-consoles se termine dans les fils des sessions.
+    /// Si l'IDE se termine avant, Windows ferme les jobs (`KILL_ON_JOB_CLOSE`)
+    /// et les conhost s'arrêtent d'eux-mêmes : aucun orphelin.
+    pub fn close_all(&mut self) {
+        for tab in self.tabs.drain(..) {
             tab.session.close();
         }
-        for tab in self.tabs.drain(..) {
-            tab.session.wait(timeout);
-        }
+        self.active = 0;
+    }
+
+    /// Ancien nom de [`Self::close_all`], gardé pour la coquille : ne bloque
+    /// plus, `_timeout` est ignoré.
+    pub fn shutdown(&mut self, _timeout: std::time::Duration) {
+        self.close_all();
     }
 }
 
@@ -561,15 +568,49 @@ impl TerminalPanel {
 
 impl Drop for TerminalPanel {
     fn drop(&mut self) {
-        // Fermeture de l'IDE : on attend un peu que chaque arbre soit arrêté
-        // (le job Windows le garantit de toute façon à la mort du processus).
-        self.shutdown(std::time::Duration::from_millis(1500));
+        // Fermeture de l'IDE : arbres tués sans attendre (voir `close_all`).
+        self.close_all();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fermer l'IDE avec des terminaux occupés ne fige pas l'interface : le
+    /// `Drop` du panneau rend la main tout de suite (la mort effective des
+    /// arbres est vérifiée dans `julie-terminal`, tests `sessions`).
+    #[cfg(windows)]
+    #[test]
+    fn dropping_the_panel_does_not_block() {
+        use std::time::{Duration, Instant};
+        let bus = julie_core::bus::Bus::new();
+        let tasks = Tasks::new(bus.publisher());
+        let settings = TerminalSettings::default();
+        let mut panel = TerminalPanel::new(tasks, std::env::temp_dir(), settings.clone());
+        for _ in 0..3 {
+            panel.open(julie_terminal::profile(ProfileKind::Cmd, &settings));
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let started = |panel: &TerminalPanel| {
+            panel
+                .tabs
+                .iter()
+                .all(|t| t.session.process_ids().len() >= 2)
+        };
+        for tab in &panel.tabs {
+            tab.session
+                .send_text("%SystemRoot%\\System32\\PING.EXE -t 127.0.0.1\r");
+        }
+        while !started(&panel) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(started(&panel), "ping attendu dans chaque terminal");
+        let before = Instant::now();
+        drop(panel);
+        let took = before.elapsed();
+        assert!(took < Duration::from_millis(100), "Drop a bloqué {took:?}");
+    }
 
     #[test]
     fn msys_and_relative_paths_are_resolved() {

@@ -1053,7 +1053,9 @@ fn node_row(
         TestState::Error => Icon::Warning,
         TestState::Risky | TestState::Interrupted => Icon::Warning,
         TestState::Running => Icon::Play,
-        TestState::Skipped | TestState::Incomplete | TestState::Pending => Icon::Dot,
+        TestState::Skipped => Icon::Dash,
+        TestState::Incomplete => Icon::Ring,
+        TestState::Pending => Icon::Dot,
     };
     icons::paint(ui.painter(), icon_rect, icon, color);
     x += 20.0;

@@ -7,6 +7,10 @@ fichiers `base`, `ours` (la nôtre), `theirs` (la leur), écrits à l'octet prè
 Le script réécrit `merge/<cas>/` ; il ne touche pas à `merge/cases.txt`, qui dit
 pour chaque cas ce qu'on attend par rapport à `git merge-file` et pourquoi
 (vérifié par `crates/diff/tests/git_compare.rs`).
+
+Un cas peut porter un quatrième fichier, `expected` : le texte fusionné attendu,
+écrit à la main. Le test exige alors une fusion sans conflit et ce texte-là à
+l'octet près.
 """
 import os
 
@@ -14,9 +18,9 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "merge")
 CASES = {}
 
 
-def case(name, base, ours, theirs):
+def case(name, base, ours, theirs, expected=None):
     assert name not in CASES, name
-    CASES[name] = (base, ours, theirs)
+    CASES[name] = (base, ours, theirs, expected)
 
 
 def crlf(text):
@@ -337,12 +341,197 @@ case("lone-cr", "a\rb\nc\nd\n", "a\rB\nc\nd\n", "a\rb\nc\nD\n")
 # Lignes répétées : notre côté retire un « x », le leur en ajoute un plus loin.
 case("repeated-lines", "x\nx\nk\nx\nx\n", "x\nk\nx\nx\n", "x\nx\nk\nx\nx\nx\n")
 
+# --- Écart M1 de la recette de la v0 : faux conflits sur du code courant -------
+#
+# Une ligne banale (ligne vide, accolade) se répète autour des changements. Un
+# alignement brut peut l'apparier « de travers » et faire remonter le changement
+# d'un côté jusqu'à toucher celui d'en face. Git range ses alignements (chaque
+# changement glissé à une place déterminée) ; nous aussi désormais. Chaque cas
+# propre porte son texte attendu.
+
+# Le cas de la recette (38-php.php) : la nôtre change a(), la leur change b() et
+# ajoute c() après une ligne vide, en fin de classe.
+M1_PHP = """<?php
+class A {
+    public function a() { return 1; }
+
+    public function b() { return 2; }
+}
+"""
+M1_PHP_THEIRS = """<?php
+class A {
+    public function a() { return 1; }
+
+    public function b() { return 20; }
+
+    public function c() {}
+}
+"""
+case(
+    "m1-php-method-added-after-edited-neighbour",
+    M1_PHP,
+    sub(M1_PHP, "return 1;", "return 10;"),
+    M1_PHP_THEIRS,
+    expected=sub(M1_PHP_THEIRS, "return 1;", "return 10;"),
+)
+
+# Le même motif au milieu d'une classe, les deux côtés ayant aussi changé plus
+# haut et plus bas : rien ne tient au début ou à la fin du fichier.
+M1_MID = """<?php
+
+final class Freezer
+{
+    private int $capacity = 10;
+
+    public function name(): string
+    {
+        return 'A';
+    }
+
+    public function count(): int
+    {
+        return 1;
+    }
+
+    public function isFull(): bool
+    {
+        return false;
+    }
+
+    public function open(): void
+    {
+        $this->log('open');
+    }
+}
+"""
+M1_MID_OURS = sub(sub(M1_MID, "return 1;", "return $this->samples->count();"), "$capacity = 10", "$capacity = 20")
+M1_MID_THEIRS = sub(
+    sub(
+        sub(M1_MID, "return 'A';", "return 'Congélateur A';"),
+        "        return false;\n    }\n",
+        "        return $this->count() >= $this->capacity;\n    }\n\n    public function isEmpty(): bool\n    {\n        return $this->count() === 0;\n    }\n",
+    ),
+    "$this->log('open');",
+    "$this->log('ouvert');",
+)
+case(
+    "m1-php-method-added-mid-class",
+    M1_MID,
+    M1_MID_OURS,
+    M1_MID_THEIRS,
+    expected=sub(sub(M1_MID_THEIRS, "return 1;", "return $this->samples->count();"), "$capacity = 10", "$capacity = 20"),
+)
+
+# Le cas « lignes répétées » de la recette (25) : chacun remplace une ligne d'un
+# fichier de lignes identiques, à une ligne d'écart.
+case(
+    "m1-repeated-lines-two-edits",
+    "x\nx\nx\nx\nx\nx\n",
+    "x\nx\nY\nx\nx\nx\n",
+    "x\nx\nx\nx\nZ\nx\n",
+    expected="x\nx\nY\nx\nZ\nx\n",
+)
+
+# Famille « bloc inséré » de la mesure sur du vrai code : une fonction entière,
+# ligne vide comprise, ajoutée juste après l'accolade d'une fonction dont
+# l'autre côté a changé la dernière instruction.
+M1_JS = """function load(id) {
+  const sample = find(id);
+  return sample;
+}
+
+function save(sample) {
+  store(sample);
+}
+"""
+M1_JS_BLOCK = "\nfunction remove(id) {\n  drop(id);\n}\n"
+case(
+    "m1-js-block-inserted-after-edited-function",
+    M1_JS,
+    sub(M1_JS, "  return sample;\n}\n", "  return sample;\n}\n" + M1_JS_BLOCK),
+    sub(M1_JS, "return sample;", "return sample ?? null;"),
+    expected=sub(M1_JS, "  return sample;\n}\n", "  return sample ?? null;\n}\n" + M1_JS_BLOCK),
+)
+
+# Garde-fous de la même famille : ce qui doit rester un conflit.
+# La méthode ajoutée colle à la méthode que l'autre côté a modifiée (aucune
+# ligne entre les deux) : conflit, pour Git comme pour nous.
+case(
+    "m1-php-method-added-against-edited-line",
+    M1_PHP,
+    sub(M1_PHP, "return 2;", "return 22;"),
+    sub(M1_PHP, "    public function b() { return 2; }\n", "    public function b() { return 2; }\n    public function c() {}\n"),
+)
+# Une ligne retirée d'une série de lignes identiques, une autre ligne de la même
+# série modifiée en face : laquelle a été retirée ? Git range la suppression en
+# bas et fusionne ; nous gardons le conflit.
+case(
+    "m1-removed-line-of-a-run-vs-edit-in-the-run",
+    "a\nx\nx\nx\nb\n",
+    "a\nx\nx\nb\n",
+    "a\nX\nx\nx\nb\n",
+)
+
+
+# Des lignes qui se répètent d'une méthode à l'autre (« { », « return; ») et un
+# côté qui en recopie : plusieurs lectures aussi courtes, qu'aucun glissement ne
+# ramène l'une à l'autre. Trouvé par le tirage de faux code. Git en retient une
+# et fusionne... en rangeant nos deux instructions dans la méthode n0 que leur
+# côté vient d'ajouter, après *son* « return; ». Nous montrons le conflit.
+M1_DUP = """<?php
+class A
+{
+    public function m0()
+    {
+        return;
+    }
+}
+"""
+case(
+    "m1-repeated-lines-two-readings",
+    M1_DUP,
+    sub(M1_DUP, "        return;\n", "        return;\n        $x = 1;\n        $x = 1;\n"),
+    """<?php
+class A
+{
+    public function m0()
+    public function m0()
+    {
+        return;
+
+    public function n0()
+    {
+        return;
+    }
+    }
+}
+""",
+)
+
+
+# --- Motif répété décalé d'un cran entre deux changements éloignés -------------
+#
+# Notre côté se lit « deux lignes a insérées en haut, un b supprimé sept lignes
+# plus bas » ou « le b du haut supprimé, deux a insérés plus bas » : tout le
+# milieu se décale d'un cran d'une lecture à l'autre. Trouvé par le tirage
+# contre Git ; l'analyse par fenêtres de la v0 ne le voyait pas et fusionnait le
+# premier cas, que Git déclare en conflit.
+SHIFT = "g\nb\na\na\nb\na\nb\nb\nb\ng\n"
+SHIFT_OURS = "g\na\na\nb\na\na\nb\na\nb\nb\ng\n"
+# Leur côté modifie la ligne que la lecture de Git touche : conflit pour Git.
+case("repeat-shift-vs-edit-git-conflict", SHIFT, SHIFT_OURS, "g\nb\nZ\na\nb\na\nb\nb\nb\ng\n")
+# Une ligne plus bas, Git fusionne ; pour nous aucune ligne du milieu n'est sûre.
+case("repeat-shift-vs-edit-git-clean", SHIFT, SHIFT_OURS, "g\nb\na\nZ\nb\na\nb\nb\nb\ng\n")
+
 
 def main():
-    for name, (base, ours, theirs) in sorted(CASES.items()):
+    for name, (base, ours, theirs, expected) in sorted(CASES.items()):
         folder = os.path.join(ROOT, name)
         os.makedirs(folder, exist_ok=True)
-        for filename, text in (("base", base), ("ours", ours), ("theirs", theirs)):
+        files = [("base", base), ("ours", ours), ("theirs", theirs)]
+        if expected is not None:
+            files.append(("expected", expected))
+        for filename, text in files:
             with open(os.path.join(folder, filename), "wb") as handle:
                 handle.write(text.encode("utf-8"))
     print(f"{len(CASES)} cas écrits dans {ROOT}")

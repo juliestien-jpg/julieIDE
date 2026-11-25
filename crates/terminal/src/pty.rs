@@ -23,17 +23,17 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    CreateJobObjectW, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
 use crate::error::TerminalError;
@@ -281,14 +281,25 @@ impl Pty {
         spec: &SpawnSpec,
         console: HPCON,
     ) -> Result<(OwnedHandle, u32, OwnedHandle), TerminalError> {
-        // Liste d'attributs : un seul, la pseudo-console.
+        // Sinon, un IDE lancé par un parent qui ignore Ctrl+C transmettrait cet
+        // état à l'interpréteur et à tout ce qu'il lance (écart M2).
+        crate::console_ctrl::let_children_receive_ctrl_c();
+
+        // Le job d'abord : le processus y naît (attribut JOB_LIST), il n'existe
+        // pas un instant hors du job, même si l'IDE meurt pendant le lancement.
+        // KILL_ON_JOB_CLOSE : si l'IDE meurt, Windows ferme la poignée et tue
+        // tout l'arbre.
+        let job = create_job()?;
+        let jobs: [HANDLE; 1] = [job.0];
+
+        // Liste d'attributs : la pseudo-console et le job.
         let mut size = 0usize;
         // SAFETY : premier appel pour connaître la taille (échoue exprès).
-        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut size) };
         let mut storage = vec![0u64; size.div_ceil(8).max(1)];
         let list = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
         // SAFETY : `storage` fait au moins `size` octets, aligné sur 8.
-        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) } == 0 {
+        if unsafe { InitializeProcThreadAttributeList(list, 2, 0, &mut size) } == 0 {
             return Err(last_error("InitializeProcThreadAttributeList"));
         }
         struct AttributeList(LPPROC_THREAD_ATTRIBUTE_LIST);
@@ -308,6 +319,22 @@ impl Pty {
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
                 console as *const std::ffi::c_void,
                 std::mem::size_of::<HPCON>(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if ok == 0 {
+            return Err(last_error("UpdateProcThreadAttribute"));
+        }
+        // SAFETY : la valeur est un tableau de poignées de job, vivant jusqu'après
+        // CreateProcessW (`jobs` est sur la pile de cette fonction).
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                list,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                jobs.as_ptr() as *const std::ffi::c_void,
+                std::mem::size_of_val(&jobs),
                 std::ptr::null_mut(),
                 std::ptr::null(),
             )
@@ -339,7 +366,7 @@ impl Pty {
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
                 environment.as_ptr() as *const std::ffi::c_void,
                 cwd.as_ptr(),
                 &startup.StartupInfo,
@@ -361,29 +388,7 @@ impl Pty {
             );
         }
         let process = OwnedHandle(info.hProcess);
-        let thread = OwnedHandle(info.hThread);
-
-        // Le job avant de laisser partir le processus : aucun descendant ne
-        // peut lui échapper. KILL_ON_JOB_CLOSE : si l'IDE meurt, Windows ferme
-        // la poignée et tue tout l'arbre.
-        let job = match create_job() {
-            Ok(job) => job,
-            Err(error) => {
-                // SAFETY : processus suspendu que nous possédons.
-                unsafe { TerminateProcess(process.0, 1) };
-                return Err(error);
-            }
-        };
-        // SAFETY : poignées valides.
-        if unsafe { AssignProcessToJobObject(job.0, process.0) } == 0 {
-            let error = last_error("AssignProcessToJobObject");
-            // SAFETY : idem.
-            unsafe { TerminateProcess(process.0, 1) };
-            return Err(error);
-        }
-        // SAFETY : fil principal suspendu par CREATE_SUSPENDED.
-        unsafe { ResumeThread(thread.0) };
-        drop(thread);
+        drop(OwnedHandle(info.hThread));
         Ok((process, info.dwProcessId, job))
     }
 

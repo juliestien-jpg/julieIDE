@@ -6,7 +6,7 @@
 //! redessin uniquement sur événement (sauf pendant un scénario, qui demande ses
 //! images, et la relève du disque toutes les 2 s tant qu'un fichier est ouvert).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
@@ -26,7 +26,7 @@ use julie_vcs::{ConflictSide, ConflictVersions, DiffSides, Vcs, VcsEvent, VcsSet
 
 use crate::actions::{ActionId, Menu, Registry};
 use crate::diffpane::{self, DiffPane};
-use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, RepoState};
+use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, MergeCheck, RepoState};
 use crate::icons::{self, Icon};
 use crate::merge::{self, MergeDialog, MergeIntent};
 use crate::project::{self, Channel, GitInfo, Msg, ProjectState};
@@ -64,6 +64,13 @@ struct Message {
     at: Instant,
 }
 
+impl Message {
+    /// Une information s'efface vite ; une erreur reste le temps de la lire.
+    fn lifetime(&self) -> Duration {
+        Duration::from_secs(if self.error { 12 } else { 6 })
+    }
+}
+
 /// Ce que publient les tâches de calcul de l'application (domaine `Diff`).
 enum AppDiffEvent {
     /// Un diff calculé, pour l'aperçu ou la grande fenêtre.
@@ -75,6 +82,11 @@ enum AppDiffEvent {
     MergeReady {
         versions: Box<ConflictVersions>,
         session: Box<MergeSession>,
+    },
+    /// Résultat de la vérification d'avance de « Fusionner… » pour un fichier.
+    MergeChecked {
+        path: PathBuf,
+        result: Result<(), merge::Ineligible>,
     },
 }
 
@@ -122,6 +134,9 @@ pub struct JulieStormApp {
     message: Option<Message>,
     last_title: String,
     window_focused: bool,
+    /// Fichiers que la personne vient de demander d'ouvrir : leur ouverture réussie
+    /// efface une erreur de la barre d'état.
+    user_opens: HashSet<PathBuf>,
     last_disk_poll: Instant,
     force_close: bool,
     quit_after_save: bool,
@@ -180,6 +195,7 @@ impl JulieStormApp {
             message: None,
             last_title: String::new(),
             window_focused: true,
+            user_opens: HashSet::new(),
             last_disk_poll: Instant::now(),
             force_close: false,
             quit_after_save: false,
@@ -232,6 +248,13 @@ impl JulieStormApp {
         });
     }
 
+    /// Une action réussie efface l'erreur affichée dans la barre d'état.
+    fn clear_error_message(&mut self) {
+        if self.message.as_ref().is_some_and(|m| m.error) {
+            self.message = None;
+        }
+    }
+
     // ----- Projet --------------------------------------------------------------
 
     fn start_open(&mut self, path: PathBuf) {
@@ -269,6 +292,9 @@ impl JulieStormApp {
         project: julie_core::Project,
         settings: Result<Settings, String>,
     ) {
+        // Un autre projet : les messages de l'ancien n'ont plus de sens.
+        self.message = None;
+        self.user_opens.clear();
         let settings = match settings {
             Ok(settings) => settings,
             Err(error) => {
@@ -409,6 +435,14 @@ impl JulieStormApp {
                     self.diff_window = Some(DiffWindow { pane });
                 }
             },
+            AppDiffEvent::MergeChecked { path, result } => {
+                let check = match result {
+                    Ok(()) => MergeCheck::Fine,
+                    Err(why) => MergeCheck::Refused(why),
+                };
+                self.git.set_merge_check(&path, check);
+                self.run_prechecks();
+            }
             AppDiffEvent::MergeReady { versions, session } => {
                 self.git.merge_loading = None;
                 let Some(project) = &self.project else { return };
@@ -481,6 +515,9 @@ impl JulieStormApp {
     fn on_text(&mut self, event: TextEvent) {
         match event {
             TextEvent::Loaded(loaded) => {
+                if self.user_opens.remove(&loaded.path) {
+                    self.clear_error_message();
+                }
                 self.editors.on_loaded(loaded, &self.waker, self.dark);
             }
             TextEvent::LoadFailed { path, error } => {
@@ -490,9 +527,11 @@ impl JulieStormApp {
                     TextError::TooLarge { .. } => t::ERR_TOO_LARGE.to_owned(),
                     other => other.to_string(),
                 };
+                self.user_opens.remove(&path);
                 self.say(t::load_failed(&path, &reason), true);
             }
             TextEvent::Saved(outcome) => {
+                self.clear_error_message();
                 self.editors.on_saved(&outcome);
                 self.git.invalidate_diff();
                 if let Some(project) = &self.project {
@@ -510,7 +549,17 @@ impl JulieStormApp {
                 self.editors.close_after_save.remove(&path);
                 self.say(t::save_failed(&path, &error.to_string()), true);
             }
-            TextEvent::DiskChecked(states) => self.editors.on_disk_checked(states, &self.tasks),
+            TextEvent::DiskChecked(states) => {
+                let changed = states
+                    .iter()
+                    .any(|(_, state)| *state != julie_text::DiskState::Unchanged);
+                self.editors.on_disk_checked(states, &self.tasks);
+                if changed {
+                    // Un fichier ouvert a changé dehors : Git le saura tout de suite.
+                    self.git.invalidate_diff();
+                    self.refresh_git();
+                }
+            }
         }
     }
 
@@ -538,7 +587,57 @@ impl JulieStormApp {
         }
     }
 
+    /// Lance, en tâche de fond, le chargement des versions des fichiers en conflit
+    /// pour savoir d'avance si « Fusionner… » est possible.
+    fn run_prechecks(&mut self) {
+        let wanted = self.git.next_prechecks();
+        let Some((vcs, repo)) = self
+            .project
+            .as_ref()
+            .and_then(|p| p.repo.clone().map(|r| (p.vcs.clone(), r)))
+        else {
+            return;
+        };
+        for path in wanted {
+            let handle = vcs.load_conflict(&repo, path.clone());
+            self.git.note_precheck_task(handle.id(), path);
+        }
+    }
+
+    /// Les versions d'une vérification d'avance sont arrivées (ou ont échoué).
+    /// Rend `true` si l'événement lui appartenait.
+    fn on_precheck_event(&mut self, task: Option<TaskId>, event: &VcsEvent) -> bool {
+        let Some(path) = self.git.precheck_path(task) else {
+            return false;
+        };
+        match event {
+            VcsEvent::Conflict(versions) => {
+                self.git.finish_precheck(task);
+                let versions = versions.clone();
+                self.tasks
+                    .spawn(Domain::Diff, "diff.merge_check", move |ctx| {
+                        ctx.publish(AppDiffEvent::MergeChecked {
+                            path,
+                            result: merge::eligibility(&versions),
+                        });
+                        Ok(())
+                    });
+            }
+            VcsEvent::Failed(failure) if failure.action == julie_vcs::Action::Conflict => {
+                self.git.finish_precheck(task);
+                self.git.set_merge_check(&path, MergeCheck::Unknown);
+                self.run_prechecks();
+            }
+            // Les autres événements de la tâche (journal de commandes…) passent normalement.
+            _ => return false,
+        }
+        true
+    }
+
     fn on_vcs(&mut self, task: Option<TaskId>, event: &VcsEvent) {
+        if self.on_precheck_event(task, event) {
+            return;
+        }
         let mut intents = Vec::new();
         self.git.on_vcs(event, &mut intents);
         match event {
@@ -559,6 +658,7 @@ impl JulieStormApp {
                 if let Some(project) = &mut self.project {
                     project.git = GitInfo::Repository(Box::new(status.clone()));
                 }
+                self.run_prechecks();
             }
             VcsEvent::Diff(sides) => {
                 if let Some(job) = self.git.take_job(task) {
@@ -575,14 +675,7 @@ impl JulieStormApp {
                 Err(reason) => {
                     self.git.merge_loading = None;
                     let name = file_name(&versions.path);
-                    let reason = match reason {
-                        merge::Ineligible::Deletion => t::MERGE_REASON_DELETION,
-                        merge::Ineligible::OneSide => t::MERGE_REASON_ONE_SIDE,
-                        merge::Ineligible::Binary => t::MERGE_REASON_BINARY,
-                        merge::Ineligible::NotUtf8 => t::MERGE_REASON_NOT_UTF8,
-                        merge::Ineligible::TooLarge => t::MERGE_REASON_TOO_LARGE,
-                        merge::Ineligible::Unsupported => t::MERGE_REASON_UNSUPPORTED,
-                    };
+                    let reason = reason.reason();
                     self.say(t::merge_refused(reason, &name), true);
                 }
             },
@@ -945,6 +1038,7 @@ impl JulieStormApp {
     }
 
     fn open_file(&mut self, path: PathBuf, goto: Option<Goto>) {
+        self.user_opens.insert(path.clone());
         self.editors.open(&self.tasks, path, goto);
     }
 
@@ -1028,6 +1122,18 @@ impl JulieStormApp {
     /// L'état Git se relit toutes les 2,5 s tant que la fenêtre est active (un
     /// changement fait ailleurs, terminal compris, apparaît en moins de 3 s),
     /// sans relancer une lecture déjà en cours.
+    /// Relit l'état Git sans attendre la prochaine relève.
+    fn refresh_git(&mut self) {
+        if let Some(project) = &self.project {
+            if let Some(repo) = &project.repo {
+                if !self.tracker.kinds().contains(&"vcs.status") {
+                    project.vcs.refresh_status(repo);
+                    self.last_status_poll = Instant::now();
+                }
+            }
+        }
+    }
+
     fn poll_git(&mut self, ctx: &egui::Context) {
         let focused = ctx.input(|i| i.focused) || self.scenario_active;
         let Some(project) = &self.project else { return };
@@ -1035,7 +1141,10 @@ impl JulieStormApp {
         if !focused {
             return;
         }
-        const PERIOD: Duration = Duration::from_millis(2500);
+        // Un fichier modifié hors de l'IDE doit apparaître en moins de 2 s : la relève
+        // dure 1,2 s au plus (elle ne se chevauche jamais), et d'autres événements
+        // (changement détecté sur un onglet, retour du focus) la devancent.
+        const PERIOD: Duration = Duration::from_millis(1200);
         if self.last_status_poll.elapsed() >= PERIOD {
             self.last_status_poll = Instant::now();
             if !self.tracker.kinds().contains(&"vcs.status") {
@@ -1047,6 +1156,8 @@ impl JulieStormApp {
     }
 
     fn poll_disk(&mut self, ctx: &egui::Context) {
+        /// Relève des fichiers ouverts (un simple contrôle de date et de taille).
+        const DISK_PERIOD: Duration = Duration::from_secs(1);
         // En mode scénario la fenêtre n'a pas forcément le focus du système.
         let focused = ctx.input(|i| i.focused) || self.scenario_active;
         let regained = focused && !self.window_focused;
@@ -1054,7 +1165,7 @@ impl JulieStormApp {
         if self.editors.items.is_empty() || !focused {
             return;
         }
-        if regained || self.last_disk_poll.elapsed() >= Duration::from_secs(2) {
+        if regained || self.last_disk_poll.elapsed() >= DISK_PERIOD {
             self.last_disk_poll = Instant::now();
             self.editors.check_disk(&self.tasks);
             if regained {
@@ -1066,7 +1177,7 @@ impl JulieStormApp {
                 }
             }
         }
-        let remaining = Duration::from_secs(2).saturating_sub(self.last_disk_poll.elapsed());
+        let remaining = DISK_PERIOD.saturating_sub(self.last_disk_poll.elapsed());
         ctx.request_repaint_after(remaining.max(Duration::from_millis(50)));
     }
 
@@ -1688,7 +1799,7 @@ impl JulieStormApp {
     fn quit_for_scenario(&mut self, ctx: &egui::Context) {
         self.force_close = true;
         if let Some(terminal) = &mut self.terminal {
-            terminal.shutdown(Duration::from_millis(1500));
+            terminal.close_all();
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -2047,7 +2158,7 @@ impl eframe::App for JulieStormApp {
         if self
             .message
             .as_ref()
-            .is_some_and(|m| m.at.elapsed() > Duration::from_secs(12))
+            .is_some_and(|m| m.at.elapsed() > m.lifetime())
         {
             self.message = None;
         } else if self.message.is_some() {

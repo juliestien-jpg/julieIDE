@@ -161,6 +161,10 @@ pub fn spawn_list_dir(dir: PathBuf, root: PathBuf, index: Arc<IndexService>, cha
     });
 }
 
+fn is_empty_dir(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+}
+
 fn list_dir(dir: &Path, root: &Path, index: &IndexService) -> Vec<TreeEntry> {
     let relative = dir
         .strip_prefix(root)
@@ -195,7 +199,9 @@ fn list_dir(dir: &Path, root: &Path, index: &IndexService) -> Vec<TreeEntry> {
                 return None;
             }
             let is_dir = entry.file_type().ok()?.is_dir();
-            let ignored = present.as_ref().is_some_and(|set| !set.contains(&name));
+            // Un dossier vide n'est pas dans l'index sans être « ignoré » pour autant.
+            let ignored = present.as_ref().is_some_and(|set| !set.contains(&name))
+                && !(is_dir && is_empty_dir(&entry.path()));
             Some(TreeEntry {
                 path: entry.path(),
                 name,

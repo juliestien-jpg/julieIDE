@@ -177,6 +177,30 @@ pub struct LineEndingReport {
     pub differ: bool,
 }
 
+/// Présence de la marque BOM dans les trois versions, pour le bandeau
+/// d'information. Le résultat suit toujours notre version ; ce rapport sert à le
+/// dire quand les versions ne sont pas d'accord, au lieu de le faire en silence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BomReport {
+    pub base: bool,
+    pub ours: bool,
+    pub theirs: bool,
+    /// Le résultat commencera par une marque BOM (comme notre version).
+    pub result: bool,
+    /// Les versions diffèrent sur la BOM : afficher le bandeau. Une version vide
+    /// (pas d'ancêtre commun, fichier vidé) n'a pas d'avis et ne compte pas.
+    pub differ: bool,
+}
+
+impl BomReport {
+    /// Leur côté a ajouté ou retiré la BOM par rapport à la base, et le résultat
+    /// ne le suit pas : c'est le cas où quelque chose de leur version est laissé
+    /// de côté (Git, lui, y voit un conflit sur la première ligne).
+    pub fn their_change_is_dropped(&self) -> bool {
+        self.theirs != self.base && self.theirs != self.result
+    }
+}
+
 /// Refus d'une action sur la session.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SessionError {
@@ -550,6 +574,31 @@ impl MergeSession {
     /// `julie_core::file`, la BOM est déjà dans le `TextFormat` et ceci rend faux.)
     pub fn result_has_bom(&self) -> bool {
         self.ours.table.has_bom
+    }
+
+    /// Marque BOM des trois versions et du résultat. `differ` : afficher un
+    /// bandeau, comme pour [`MergeSession::line_endings`].
+    pub fn bom(&self) -> BomReport {
+        let (base, ours, theirs) = (
+            self.base.table.has_bom,
+            self.ours.table.has_bom,
+            self.theirs.table.has_bom,
+        );
+        let mut opinions = [&self.base, &self.ours, &self.theirs]
+            .into_iter()
+            .filter(|version| version.table.has_bom || version.table.len() > 0)
+            .map(|version| version.table.has_bom);
+        let differ = match opinions.next() {
+            Some(first) => opinions.any(|other| other != first),
+            None => false,
+        };
+        BomReport {
+            base,
+            ours,
+            theirs,
+            result: self.result_has_bom(),
+            differ,
+        }
     }
 
     /// Styles de fins de ligne des trois versions.

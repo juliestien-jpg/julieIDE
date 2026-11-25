@@ -93,6 +93,59 @@ pub fn inputs(versions: &ConflictVersions) -> Result<Inputs, Ineligible> {
     })
 }
 
+impl Ineligible {
+    /// La raison, en français, pour la barre d'état et les infobulles.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Ineligible::Deletion => t::MERGE_REASON_DELETION,
+            Ineligible::OneSide => t::MERGE_REASON_ONE_SIDE,
+            Ineligible::Binary => t::MERGE_REASON_BINARY,
+            Ineligible::NotUtf8 => t::MERGE_REASON_NOT_UTF8,
+            Ineligible::TooLarge => t::MERGE_REASON_TOO_LARGE,
+            Ineligible::Unsupported => t::MERGE_REASON_UNSUPPORTED,
+        }
+    }
+}
+
+/// Les mêmes vérifications que [`inputs`], sans copier ni décoder les versions :
+/// sert à griser « Fusionner… » d'avance (tâche de fond, fichiers jusqu'à 20 Mio).
+pub fn eligibility(versions: &ConflictVersions) -> Result<(), Ineligible> {
+    let check = |content: &Content, optional: bool| -> Result<(), Ineligible> {
+        match content {
+            Content::Missing if optional => Ok(()),
+            Content::Missing => Err(Ineligible::OneSide),
+            Content::TooLarge { .. } => Err(Ineligible::TooLarge),
+            Content::Submodule { .. } | Content::Directory => Err(Ineligible::Unsupported),
+            Content::Blob { bytes, mode } => {
+                if *mode == julie_vcs::FileMode::Symlink {
+                    return Err(Ineligible::Unsupported);
+                }
+                if julie_vcs::is_binary(bytes) {
+                    return Err(Ineligible::Binary);
+                }
+                if bytes.iter().filter(|b| **b == b'\n').count() > MAX_LINES {
+                    return Err(Ineligible::TooLarge);
+                }
+                std::str::from_utf8(bytes)
+                    .map(|_| ())
+                    .map_err(|_| Ineligible::NotUtf8)
+            }
+        }
+    };
+    if versions.kind.involves_deletion() {
+        return Err(Ineligible::Deletion);
+    }
+    if matches!(
+        versions.kind,
+        ConflictKind::AddedByUs | ConflictKind::AddedByThem
+    ) {
+        return Err(Ineligible::OneSide);
+    }
+    check(&versions.base, true)?;
+    check(&versions.ours, false)?;
+    check(&versions.theirs, false)
+}
+
 /// Le nom de leur branche d'après `MERGE_MSG` (« Merge branch 'x' into y »).
 pub fn their_name(message: &str) -> Option<String> {
     let first = message.lines().next()?;
@@ -154,6 +207,8 @@ pub struct MergeDialog {
     titles: [String; 3],
     help: Option<&'static str>,
     eol_note: Option<String>,
+    /// Bandeau « les versions diffèrent sur le BOM » (écart M7 de la recette).
+    bom_note: Option<String>,
     ask: Option<Ask>,
     pub error: Option<String>,
     pub saving: bool,
@@ -292,6 +347,10 @@ impl MergeDialog {
                 _ => "LF",
             })
         });
+        let bom = session.bom();
+        let bom_note = bom
+            .differ
+            .then(|| t::merge_bom_banner(bom.result, bom.their_change_is_dropped()));
         let help = matches!(
             versions.operation,
             Some(OperationKind::Rebase | OperationKind::CherryPick | OperationKind::Revert)
@@ -326,6 +385,7 @@ impl MergeDialog {
             ],
             help,
             eol_note,
+            bom_note,
             ask: None,
             error: None,
             saving: false,
@@ -753,6 +813,9 @@ impl MergeDialog {
         let mut top = toolbar.bottom();
         let mut banners: Vec<(Color32, String, Icon)> = Vec::new();
         if let Some(note) = &self.eol_note {
+            banners.push((p.warn, note.clone(), Icon::Warning));
+        }
+        if let Some(note) = &self.bom_note {
             banners.push((p.warn, note.clone(), Icon::Warning));
         }
         if let Some(help) = self.help {
@@ -1322,6 +1385,7 @@ impl MergeDialog {
             "saving": self.saving,
             "error": self.error,
             "eol_banner": self.eol_note,
+            "bom_banner": self.bom_note,
             "help": self.help,
             "titles": self.titles,
             "result_lines": self.session.result_line_count(),
@@ -1395,6 +1459,37 @@ mod tests {
         assert_eq!(inputs(&big).err(), Some(Ineligible::TooLarge));
         let added = versions(ConflictKind::BothAdded, blob(b"x\n"), blob(b"y\n"));
         assert!(inputs(&added).is_ok());
+    }
+
+    #[test]
+    fn eligibility_agrees_with_inputs() {
+        let many_lines = "x\n".repeat(MAX_LINES + 1).into_bytes();
+        let cases = [
+            versions(ConflictKind::BothModified, blob(b"b\n"), blob(b"c\n")),
+            versions(ConflictKind::BothAdded, blob(b"x\n"), blob(b"y\n")),
+            versions(ConflictKind::DeletedByThem, blob(b"b\n"), Content::Missing),
+            versions(ConflictKind::AddedByUs, Content::Missing, blob(b"c\n")),
+            versions(ConflictKind::BothModified, blob(b"b\0\n"), blob(b"c\n")),
+            versions(
+                ConflictKind::BothModified,
+                blob(&[0xe9, b'\n']),
+                blob(b"c\n"),
+            ),
+            versions(
+                ConflictKind::BothModified,
+                Content::TooLarge { size: 30_000_000 },
+                blob(b"c\n"),
+            ),
+            versions(ConflictKind::BothModified, blob(&many_lines), blob(b"c\n")),
+        ];
+        for case in &cases {
+            assert_eq!(
+                eligibility(case).err(),
+                inputs(case).err(),
+                "{:?}",
+                case.kind
+            );
+        }
     }
 
     #[test]

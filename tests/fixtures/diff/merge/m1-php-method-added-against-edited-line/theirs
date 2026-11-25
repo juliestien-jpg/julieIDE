@@ -1,0 +1,7 @@
+<?php
+class A {
+    public function a() { return 1; }
+
+    public function b() { return 2; }
+    public function c() {}
+}

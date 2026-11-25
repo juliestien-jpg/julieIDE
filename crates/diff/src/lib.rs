@@ -81,7 +81,9 @@
 //! état de chaque côté, place actuelle dans le résultat),
 //! [`MergeSession::alignment`] (correspondance des trois volets),
 //! [`MergeSession::result_lines`], [`MergeSession::counts`],
-//! [`MergeSession::line_endings`] (bandeau). À l'enregistrement :
+//! [`MergeSession::line_endings`] et [`MergeSession::bom`] (bandeaux : les
+//! versions diffèrent sur les fins de ligne ou sur la BOM, le résultat suit
+//! notre version). À l'enregistrement :
 //! [`MergeSession::result_text`].
 //!
 //! **Décision sur la question ouverte de la spécification** — accepter les deux
@@ -90,14 +92,20 @@
 //! du bloc (donc après ce qui aurait été tapé entre-temps dans le bloc).
 //! [`MergeSession::accept_both`] fait les deux en une étape annulable.
 //!
-//! **Plus prudent que Git, exprès** — un changement dont la place est ambiguë
-//! (une ligne vide retirée d'une série, une fonction insérée entre deux
-//! accolades, une ligne déplacée) est testé sur toute sa zone d'ambiguïté : nous
-//! déclarons parfois un conflit là où `git merge-file` fusionne, jamais
-//! l'inverse sur le corpus (`tests/fixtures/diff/merge/cases.txt`, chaque écart y
-//! est expliqué) ni sur les tirages aléatoires de `tests/git_compare.rs`. Seul
-//! écart dans l'autre sens, voulu par la spécification : une conversion de fins
-//! de ligne n'est pas un changement (cas 15), alors que Git compare les octets.
+//! **Plus prudent que Git, exprès** — un changement qui se lit de plusieurs
+//! façons (une ligne déplacée, un motif alterné décalé d'un cran) est testé sur
+//! toute sa zone d'ambiguïté, et une ligne retirée d'une série de lignes
+//! identiques sur toute la série : nous déclarons parfois un conflit là où
+//! `git merge-file` fusionne, jamais l'inverse sur le corpus
+//! (`tests/fixtures/diff/merge/cases.txt`, chaque écart y est expliqué) ni sur
+//! les tirages aléatoires de `tests/git_compare.rs`. En revanche les lectures
+//! qui ne diffèrent que par un **glissement** (une méthode ajoutée après une
+//! accolade, une ligne vide commune à la méthode modifiée et à la méthode
+//! ajoutée) ne sont plus un motif de doute : chaque alignement est d'abord
+//! rangé comme Git range les siens (module `canonical`). Seul écart dans
+//! l'autre sens, voulu par la spécification : une conversion de fins de ligne
+//! n'est pas un changement (cas 15), alors que Git compare les octets ; de même
+//! la BOM, qui suit notre version et se signale par [`MergeSession::bom`].
 //!
 //! La crate ne refuse aucun texte : les limites de taille, le binaire et le
 //! non-UTF-8 se décident chez l'appelant.
@@ -108,6 +116,8 @@
 //!   sous-module.
 //! - [`patch`] : écriture, lecture et application de diffs unifiés.
 
+mod band;
+mod canonical;
 mod diff;
 mod inline;
 mod merge;
@@ -124,8 +134,8 @@ pub use diff::{
 pub use inline::{InlineDiff, InlineSpan};
 pub use merge::{merge_chunks, Chunk, ChunkKind};
 pub use session::{
-    AlignedSegment, ApplyScope, Block, BlockKind, LineEndingReport, MergeCounts, MergeSession,
-    SessionError, Side, SideState,
+    AlignedSegment, ApplyScope, Block, BlockKind, BomReport, LineEndingReport, MergeCounts,
+    MergeSession, SessionError, Side, SideState,
 };
 pub use text::{LineEnding, LineEndingStyle, TextLines, BOM};
 

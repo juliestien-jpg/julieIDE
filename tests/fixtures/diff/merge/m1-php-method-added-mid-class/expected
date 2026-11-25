@@ -1,0 +1,31 @@
+<?php
+
+final class Freezer
+{
+    private int $capacity = 20;
+
+    public function name(): string
+    {
+        return 'Congélateur A';
+    }
+
+    public function count(): int
+    {
+        return $this->samples->count();
+    }
+
+    public function isFull(): bool
+    {
+        return $this->count() >= $this->capacity;
+    }
+
+    public function isEmpty(): bool
+    {
+        return $this->count() === 0;
+    }
+
+    public function open(): void
+    {
+        $this->log('ouvert');
+    }
+}

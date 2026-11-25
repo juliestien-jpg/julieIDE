@@ -8,6 +8,13 @@
 #   line-endings  écart voulu sur les fins de ligne ; il disparaît quand on donne à
 #                 Git les mêmes fichiers aux fins de ligne normalisées
 #
+# Un cas peut porter un fichier `expected` (texte fusionné attendu, écrit à la
+# main dans generate.py) : la fusion doit alors être propre et rendre ce texte.
+#
+# Depuis la v1 les changements qui peuvent glisser sont jugés là où Git les
+# range (voir crates/diff/src/canonical.rs) : js-blank-run-vs-neighbour et
+# php-new-method-after-edited-statement, « stricter » en v0, sont « same ».
+#
 # Il n'existe pas de relation « plus laxiste que Git » : le test l'interdit.
 
 css-both-append | same |
@@ -15,7 +22,7 @@ css-both-append-same | same |
 css-one-line-apart | same |
 emptied-by-them | same |
 final-newline-removed-by-us | same |
-js-blank-run-vs-neighbour | stricter | notre côté retire une ligne vide parmi trois : laquelle, on ne peut pas le dire. Git la place en bas, à deux lignes du changement d'en face ; placée en haut elle le toucherait. Zone ambiguë au contact d'un changement opposé : conflit.
+js-blank-run-vs-neighbour | same |
 js-many-disjoint | same |
 js-moved-line-near-edit | same |
 lone-cr | same |
@@ -30,7 +37,7 @@ php-crlf-disjoint | same |
 php-delete-vs-modify | same |
 php-disjoint-methods | same |
 php-identical-fix | same |
-php-new-method-after-edited-statement | stricter | la méthode ajoutée peut se lire insérée après l'accolade fermante ou avant elle (la ligne « } » existe des deux côtés du point d'insertion). Dans la seconde lecture elle touche l'instruction modifiée en face. Git choisit la première et fusionne ; nous montrons le conflit.
+php-new-method-after-edited-statement | same |
 php-new-method-far-from-edit | same |
 php-reindent-vs-far-edit | same |
 php-reindent-vs-same-line | same |
@@ -61,3 +68,17 @@ spec-22 | same |
 spec-23 | same |
 spec-25 | same |
 spec-26 | same |
+
+# Écart M1 de la recette de la v0 (faux conflits sur du code courant).
+m1-php-method-added-after-edited-neighbour | same |
+m1-php-method-added-mid-class | same |
+m1-repeated-lines-two-edits | same |
+m1-js-block-inserted-after-edited-function | same |
+m1-php-method-added-against-edited-line | same |
+m1-removed-line-of-a-run-vs-edit-in-the-run | stricter | notre côté retire un « x » d'une série de trois, le leur modifie le premier « x ». Lequel a été retiré ? Git range la suppression sur le dernier et fusionne. Pour nous, une suppression pure qui peut glisser garde toute sa série pour zone (première ligne exceptée) : l'autre côté touche à la série, conflit.
+m1-repeated-lines-two-readings | stricter | leur côté recopie des lignes de la méthode m0 (« public function m0() », « { », « return; ») en ajoutant une méthode n0 : la base s'aligne sur l'une ou l'autre copie, lectures aussi courtes qu'aucun glissement ne ramène l'une à l'autre. Git en retient une et fusionne en plaçant les deux instructions que notre côté ajoute à m0 dans la nouvelle méthode n0, après son « return; ». Zone d'ambiguïté au contact de notre changement : conflit.
+
+# Motif répété décalé d'un cran entre deux changements éloignés (faille de
+# l'analyse par fenêtres de la v0, trouvée par le tirage contre Git).
+repeat-shift-vs-edit-git-conflict | same |
+repeat-shift-vs-edit-git-clean | stricter | notre côté se lit « deux a insérés en haut, un b supprimé sept lignes plus bas » ou « le b du haut supprimé, deux a insérés plus bas », tout le milieu décalé d'un cran : aucune ligne du milieu n'a de vis-à-vis certain. Git retient la seconde lecture, qui ne touche pas la ligne modifiée ici (elle touche celle du cas précédent) ; nous montrons le conflit dans les deux cas.

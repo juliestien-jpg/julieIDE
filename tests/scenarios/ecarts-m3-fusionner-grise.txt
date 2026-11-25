@@ -1,0 +1,19 @@
+# Écart M3 : « Fusionner… » grisé d'avance (binaire, non UTF-8, > 20 Mio, > 200 000 lignes).
+# Préparer : python tests/fixtures/fusion-corpus.py limites %TEMP%\jsessai-limites
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-limites
+action view.git
+wait-idle
+wait 1500
+wait-idle
+action view.bottom_tall
+state target/essais/ecarts/m3-etat.json
+screenshot target/essais/ecarts/m3-liste.png
+# Le refus après clic reste un filet : binaire.bin est refusé, normal.txt s'ouvre.
+ui merge.open binaire.bin
+wait-idle
+state target/essais/ecarts/m3-filet.json
+ui merge.open normal.txt
+wait-idle
+state target/essais/ecarts/m3-normal.json
+screenshot target/essais/ecarts/m3-normal.png
+quit

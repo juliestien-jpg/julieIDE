@@ -100,12 +100,17 @@
 //! - **Aucune lecture bloquante sur le fil de l'interface** : les méthodes de
 //!   `Session` posent une commande dans un canal ou copient l'écran sous verrou.
 //!   Seuls `close_and_wait` et `wait` attendent.
-//! - **Aucun processus orphelin** : l'interpréteur est lancé suspendu, placé
-//!   dans un objet « job » Windows (`KILL_ON_JOB_CLOSE`), puis relâché ; aucun
-//!   descendant ne peut s'en échapper. Fermer une session tue tout le job puis
-//!   ferme la pseudo-console (conhost s'arrête). Si l'IDE meurt, Windows ferme
-//!   le job et tue l'arbre. Quand l'interpréteur se termine de lui-même, ce
-//!   qu'il a laissé tourner est tué aussi.
+//! - **Aucun processus orphelin** : l'interpréteur naît directement dans un
+//!   objet « job » Windows (`KILL_ON_JOB_CLOSE`, attribut de création
+//!   `JOB_LIST`) ; ni lui ni ses descendants ne peuvent s'en échapper. Fermer
+//!   une session (`close`, `Drop`) tue tout le job sur-le-champ, sans attendre,
+//!   puis le fil de contrôle ferme la pseudo-console (conhost s'arrête). Si
+//!   l'IDE se termine ou meurt avant, Windows ferme le job et tue l'arbre, et
+//!   conhost s'arrête de lui-même. Quand l'interpréteur se termine de
+//!   lui-même, ce qu'il a laissé tourner est tué aussi.
+//! - **Ctrl+C** arrive aux programmes même si l'IDE a hérité de son parent
+//!   l'état « ignorer Ctrl+C » : le drapeau est remis à zéro avant le premier
+//!   lancement, l'IDE gardant son propre comportement (voir `console_ctrl`).
 //! - Environnement hérité de l'IDE, plus les variables du profil (Git Bash :
 //!   `TERM=xterm-256color`, `COLORTERM=truecolor`, `CHERE_INVOKING=1`).
 //! - Sortie de la pseudo-console : toujours UTF-8. Saisie : UTF-8.
@@ -113,6 +118,8 @@
 //!   déplace pas une vue remontée dans l'historique ; toute saisie la ramène en
 //!   bas.
 
+#[cfg(windows)]
+mod console_ctrl;
 mod emulator;
 mod error;
 mod input;

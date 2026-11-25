@@ -1,0 +1,16 @@
+# Écart M7 de la recette v0 : bandeau quand les versions diffèrent sur le BOM.
+# Préparer avec : python tests/fixtures/fusion-corpus.py build %TEMP%\jsessai-corpus
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-corpus
+action view.git
+action view.bottom_tall
+wait-idle
+ui merge.open 14-bom-eux-seul.txt
+wait-idle
+state target/essais/ecarts/m7-bom-eux-seul.json
+screenshot target/essais/ecarts/m7-bom-eux-seul.png
+ui merge.close
+ui merge.open 12-bom-partout.txt
+wait-idle
+state target/essais/ecarts/m7-bom-partout.json
+ui merge.close
+quit

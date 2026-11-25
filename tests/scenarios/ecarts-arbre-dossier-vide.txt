@@ -1,0 +1,6 @@
+# Observation de la recette : un dossier vide n'est pas grisé comme un dossier ignoré.
+# Préparer : un dossier jsessai-vide avec vide/ (vide), ignore/ (ligne « ignore/ » dans .gitignore), src/a.php, git init.
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-vide
+wait-idle
+screenshot target/essais/ecarts/arbre-vide.png
+quit

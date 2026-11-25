@@ -155,7 +155,9 @@ Clés principales (toutes les listes sont en ordre d'affichage) :
   « Fusion en cours — n fichiers en conflit » quand une opération Git est ouverte.
 
 - `git` : `tab`, `files` (par fichier : `path`, `kind`, `group`, `conflict`, `checked`,
-  `selected`), `operation` (`Merge`…), `message`, `amend`, `commit_pending`,
+  `selected`, `merge_check` = vérification d'avance de « Fusionner… » : `Loading`, `Fine`,
+  `Refused(Binary|NotUtf8|TooLarge|…)` ou `Unknown` ; `merge_disabled` = la raison affichée en
+  infobulle quand le bouton est grisé), `operation` (`Merge`…), `message`, `amend`, `commit_pending`,
   `commit_error` (sortie de Git telle quelle), `confirm`, `preview` (état du diff côte à
   côte : `title`, `hunks`, `current`, `kinds`, `notice` pour binaire / identique / fins de
   ligne, `left_title`, `right_title`), `log` (`loaded`, `has_more`, `loading`, `selected`,
@@ -228,8 +230,9 @@ state out/bandeau.json
 quit
 ```
 
-(L'IDE relit l'état des fichiers ouverts toutes les 2 s tant qu'il en a, et au retour du
-focus ; en scénario la fenêtre est toujours considérée comme active.)
+(L'IDE relit l'état des fichiers ouverts toutes les secondes tant qu'il en a, et au retour du
+focus ; il relit l'état Git toutes les 1,2 s, et tout de suite quand la relève d'un fichier ouvert
+détecte un changement ; en scénario la fenêtre est toujours considérée comme active.)
 
 Dernier projet rouvert (état redirigé pour ne pas toucher à `%APPDATA%`) :
 
@@ -277,6 +280,11 @@ tête de fichier quel script lancer avant.
 | `tests-prerequis.txt` | PHP, PHPUnit ou `phpunit.xml` manquants |
 | `tests-arret.txt` | arrêt d'un test qui dort, PHP qui plante (`exit(1)`) |
 | `ecrans-git-tests.txt` | Git et Tests en 1280×720 / 1920×1080 / plein écran, 100 % et 150 %, thème clair |
+| `ecarts-m3-fusionner-grise.txt` | « Fusionner… » grisé d'avance : binaire, Windows-1252, 22 Mio, 250 000 lignes (dépôt `fusion-corpus.py limites`) ; le refus après clic reste un filet |
+| `ecarts-m4-modif-externe.txt` | un fichier réécrit hors de l'IDE : états toutes les ~0,17 s ; l'heure du premier état où il figure se mesure avec la date de modification des fichiers `target/essais/ecarts/m4-*.json` |
+| `ecarts-m5-regex.txt` | regex invalide dès un caractère (`(`, `)`, `[`, `*a`, `\q`), message en français ; `a` et `(` sans regex restent « au moins 2 caractères » |
+| `ecarts-m6-messages.txt` | messages de la barre d'état : expiration (6 s / 12 s), effacés à l'ouverture d'un autre projet ou d'un fichier réussie |
+| `ecarts-arbre-dossier-vide.txt` | un dossier vide n'est pas grisé, un dossier ignoré l'est |
 
 Les couleurs des blocs et des connecteurs viennent du thème de l'éditeur
 (`theme::editor_theme`) : ajouter / supprimer / modifier / conflit ; un bloc traité

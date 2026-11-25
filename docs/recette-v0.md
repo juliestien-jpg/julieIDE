@@ -153,3 +153,20 @@ Rendu comme trouvé, vérifié à la fin : branche `main` à `2bbd96a`, `README.
 ## Fichiers livrés
 
 `tests/fixtures/fusion-corpus.py`, `tests/fixtures/fusion-reel.py`, `tests/fixtures/mergecli/` (Cargo.toml + src/main.rs), `tests/fixtures/recette-projets.py`, `tests/scenarios/recette-*.txt` (16), ce rapport.
+
+## Suite donnée aux écarts (25/11/2026)
+
+Les sept écarts ont été corrigés ; ils restent à rejouer par la testeuse pour être clos.
+
+| Écart | Correctif | Preuve apportée par le développement |
+|---|---|---|
+| M1 faux conflits | `julie-diff` : lignes sûres comptées sur tout le fichier, alignements rangés comme ceux de Git | conflits en trop sur les mesures de la recette rejouées : 18 → 0 sur 2 038 ; 54 000 tirages contre `git merge-file` : 0 cas « nous propre, Git en conflit » ; cas `25` et `38` fusionnés |
+| — faille trouvée en route | la v0 fusionnait en silence un cas que Git déclare en conflit (lignes répétées décalées contre une modification) | cas `repeat-shift-vs-edit-git-conflict` ajouté au corpus et en test unitaire |
+| M2 Ctrl+C | `julie-terminal` efface le drapeau « ignorer Ctrl+C » hérité avant de lancer un shell | test `ctrl_c_works_when_the_ide_ignores_ctrl_c`, vert lancé depuis PowerShell et depuis Git Bash |
+| M3 « Fusionner… » | vérification en tâche de fond, bouton grisé avec la raison en infobulle | scénario `ecarts-m3-fusionner-grise.txt` |
+| M4 délai Git | relève Git toutes les 1,2 s et rafraîchissement dès qu'un fichier ouvert change | 1,11 s au plus sur 8 essais (`ecarts-m4-modif-externe.txt`) |
+| M5 regex | erreur affichée dès un caractère, messages traduits | `ecarts-m5-regex.txt` |
+| M6 barre d'état | durée de vie des messages, effacement au changement de projet | `ecarts-m6-messages.txt` |
+| M7 BOM | le résultat suit toujours notre version ; bandeau quand les versions diffèrent sur le BOM | `ecarts-m7-bom.txt` |
+
+Changement de comportement à connaître : deux cas que la v0 laissait volontairement en conflit (`js-blank-run-vs-neighbour`, `php-new-method-after-edited-statement`) fusionnent désormais, comme chez Git.

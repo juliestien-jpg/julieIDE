@@ -1,0 +1,71 @@
+# Écart M4 : un fichier modifié hors de l'IDE apparaît dans les changements Git en moins de 2 s.
+# Préparer : bash tests/fixtures/labmate-changes.sh (dossier %TEMP%\jsessai-git).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+wait-idle
+wait 700
+wait-idle
+state target/essais/ecarts/m4-00.json
+external-write index.html modifié hors IDE
+
+wait 100
+state target/essais/ecarts/m4-01.json
+wait 100
+state target/essais/ecarts/m4-02.json
+wait 100
+state target/essais/ecarts/m4-03.json
+wait 100
+state target/essais/ecarts/m4-04.json
+wait 100
+state target/essais/ecarts/m4-05.json
+wait 100
+state target/essais/ecarts/m4-06.json
+wait 100
+state target/essais/ecarts/m4-07.json
+wait 100
+state target/essais/ecarts/m4-08.json
+wait 100
+state target/essais/ecarts/m4-09.json
+wait 100
+state target/essais/ecarts/m4-10.json
+wait 100
+state target/essais/ecarts/m4-11.json
+wait 100
+state target/essais/ecarts/m4-12.json
+wait 100
+state target/essais/ecarts/m4-13.json
+wait 100
+state target/essais/ecarts/m4-14.json
+wait 100
+state target/essais/ecarts/m4-15.json
+wait 100
+state target/essais/ecarts/m4-16.json
+wait 100
+state target/essais/ecarts/m4-17.json
+wait 100
+state target/essais/ecarts/m4-18.json
+wait 100
+state target/essais/ecarts/m4-19.json
+wait 100
+state target/essais/ecarts/m4-20.json
+wait 100
+state target/essais/ecarts/m4-21.json
+wait 100
+state target/essais/ecarts/m4-22.json
+wait 100
+state target/essais/ecarts/m4-23.json
+wait 100
+state target/essais/ecarts/m4-24.json
+wait 100
+state target/essais/ecarts/m4-25.json
+wait 100
+state target/essais/ecarts/m4-26.json
+wait 100
+state target/essais/ecarts/m4-27.json
+wait 100
+state target/essais/ecarts/m4-28.json
+wait 100
+state target/essais/ecarts/m4-29.json
+wait 100
+state target/essais/ecarts/m4-30.json
+quit

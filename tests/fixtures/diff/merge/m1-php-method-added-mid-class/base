@@ -1,0 +1,26 @@
+<?php
+
+final class Freezer
+{
+    private int $capacity = 10;
+
+    public function name(): string
+    {
+        return 'A';
+    }
+
+    public function count(): int
+    {
+        return 1;
+    }
+
+    public function isFull(): bool
+    {
+        return false;
+    }
+
+    public function open(): void
+    {
+        $this->log('open');
+    }
+}

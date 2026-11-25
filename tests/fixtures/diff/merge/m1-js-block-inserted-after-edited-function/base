@@ -1,0 +1,8 @@
+function load(id) {
+  const sample = find(id);
+  return sample;
+}
+
+function save(sample) {
+  store(sample);
+}

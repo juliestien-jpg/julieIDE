@@ -1,0 +1,31 @@
+# Écarts M3 et M5 aux échelles : 1280x720 en 100 % et 150 %, plein écran en 100 % et 150 %.
+# Préparer : python tests/fixtures/fusion-corpus.py limites %TEMP%\jsessai-limites
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-limites
+action view.git
+wait-idle
+wait 1500
+wait-idle
+action view.bottom_tall
+scale 1.5
+wait 300
+screenshot target/essais/ecarts/ech-git-150.png
+fullscreen on
+wait 600
+screenshot target/essais/ecarts/ech-git-plein-150.png
+scale 1.0
+wait 300
+screenshot target/essais/ecarts/ech-git-plein-100.png
+fullscreen off
+wait 600
+action nav.find_in_files
+key Alt+X
+type (
+wait-idle
+scale 1.5
+wait 300
+screenshot target/essais/ecarts/ech-regex-150.png
+fullscreen on
+wait 600
+screenshot target/essais/ecarts/ech-regex-plein-150.png
+state target/essais/ecarts/ech-regex.json
+quit

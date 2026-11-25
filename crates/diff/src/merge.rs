@@ -12,29 +12,64 @@
 //!
 //! # Zones d'ambiguïté (précaution propre à JulieStorm)
 //!
-//! Un diff n'est pas unique. Supprimer une ligne vide parmi trois, insérer une
-//! fonction entre deux accolades fermantes, déplacer une ligne de deux crans :
-//! chacun de ces changements peut se décrire de plusieurs façons également
-//! courtes, et deux outils (le nôtre, celui de Git) ne choisissent pas forcément
-//! la même. Si le contact entre les deux côtés se décidait sur la seule lecture
-//! que notre diff a retenue, une fusion pourrait passer pour propre ici alors que
+//! Un diff n'est pas unique. Déplacer une ligne de deux crans, décaler d'un cran
+//! un motif répété, retirer une ligne vide parmi trois : chacun de ces
+//! changements peut se décrire de plusieurs façons également courtes, et deux
+//! outils (le nôtre, celui de Git) ne partent pas forcément de la même. Si le
+//! contact entre les deux côtés se décidait sur la seule lecture que notre diff
+//! a retenue, une fusion pourrait passer pour propre ici alors que
 //! `git merge-file` y voit un conflit.
 //!
 //! On teste donc le contact sur la **zone d'ambiguïté** de chaque changement
 //! (voir [`extend`]) : le changement lui-même, étendu de part et d'autre
-//! jusqu'aux premières lignes **sûres**, celles que tous les alignements les
-//! plus courts apparient de la même façon. Les changements du même côté qui
-//! partagent une zone sont soudés. Conséquences :
+//! jusqu'aux premières lignes **sûres**. Les changements du même côté qui
+//! partagent une zone sont soudés. Une ligne est sûre :
 //!
-//! - nous déclarons parfois un conflit là où Git fusionne (deux changements
-//!   opposés à une ligne l'un de l'autre, dont l'un a une place ambiguë) ;
+//! 1. *au sens strict*, quand **tous** les alignements les plus courts des deux
+//!    fichiers l'apparient de la même façon. Le décompte se fait sur le fichier
+//!    entier, dans une bande étroite autour de notre diff ([`band`]) ;
+//! 2. *une fois les alignements rangés*, quand tous les alignements les plus
+//!    courts l'apparient de la même façon **après avoir été mis dans la forme
+//!    où Git range les siens** ([`canonical`]). Git ne rend jamais un alignement
+//!    brut : il glisse chaque changement à une place déterminée (le plus bas
+//!    possible, ou en face d'un changement de l'autre fichier). Les lectures
+//!    qui ne diffèrent que par un glissement se ramènent donc à une seule, et
+//!    ne sont plus un motif de doute. C'est ce qui sépare proprement « une
+//!    méthode modifiée, la suivante modifiée et une troisième ajoutée après
+//!    une ligne vide » (écart M1 de la recette de la v0).
+//!
+//! Le second sens n'est employé que là où il est fondé :
+//!
+//! - entre deux lignes sûres au sens strict (aucun glissement ne peut les
+//!   franchir : ranger ce segment seul revient à ranger le fichier entier) ;
+//! - si le nombre d'alignements à ranger reste énumérable ;
+//! - si le diff du côté est assez petit pour que celui de Git soit certainement
+//!   minimal ([`MAX_COST_FOR_CANONICAL`]) : au-delà, Git coupe court par
+//!   heuristique et son alignement peut n'être aucun des plus courts.
+//!
+//! Sinon, seul le sens strict compte. Conséquences qui restent :
+//!
+//! - nous déclarons parfois un conflit là où Git fusionne : ligne déplacée ou
+//!   motif répété dont une lecture touche le changement d'en face ; ligne
+//!   retirée d'une série de lignes identiques quand l'autre côté touche à la
+//!   série (voir [`zones_of`]) ; gros diffs à place ambiguë ;
 //! - deux changements voisins du même côté peuvent former un seul bloc, lignes
 //!   communes intermédiaires comprises ;
 //! - `tests/git_compare.rs` tire des fusions au hasard dans un alphabet de
-//!   quelques lignes (le pire cas pour l'ambiguïté) et vérifie qu'aucune n'est
-//!   déclarée « sans conflit » là où Git voit un conflit. Ce n'est pas une
-//!   preuve : Git ne cherche pas toujours l'alignement le plus court, et
-//!   l'analyse se fait par fenêtres. C'est une mesure.
+//!   quelques lignes (le pire cas pour l'ambiguïté), puis dans du faux code à
+//!   méthodes, lignes vides et accolades, et vérifie qu'aucune n'est déclarée
+//!   « sans conflit » là où Git voit un conflit. Ce n'est pas une preuve : le
+//!   rangement de Git est refait d'après son comportement, pas partagé avec
+//!   lui, et son diff n'est pas toujours l'un des plus courts. C'est une
+//!   mesure, à relancer à chaque retouche de ce fichier, de `band.rs` ou de
+//!   `canonical.rs`.
+//!
+//! **Repli.** Quand la bande serait trop large (très gros fichier *et* très
+//! gros diff de lignes banales), l'analyse stricte se fait par fenêtres autour
+//! des changements ([`window_zones`]), comme avant la v1. Elle suppose que les
+//! lignes entre deux fenêtres s'apparient comme dans notre diff, ce qu'un
+//! motif répété décalé d'un cran peut démentir : c'est une approximation
+//! connue, cantonnée à ce repli.
 //!
 //! Dans le doute, conflit.
 
@@ -44,6 +79,8 @@ use std::ops::Range;
 
 use julie_core::CancelToken;
 
+use crate::band;
+use crate::canonical;
 use crate::diff::Interner;
 use crate::myers::{self, Change};
 use crate::text::{LineEnding, LineTable, TextLines};
@@ -110,6 +147,20 @@ const MAX_WINDOW_CELLS: usize = 400_000;
 /// Travail total accordé à l'analyse d'un côté ; au-delà, on se rabat sur la
 /// règle simple (plus prudente), ce qui garde le temps de calcul borné.
 const CELL_BUDGET: usize = 12_000_000;
+/// Travail accordé, pour un côté, au décompte global des alignements (cases de
+/// la bande, voir [`band`]) ; au-delà, repli sur l'analyse par fenêtres.
+const BAND_BUDGET: usize = 24_000_000;
+/// Travail total accordé, pour un côté, à la mise en forme canonique des
+/// alignements (voir [`canonical::agreed_lines`]) ; au-delà, l'analyse garde sa
+/// réponse la plus prudente.
+const CANONICAL_BUDGET: usize = 6_000_000;
+/// Coût discrétionnaire maximal du diff d'un côté (lignes supprimées et
+/// ajoutées, hors lignes sans vis-à-vis possible : Git les écarte aussi avant de
+/// chercher) pour que l'on raisonne sur les alignements rangés. Le diff de Git
+/// est exact tant qu'une recherche ne dépasse pas un coût de 256 par moitié,
+/// soit 512 pour une boîte ; en deçà de 400 pour tout le fichier, il est donc
+/// minimal à coup sûr.
+const MAX_COST_FOR_CANONICAL: usize = 400;
 /// Module des décomptes de chemins (nombre premier de Mersenne 2^61 - 1).
 const PRIME: u64 = (1 << 61) - 1;
 
@@ -119,24 +170,111 @@ struct Window {
     zones: Vec<Sided>,
 }
 
-/// Regroupe les changements du diff `base → side` et calcule leurs zones
-/// d'ambiguïté.
+/// Calcule les zones d'ambiguïté des changements du diff `base → side`.
 ///
-/// Un diff n'est pas unique : autour d'un changement, d'autres alignements aussi
-/// courts existent souvent (une ligne vide retirée d'une série, une fonction
-/// insérée entre deux accolades, une ligne déplacée, un motif répété décalé d'un
-/// cran). Git peut en avoir retenu un autre que nous. Pour chaque groupe de
-/// changements voisins, on prend une fenêtre de la base et du côté, et on y
-/// cherche les lignes **sûres** : celles que *tous* les alignements optimaux de
-/// la fenêtre apparient de la même façon (voir [`stable_lines`]). La zone d'un
-/// changement s'étend jusqu'aux lignes sûres qui l'encadrent ; les changements
-/// qui partagent une zone sont soudés. Si l'ambiguïté atteint le bord de la
-/// fenêtre, la fenêtre grandit (jusqu'à englober les changements voisins).
-///
-/// Les zones rendues sont strictement séparées par au moins une ligne sûre, sauf
-/// repli faute de budget (elles peuvent alors se toucher, ce qui les fera
-/// simplement entrer dans le même bloc).
+/// Les zones rendues sont triées et strictement séparées par au moins une ligne
+/// sûre, ce que le regroupement par blocs suppose.
 fn extend(changes: Vec<Change>, base: &[u32], side: &[u32]) -> Vec<Sided> {
+    let zones = match exact_zones(&changes, base, side) {
+        Some(zones) => zones,
+        None => window_zones(&changes, base, side),
+    };
+    // Deux zones qui se touchent malgré tout (fenêtres du repli qui se
+    // chevauchent) n'en font qu'une.
+    let mut out: Vec<Sided> = Vec::new();
+    for mut zone in zones {
+        while let Some(previous) = out.last() {
+            if zone.ext_start > previous.ext_end {
+                break;
+            }
+            let previous = out.pop().expect("zone précédente");
+            zone = Sided {
+                change: Change {
+                    a: previous.change.a.start..zone.change.a.end,
+                    b: previous.change.b.start..zone.change.b.end,
+                },
+                ext_start: previous.ext_start.min(zone.ext_start),
+                ext_end: previous.ext_end.max(zone.ext_end),
+            };
+        }
+        out.push(zone);
+    }
+    out
+}
+
+/// Zones d'après le décompte global des alignements optimaux ([`band`]).
+///
+/// Les lignes sûres au sens strict découpent le fichier en segments
+/// indépendants : tout alignement optimal passe par elles. Un segment qui
+/// contient des changements est d'abord une seule zone ; s'il contient aussi des
+/// lignes gardées (donc douteuses), on y regarde de plus près en rangeant tous
+/// ses alignements à la façon de Git ([`refine_with_canonical_forms`]).
+///
+/// `None` si le décompte global dépasse son budget.
+fn exact_zones(changes: &[Change], base: &[u32], side: &[u32]) -> Option<Vec<Sided>> {
+    if changes.is_empty() {
+        return Some(Vec::new());
+    }
+    let stability = band::stable_lines(base, side, changes, BAND_BUDGET)?;
+    let stable = stability.stable;
+    let mut canonical_budget = if stability.discretionary_cost <= MAX_COST_FOR_CANONICAL {
+        CANONICAL_BUDGET
+    } else {
+        0
+    };
+    let mut zones = Vec::new();
+    let mut first = 0;
+    while first < changes.len() {
+        // Changements du même segment : aucune ligne sûre ne les sépare.
+        let mut last = first + 1;
+        while last < changes.len()
+            && !stable[changes[last - 1].a.end..changes[last].a.start]
+                .iter()
+                .any(|stable| *stable)
+        {
+            last += 1;
+        }
+        let mut start = changes[first].a.start;
+        while start > 0 && !stable[start - 1] {
+            start -= 1;
+        }
+        let mut end = changes[last - 1].a.end;
+        while end < base.len() && !stable[end] {
+            end += 1;
+        }
+        let shift_before = changes[first].b.start as isize - changes[first].a.start as isize;
+        let shift_after = changes[last - 1].b.end as isize - changes[last - 1].a.end as isize;
+        let segment_a = start..end;
+        let segment_b = shifted(start, shift_before)..shifted(end, shift_after);
+        // Dans le segment, aucune ligne gardée n'est sûre au sens strict.
+        let mut local = vec![false; segment_a.len()];
+        refine_with_canonical_forms(
+            &mut local,
+            &base[segment_a.clone()],
+            &side[segment_b.clone()],
+            &changes[first..last],
+            (segment_a.start, segment_b.start),
+            &mut canonical_budget,
+        );
+        zones.extend(zones_of(&changes[first..last], &local, segment_a, base));
+        first = last;
+    }
+    Some(zones)
+}
+
+/// Repli de [`exact_zones`] : zones par fenêtres autour des changements.
+///
+/// Pour chaque groupe de changements voisins, on prend une fenêtre de la base et
+/// du côté, et on y cherche les lignes que *tous* les alignements optimaux de
+/// **la fenêtre** apparient de la même façon (voir [`stable_lines`]). La zone
+/// d'un changement s'étend jusqu'aux lignes sûres qui l'encadrent ; les
+/// changements qui partagent une zone sont soudés. Si l'ambiguïté atteint le
+/// bord de la fenêtre, la fenêtre grandit (jusqu'à englober les changements
+/// voisins).
+///
+/// Approximation : les lignes laissées entre deux fenêtres sont tenues pour
+/// sûres (voir l'en-tête du module).
+fn window_zones(changes: &[Change], base: &[u32], side: &[u32]) -> Vec<Sided> {
     let mut budget = CELL_BUDGET;
     let mut windows: Vec<Window> = Vec::new();
     let mut next = 0;
@@ -191,33 +329,54 @@ fn extend(changes: Vec<Change>, base: &[u32], side: &[u32]) -> Vec<Sided> {
                 }
                 continue;
             }
-            break zones_of(&changes[lo..hi], &stable, window_a);
+            break zones_of(&changes[lo..hi], &stable, window_a, base);
         };
         windows.push(Window { lo, zones });
         next = hi;
     }
-    // Dernière passe : deux zones qui se touchent malgré tout (fenêtres qui se
-    // chevauchent, repli) n'en font qu'une. Les zones restent ainsi triées et
-    // strictement séparées, ce que le regroupement par blocs suppose.
-    let mut out: Vec<Sided> = Vec::new();
-    for mut zone in windows.into_iter().flat_map(|window| window.zones) {
-        while let Some(previous) = out.last() {
-            if zone.ext_start > previous.ext_end {
-                break;
-            }
-            let previous = out.pop().expect("zone précédente");
-            zone = Sided {
-                change: Change {
-                    a: previous.change.a.start..zone.change.a.end,
-                    b: previous.change.b.start..zone.change.b.end,
-                },
-                ext_start: previous.ext_start.min(zone.ext_start),
-                ext_end: previous.ext_end.max(zone.ext_end),
-            };
-        }
-        out.push(zone);
+    windows
+        .into_iter()
+        .flat_map(|window| window.zones)
+        .collect()
+}
+
+/// Second regard sur un segment compris entre deux lignes sûres au sens strict,
+/// et dont les lignes gardées ne le sont pas : parmi tous les alignements
+/// optimaux, Git ne peut rendre que ceux qui sont **rangés à sa façon**
+/// (changements glissés à leur place canonique, voir [`canonical`]). Une ligne
+/// que tous les alignements optimaux, une fois rangés, apparient comme notre
+/// diff est donc sûre elle aussi, même si un alignement non rangé la lisait
+/// autrement.
+///
+/// Les bords du segment sont sûrs au sens strict (tous les alignements optimaux
+/// du fichier les apparient de la même façon) : aucun glissement ne peut donc
+/// les franchir, et ranger le segment seul revient à ranger le fichier entier.
+///
+/// Si les alignements sont trop nombreux ou le budget épuisé, rien ne change :
+/// on garde la réponse stricte.
+fn refine_with_canonical_forms(
+    stable: &mut [bool],
+    a: &[u32],
+    b: &[u32],
+    changes: &[Change],
+    (a_origin, b_origin): (usize, usize),
+    budget: &mut usize,
+) {
+    let expected = canonical::partners_of(changes, a_origin, b_origin, a.len(), b.len());
+    let doubtful = expected
+        .iter()
+        .zip(stable.iter())
+        .any(|(partner, stable)| partner.is_some() && !stable);
+    if !doubtful {
+        return;
     }
-    out
+    if let Some(agreed) = canonical::agreed_lines(a, b, &expected, budget) {
+        for (line, agreed) in agreed.into_iter().enumerate() {
+            // Sûre au sens strict implique sûre une fois rangée ; le « ou » ne
+            // sert qu'à ne jamais retirer une garantie déjà acquise.
+            stable[line] = stable[line] || agreed;
+        }
+    }
 }
 
 /// Deux changements consécutifs du même côté s'analysent dans la même fenêtre
@@ -267,13 +426,35 @@ fn fallback_zone(changes: &[Change], window: Range<usize>, base: &[u32], side: &
 
 /// Les zones d'une fenêtre analysée : chaque changement s'étend jusqu'aux lignes
 /// sûres qui l'encadrent ; ceux qui se rejoignent sont soudés.
-fn zones_of(changes: &[Change], stable: &[bool], window: Range<usize>) -> Vec<Sided> {
+///
+/// Une **suppression pure** qui peut glisser (une ligne retirée d'une série de
+/// lignes identiques, un motif répété retiré une fois) garde en plus toute sa
+/// série pour zone, première ligne exceptée : savoir *laquelle* des lignes
+/// identiques a disparu n'a pas de réponse, et si l'autre côté touche à l'une
+/// d'elles, c'est peut-être à celle-là. Git range la suppression en bas et
+/// fusionne ; nous montrons le conflit. (La première ligne de la série est
+/// laissée hors zone pour qu'un changement qui ne fait que border la série,
+/// sans y toucher, reste séparé.)
+fn zones_of(changes: &[Change], stable: &[bool], window: Range<usize>, base: &[u32]) -> Vec<Sided> {
     let mut zones: Vec<Sided> = Vec::new();
+    let mut previous_end = window.start;
     for change in changes {
         let mut ext_start = change.a.start;
         while ext_start > window.start && !stable[ext_start - 1 - window.start] {
             ext_start -= 1;
         }
+        if change.b.is_empty() {
+            let mut slid = 0;
+            while change.a.start - slid > previous_end
+                && base[change.a.start - slid - 1] == base[change.a.end - slid - 1]
+            {
+                slid += 1;
+            }
+            if slid > 0 {
+                ext_start = ext_start.min(change.a.start - slid + 1);
+            }
+        }
+        previous_end = change.a.end;
         let mut ext_end = change.a.end;
         while ext_end < window.end && !stable[ext_end - window.start] {
             ext_end += 1;
@@ -306,7 +487,7 @@ fn zones_of(changes: &[Change], stable: &[bool], window: Range<usize>) -> Vec<Si
 /// passent par son appariement. Les décomptes sont pris modulo un grand nombre
 /// premier : une ligne déclarée sûre à tort demanderait une coïncidence à
 /// 2^-61.
-fn stable_lines(
+pub(crate) fn stable_lines(
     a: &[u32],
     b: &[u32],
     changes: &[Change],
@@ -409,17 +590,14 @@ pub fn merge_chunks(
     let ours_ids = merge_ids(ours.text(), ours.table(), &mut interner);
     let theirs_ids = merge_ids(theirs.text(), theirs.table(), &mut interner);
 
-    let left = extend(
-        myers::diff_ids(&base_ids, &ours_ids, cancel)?,
-        &base_ids,
-        &ours_ids,
-    );
+    // Chaque diff est rangé comme Git range le sien avant d'être analysé.
+    let side_changes = |side_ids: &[u32]| -> Result<Vec<Change>, DiffError> {
+        let changes = myers::diff_ids(&base_ids, side_ids, cancel)?;
+        Ok(canonical::canonical_changes(changes, &base_ids, side_ids))
+    };
+    let left = extend(side_changes(&ours_ids)?, &base_ids, &ours_ids);
     cancel.check()?;
-    let right = extend(
-        myers::diff_ids(&base_ids, &theirs_ids, cancel)?,
-        &base_ids,
-        &theirs_ids,
-    );
+    let right = extend(side_changes(&theirs_ids)?, &base_ids, &theirs_ids);
 
     let mut chunks = Vec::new();
     // Position courante dans la base, et décalage de chaque côté par rapport à elle.
@@ -613,40 +791,157 @@ mod tests {
     }
 
     #[test]
-    fn sliding_change_conflicts_with_a_neighbour_in_its_range() {
-        // Notre côté supprime un « x » parmi trois : lequel ? N'importe. Leur
-        // côté modifie la ligne juste avant la série : à une ligne commune de la
-        // suppression si on la place en bas, contre elle si on la place en haut.
+    fn a_sliding_change_is_judged_where_git_puts_it() {
+        // Notre côté supprime un « x » parmi trois : lequel ? Toutes les
+        // lectures se rangent sur le dernier. Leur côté modifie la ligne juste
+        // avant la série : à deux lignes de là, pas de contact.
         let base = "a\nx\nx\nx\nb\n";
         let ours = "a\nx\nx\nb\n";
-        let theirs = "A\nx\nx\nx\nb\n";
-        assert_eq!(kinds(base, ours, theirs), vec![ChunkKind::Conflict]);
-        // Assez loin de toute la plage de glissement : deux changements propres.
-        let base = "a\nk\nx\nx\nx\nk\nb\n";
-        let ours = "a\nk\nx\nx\nk\nb\n";
-        let theirs = "A\nk\nx\nx\nx\nk\nb\n";
+        assert_eq!(
+            kinds(base, ours, "A\nx\nx\nx\nb\n"),
+            vec![ChunkKind::Right, ChunkKind::Left]
+        );
+        // La ligne juste après la série touche la suppression rangée : conflit.
+        assert_eq!(
+            kinds(base, ours, "a\nx\nx\nx\nB\n"),
+            vec![ChunkKind::Conflict]
+        );
+        // Un « x » de la série modifié en face : conflit, où qu'il soit.
+        for theirs in ["a\nX\nx\nx\nb\n", "a\nx\nX\nx\nb\n", "a\nx\nx\nX\nb\n"] {
+            assert_eq!(
+                kinds(base, ours, theirs),
+                vec![ChunkKind::Conflict],
+                "{theirs:?}"
+            );
+            assert_eq!(
+                kinds(base, theirs, ours),
+                vec![ChunkKind::Conflict],
+                "{theirs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_insertion_after_a_brace_is_judged_after_the_brace() {
+        // La fonction ajoutée peut se lire « après l'accolade » ou « accolade
+        // comprise, un cran plus haut » : rangée, elle est après. L'instruction
+        // modifiée en face en est séparée par l'accolade.
+        let base = "f() {\n  un();\n}\nfin\n";
+        let ours = "f() {\n  un();\n}\ng() {\n  deux();\n}\nfin\n";
+        assert_eq!(
+            kinds(base, ours, "f() {\n  UN();\n}\nfin\n"),
+            vec![ChunkKind::Right, ChunkKind::Left]
+        );
+        // La ligne qui suit le point d'insertion le touche : conflit.
+        assert_eq!(
+            kinds(base, ours, "f() {\n  un();\n}\nFIN\n"),
+            vec![ChunkKind::Conflict]
+        );
+        // L'accolade elle-même modifiée en face : conflit.
+        assert_eq!(
+            kinds(base, ours, "f() {\n  un();\n};\nfin\n"),
+            vec![ChunkKind::Conflict]
+        );
+    }
+
+    /// Écart M1 de la recette de la v0 : la ligne vide qui précède la méthode
+    /// modifiée existe aussi devant la méthode ajoutée. Un alignement brut peut
+    /// apparier la ligne vide de la base à la seconde ; rangé, il redevient
+    /// celui-ci.
+    #[test]
+    fn a_method_added_after_an_edited_one_does_not_reach_the_method_before() {
+        let base = "class A {\n    a() { return 1; }\n\n    b() { return 2; }\n}\n";
+        let ours = "class A {\n    a() { return 10; }\n\n    b() { return 2; }\n}\n";
+        let theirs =
+            "class A {\n    a() { return 1; }\n\n    b() { return 20; }\n\n    c() {}\n}\n";
         assert_eq!(
             kinds(base, ours, theirs),
+            vec![ChunkKind::Left, ChunkKind::Right]
+        );
+        assert_eq!(
+            kinds(base, theirs, ours),
             vec![ChunkKind::Right, ChunkKind::Left]
+        );
+        // Même chose loin du début et de la fin du fichier.
+        let wrap = |text: &str| format!("un\ndeux\n\ntrois\n{text}\nquatre\n\ncinq\n");
+        assert_eq!(
+            kinds(&wrap(base), &wrap(ours), &wrap(theirs)),
+            vec![ChunkKind::Left, ChunkKind::Right]
+        );
+        // Sans la ligne vide entre a() et b(), les deux changements se touchent.
+        let tight = |text: &str| text.replacen("\n\n", "\n", 1);
+        assert_eq!(
+            kinds(&tight(base), &tight(ours), &tight(theirs)),
+            vec![ChunkKind::Conflict]
         );
     }
 
     #[test]
-    fn an_insertion_that_could_sit_one_line_higher_reaches_that_line() {
-        // La fonction ajoutée peut se lire « après l'accolade » ou « avant » :
-        // la ligne « } » fait partie de sa zone d'ambiguïté.
-        let base = "f() {\n  un();\n}\nfin\n";
-        let ours = "f() {\n  un();\n}\ng() {\n  deux();\n}\nfin\n";
-        let theirs = "f() {\n  UN();\n}\nfin\n";
-        assert_eq!(kinds(base, ours, theirs), vec![ChunkKind::Conflict]);
-        // Une ligne sûre entre les deux suffit à les séparer.
-        let base = "f() {\n  un();\n  zéro();\n}\nfin\n";
-        let ours = "f() {\n  un();\n  zéro();\n}\ng() {\n  deux();\n}\nfin\n";
-        let theirs = "f() {\n  UN();\n  zéro();\n}\nfin\n";
+    fn edits_in_a_run_of_identical_lines_are_replacements_in_place() {
+        // Recette, cas « lignes répétées » : chaque côté remplace un « x ».
+        let base = "x\nx\nx\nx\nx\nx\n";
         assert_eq!(
-            kinds(base, ours, theirs),
-            vec![ChunkKind::Right, ChunkKind::Left]
+            kinds(base, "x\nx\nY\nx\nx\nx\n", "x\nx\nx\nx\nZ\nx\n"),
+            vec![ChunkKind::Left, ChunkKind::Right]
         );
+        // Voisins : conflit.
+        assert_eq!(
+            kinds(base, "x\nx\nY\nx\nx\nx\n", "x\nx\nx\nZ\nx\nx\n"),
+            vec![ChunkKind::Conflict]
+        );
+    }
+
+    #[test]
+    fn a_large_diff_of_ordinary_lines_keeps_the_strict_analysis() {
+        // Le même glissement que plus haut, mais notre côté rebat aussi des
+        // centaines de lignes banales plus loin : le diff de Git n'est plus
+        // garanti minimal, on ne raisonne plus sur les alignements rangés.
+        let tail = |step: usize| -> String {
+            (0..600)
+                .map(|i| format!("mot {}\n", (i * step) % 7))
+                .collect()
+        };
+        let base = format!("a\nx\nx\nx\nb\nfin\n{}", tail(1));
+        let ours = format!("a\nx\nx\nb\nfin\n{}", tail(3));
+        let theirs = format!("A\nx\nx\nx\nb\nfin\n{}", tail(1));
+        assert!(kinds(&base, &ours, &theirs).contains(&ChunkKind::Conflict));
+        // Des centaines de lignes réécrites en lignes neuves ne changent rien :
+        // elles n'ont pas d'autre lecture possible.
+        let fresh =
+            |mark: &str| -> String { (0..600).map(|i| format!("ligne {i}{mark}\n")).collect() };
+        let base = format!("a\nx\nx\nx\nb\nfin\n{}", fresh(""));
+        let ours = format!("a\nx\nx\nb\nfin\n{}", fresh(" changée"));
+        let theirs = format!("A\nx\nx\nx\nb\nfin\n{}", fresh(""));
+        assert_eq!(
+            kinds(&base, &ours, &theirs),
+            vec![ChunkKind::Right, ChunkKind::Left, ChunkKind::Left]
+        );
+    }
+
+    /// Faille trouvée par le tirage contre Git (et présente avant la v1) : notre
+    /// côté se lit « deux lignes insérées en haut, une supprimée sept lignes
+    /// plus bas » ou « une supprimée en haut, deux insérées plus bas », tout le
+    /// milieu décalé d'un cran. Git retient la seconde lecture, qui touche la
+    /// ligne modifiée en face. Aucune ligne du milieu n'est sûre : conflit.
+    #[test]
+    fn a_shifted_repetition_spanning_distant_changes_is_a_conflict() {
+        let base = "g\nb\na\na\nb\na\nb\nb\nb\ng\n";
+        let ours = "g\na\na\nb\na\na\nb\na\nb\nb\ng\n";
+        for line in 1..9 {
+            let mut lines: Vec<&str> = base.lines().collect();
+            lines[line] = "Z";
+            let theirs = format!("{}\n", lines.join("\n"));
+            assert_eq!(
+                kinds(base, ours, &theirs),
+                vec![ChunkKind::Conflict],
+                "ligne {line}"
+            );
+            assert_eq!(
+                kinds(base, &theirs, ours),
+                vec![ChunkKind::Conflict],
+                "ligne {line} (côtés échangés)"
+            );
+        }
     }
 
     #[test]

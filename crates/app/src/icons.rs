@@ -18,6 +18,10 @@ pub enum Icon {
     Search,
     Close,
     Dot,
+    /// Cercle vide : test incomplet.
+    Ring,
+    /// Trait barré : test ignoré.
+    Dash,
     Bolt,
     ArrowRight,
     ArrowLeft,
@@ -146,6 +150,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Dot => {
             p.circle_filled(at(0.5, 0.5), rect.width() * 0.2, color);
+        }
+        Icon::Ring => {
+            p.circle_stroke(at(0.5, 0.5), rect.width() * 0.26, stroke);
+        }
+        Icon::Dash => {
+            line((0.24, 0.5), (0.76, 0.5));
         }
         Icon::ArrowRight => {
             line((0.14, 0.5), (0.84, 0.5));

@@ -203,6 +203,12 @@ impl FindInFiles {
         if self.pattern.chars().count() < 2 {
             index.cancel_search();
             self.task = None;
+            // Une expression invalide s'annonce dès le premier caractère.
+            if self.regex && !self.pattern.is_empty() {
+                if let Err(error) = regex::Regex::new(&self.pattern) {
+                    self.error = Some(t::find_invalid_regex(&error.to_string()));
+                }
+            }
             return;
         }
         match index.search_text(self.text_query(), editors.unsaved_files()) {
@@ -214,17 +220,7 @@ impl FindInFiles {
                 index.cancel_search();
                 self.task = None;
                 self.error = Some(match error {
-                    IndexError::InvalidPattern { message } => {
-                        // Le message de `regex` tient sur plusieurs lignes : on garde la cause.
-                        let cause = message
-                            .lines()
-                            .rev()
-                            .find(|l| !l.trim().is_empty())
-                            .map_or(message.as_str(), |l| {
-                                l.trim().trim_start_matches("error:").trim()
-                            });
-                        format!("{} : {cause}", t::FIND_INVALID_REGEX)
-                    }
+                    IndexError::InvalidPattern { message } => t::find_invalid_regex(&message),
                     IndexError::InvalidMask { mask, message } => format!("{mask} : {message}"),
                     other => other.to_string(),
                 });
@@ -496,6 +492,9 @@ impl FindInFiles {
     }
 
     fn summary_text(&self) -> String {
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
         if self.pattern.chars().count() < 2 {
             return t::FIND_MIN_CHARS.to_owned();
         }

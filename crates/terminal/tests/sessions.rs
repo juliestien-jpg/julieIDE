@@ -528,6 +528,241 @@ fn git_bash_alternate_screen_with_less() {
     assert!(session.close_and_wait(TIMEOUT));
 }
 
+/// Le processus courant ignore-t-il Ctrl+C (bit 0 de
+/// `RTL_USER_PROCESS_PARAMETERS.ConsoleFlags`, hérité des parents) ?
+fn ctrl_c_ignored() -> bool {
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, PROCESS_BASIC_INFORMATION};
+    // SAFETY : lecture de notre propre PEB (voir src/console_ctrl.rs).
+    unsafe {
+        let mut info: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
+        let status = NtQueryInformationProcess(
+            GetCurrentProcess(),
+            ProcessBasicInformation,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        );
+        assert!(status >= 0);
+        let params = (*info.PebBaseAddress).ProcessParameters;
+        (std::ptr::read_volatile(&(*params).Reserved2[1]) as usize as u32) & 1 != 0
+    }
+}
+
+/// Lance ce même exécutable de test sur `helper`, avec les drapeaux de
+/// création `flags` ; rend (succès, sortie standard, pid de l'hôte).
+fn run_helper(helper: &str, variable: &str, flags: u32) -> (bool, String, u32) {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            helper,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(variable, "1")
+        .creation_flags(flags)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let host = child.id();
+    let mut output = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut output)
+        .unwrap();
+    let status = child.wait().unwrap();
+    (status.success(), output, host)
+}
+
+/// Hôte de l'essai suivant : né en ignorant Ctrl+C (comme un IDE lancé depuis
+/// le Git Bash de l'outil d'agent), il vérifie que Ctrl+C interrompt quand même
+/// les commandes de ses terminaux, et que lui-même ignore toujours Ctrl+C.
+#[test]
+#[ignore = "lancé par ctrl_c_works_when_the_ide_ignores_ctrl_c"]
+fn helper_ctrl_c_under_an_ignoring_parent() {
+    if std::env::var_os("JULIE_TERMINAL_HELPER_CTRL_C").is_none() {
+        return;
+    }
+    use std::io::Write;
+    println!("IGNORED_AT_START {}", ctrl_c_ignored());
+    let f = fixture();
+
+    let session = f.open(cmd());
+    assert!(wait_screen(&session, |t| t.contains('>')).0);
+    type_line(&session, "%SystemRoot%\\System32\\PING.EXE -t 127.0.0.1");
+    assert!(wait_until(|| session
+        .running_programs()
+        .contains(&"ping".to_string())));
+    assert!(wait_screen(&session, |t| t.matches("127.0.0.1").count() >= 3).0);
+    session.send_key(Key::Char('c'), Modifiers::CTRL);
+    assert!(
+        wait_until(|| session.running_programs().is_empty()),
+        "ping devrait être interrompu : {:?}",
+        session.running_programs()
+    );
+    assert!(matches!(session.status(), SessionStatus::Running { .. }));
+    assert!(session.close_and_wait(TIMEOUT));
+    println!("CMD_OK");
+
+    if let Some(profile) = git_bash() {
+        let session = f.open(profile);
+        type_line(&session, "sleep 100");
+        assert!(wait_until(|| session
+            .running_programs()
+            .contains(&"sleep".to_string())));
+        session.send_key(Key::Char('c'), Modifiers::CTRL);
+        assert!(
+            wait_until(|| session.running_programs().is_empty()),
+            "sleep devrait être interrompu : {:?}",
+            session.running_programs()
+        );
+        assert!(session.close_and_wait(TIMEOUT));
+        println!("BASH_OK");
+    }
+
+    // L'hôte lui-même ignore toujours Ctrl+C. Il a sa propre console cachée
+    // (CREATE_NO_WINDOW) : on ne l'envoie que si personne d'autre n'y est
+    // attaché, pour ne jamais toucher le shell qui a lancé les essais.
+    use windows_sys::Win32::System::Console::{
+        GenerateConsoleCtrlEvent, GetConsoleProcessList, CTRL_C_EVENT,
+    };
+    let mut pids = [0u32; 8];
+    // SAFETY : tampon de 8 identifiants.
+    let attached = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    if attached == 1 && pids[0] == std::process::id() {
+        // SAFETY : signal à notre seule console.
+        let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } != 0;
+        std::thread::sleep(Duration::from_millis(500));
+        println!("SELF_CTRL_C sent={sent} survived");
+    } else {
+        println!("SELF_CTRL_C skipped attached={attached}");
+    }
+    std::io::stdout().flush().unwrap();
+}
+
+/// Écart M2 : un IDE lancé par un parent qui ignore Ctrl+C (Git Bash de
+/// l'outil d'agent, raccourci « nouveau groupe de processus »…) en hérite, et
+/// le transmettait à cmd et à ping dans la pseudo-console. On reproduit ce
+/// parent avec CREATE_NEW_PROCESS_GROUP, quel que soit le shell qui lance
+/// `cargo test`.
+#[test]
+fn ctrl_c_works_when_the_ide_ignores_ctrl_c() {
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (ok, output, _) = run_helper(
+        "helper_ctrl_c_under_an_ignoring_parent",
+        "JULIE_TERMINAL_HELPER_CTRL_C",
+        CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+    );
+    assert!(
+        output.contains("IGNORED_AT_START true"),
+        "l'hôte devait naître en ignorant Ctrl+C : {output}"
+    );
+    assert!(ok && output.contains("CMD_OK"), "{output}");
+    if git_bash().is_some() {
+        assert!(output.contains("BASH_OK"), "{output}");
+    }
+    assert!(
+        output.contains("SELF_CTRL_C sent=true survived"),
+        "l'IDE doit continuer d'ignorer Ctrl+C : {output}"
+    );
+}
+
+/// Hôte de l'essai suivant : ouvre des sessions occupées (et une qui démarre à
+/// peine), les ferme sans attendre et se termine aussitôt — comme l'IDE qu'on
+/// quitte.
+#[test]
+#[ignore = "lancé par closing_without_waiting_then_exiting_leaves_no_orphan"]
+fn helper_close_without_waiting_and_exit() {
+    if std::env::var_os("JULIE_TERMINAL_HELPER_EXIT").is_none() {
+        return;
+    }
+    let f = fixture();
+    let busy = f.open(cmd());
+    assert!(wait_screen(&busy, |t| t.contains('>')).0);
+    type_line(
+        &busy,
+        "cmd /c %SystemRoot%\\System32\\PING.EXE -t 127.0.0.1",
+    );
+    assert!(wait_until(|| busy.process_ids().len() >= 3));
+    let mut pids = busy.process_ids();
+    let bash = git_bash().map(|profile| {
+        let session = f.open(profile);
+        type_line(&session, "sleep 100");
+        assert!(wait_until(|| session
+            .running_programs()
+            .contains(&"sleep".to_string())));
+        pids.extend(session.process_ids());
+        session
+    });
+    // Ouverte puis fermée avant d'avoir démarré.
+    let starting = f.open(cmd());
+    let pids: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+    println!("PIDS {}", pids.join(" "));
+    use std::io::Write;
+    std::io::stdout().flush().unwrap();
+    let before = Instant::now();
+    busy.close();
+    starting.close();
+    if let Some(bash) = &bash {
+        bash.close();
+    }
+    println!("CLOSE_TOOK_MS {}", before.elapsed().as_millis());
+    std::io::stdout().flush().unwrap();
+    std::process::exit(0);
+}
+
+/// Fermer sans attendre puis quitter : ni interpréteur, ni descendant, ni
+/// conhost ne survit (tout ce dont l'hôte était le parent est mort).
+#[test]
+fn closing_without_waiting_then_exiting_leaves_no_orphan() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (ok, output, host) = run_helper(
+        "helper_close_without_waiting_and_exit",
+        "JULIE_TERMINAL_HELPER_EXIT",
+        0,
+    );
+    assert!(ok, "{output}");
+    let pids: Vec<u32> = output
+        .split_once("PIDS ")
+        .map(|(_, rest)| {
+            rest.lines()
+                .next()
+                .unwrap_or("")
+                .split(' ')
+                .filter_map(|p| p.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(pids.len() >= 3, "identifiants attendus : {output}");
+    let took: u128 = output
+        .split_once("CLOSE_TOOK_MS ")
+        .and_then(|(_, rest)| rest.lines().next()?.trim().parse().ok())
+        .expect("durée de fermeture");
+    assert!(took < 100, "close() a bloqué {took} ms");
+    for pid in &pids {
+        assert!(
+            wait_until(|| !is_alive(*pid)),
+            "processus {pid} a survécu à l'hôte"
+        );
+    }
+    assert!(
+        wait_until(|| !processes()
+            .iter()
+            .any(|(pid, parent, _)| *parent == host && is_alive(*pid))),
+        "enfants de l'hôte encore vivants : {:?}",
+        processes()
+            .into_iter()
+            .filter(|(_, parent, _)| *parent == host)
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Processus « hôte » de l'essai suivant : ouvre une session qui lance un
 /// petit-enfant, écrit les identifiants, puis attend d'être tué.
 #[test]

@@ -1,0 +1,40 @@
+# Écart M6 : les messages de la barre d'état ont une durée de vie et s'effacent au changement de contexte.
+# Préparer : bash tests/fixtures/labmate-changes.sh ; python tests/fixtures/fusion-corpus.py limites %TEMP%\jsessai-limites
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+action view.git
+wait-idle
+ui git.message essai M6
+ui git.commit
+wait-idle
+wait 300
+state target/essais/ecarts/m6-1-commit.json
+# Durée de vie : une information s'efface seule (6 s).
+wait 6500
+state target/essais/ecarts/m6-2-expire.json
+# Deuxième commit (amender), puis ouverture d'un autre projet : le message disparaît.
+ui git.amend on
+ui git.message essai M6 bis
+ui git.commit
+wait-idle
+wait 300
+state target/essais/ecarts/m6-3-commit-bis.json
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-limites
+action view.git
+wait-idle
+wait 1000
+state target/essais/ecarts/m6-4-autre-projet.json
+# Erreur rouge, puis ouverture réussie d'un fichier : l'erreur s'efface.
+ui merge.open binaire.bin
+wait-idle
+state target/essais/ecarts/m6-5-erreur.json
+file README.md
+wait-idle
+state target/essais/ecarts/m6-6-ouverture-reussie.json
+# Erreur, puis changement de projet.
+ui merge.open binaire.bin
+wait-idle
+state target/essais/ecarts/m6-7-erreur.json
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-git
+wait-idle
+state target/essais/ecarts/m6-8-projet-sans-message.json
+quit

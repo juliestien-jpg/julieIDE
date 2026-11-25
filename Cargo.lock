@@ -1925,6 +1925,7 @@ dependencies = [
  "julie-text",
  "julie-vcs",
  "png",
+ "regex",
  "rfd",
  "serde_json",
 ]

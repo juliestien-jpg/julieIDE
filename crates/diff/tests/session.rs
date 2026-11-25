@@ -589,6 +589,52 @@ fn line_ending_report_ignores_versions_without_any_line_ending() {
 }
 
 #[test]
+fn bom_follows_our_version_and_the_difference_is_reported() {
+    const BOM: &str = "\u{feff}";
+    let with = |text: &str| format!("{BOM}{text}");
+    // Écart M7 de la recette : seule leur version porte une BOM (et une
+    // modification). Le résultat suit la nôtre, mais la session le dit.
+    let mut session = open("a\nb\n", "a\nb\n", &with("a\nB\n"));
+    let report = session.bom();
+    assert_eq!(
+        (report.base, report.ours, report.theirs, report.result),
+        (false, false, true, false)
+    );
+    assert!(report.differ);
+    assert!(report.their_change_is_dropped());
+    session.apply_non_conflicting(ApplyScope::All);
+    assert_eq!(session.result_text(), "a\nB\n");
+    assert!(session.bom().differ, "le rapport ne dépend pas des gestes");
+
+    // Leur côté a retiré la BOM : même chose dans l'autre sens.
+    let session = open(&with("a\n"), &with("a\n"), "a\n");
+    let report = session.bom();
+    assert!(report.differ && report.result && report.their_change_is_dropped());
+    assert!(session.result_text().starts_with(BOM));
+
+    // Notre côté a ajouté la BOM : les versions diffèrent, rien n'est laissé
+    // de côté.
+    let report = open("a\n", &with("a\n"), "a\n").bom();
+    assert!(report.differ && report.result && !report.their_change_is_dropped());
+
+    // Tout le monde d'accord, avec ou sans BOM : pas de bandeau.
+    assert!(!open(&with("a\n"), &with("A\n"), &with("a\n")).bom().differ);
+    let report = open("a\n", "A\n", "a\n").bom();
+    assert!(!report.differ && !report.result && !report.their_change_is_dropped());
+
+    // Les deux côtés ont fait le même changement de BOM : ils diffèrent de la
+    // base (bandeau), mais rien de leur version n'est perdu.
+    let report = open("a\n", &with("a\n"), &with("a\n")).bom();
+    assert!(report.differ && !report.their_change_is_dropped());
+
+    // Pas d'ancêtre commun : la base vide n'a pas d'avis.
+    assert!(!open("", &with("a\n"), &with("b\n")).bom().differ);
+    assert!(open("", &with("a\n"), "b\n").bom().differ);
+    // Leur version vidée : pas d'avis non plus.
+    assert!(!open(&with("a\n"), &with("a\n"), "").bom().differ);
+}
+
+#[test]
 fn sources_are_readable_from_the_session() {
     let session = open("a\n", "\u{feff}a\nb\n", "a\n");
     assert_eq!(session.ours().len(), 2);

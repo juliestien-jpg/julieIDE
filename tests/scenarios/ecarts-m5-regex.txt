@@ -1,0 +1,40 @@
+# Écart M5 : expression invalide dès le premier caractère, message en français.
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-limites
+action nav.find_in_files
+key Alt+X
+key Ctrl+A
+type (
+wait-idle
+state target/essais/ecarts/m5-0-paren-ouvrante.json
+screenshot target/essais/ecarts/m5-0-paren-ouvrante.png
+key Ctrl+A
+type )
+wait-idle
+state target/essais/ecarts/m5-1-paren-fermante.json
+key Ctrl+A
+type [
+wait-idle
+state target/essais/ecarts/m5-2-classe.json
+key Ctrl+A
+type *a
+wait-idle
+state target/essais/ecarts/m5-3-repetition.json
+screenshot target/essais/ecarts/m5-3-repetition.png
+key Ctrl+A
+type \q
+wait-idle
+state target/essais/ecarts/m5-4-echappement.json
+key Ctrl+A
+type (a
+wait-idle
+state target/essais/ecarts/m5-5-groupe-2car.json
+key Ctrl+A
+type a
+wait-idle
+state target/essais/ecarts/m5-6-valide-1car.json
+key Alt+X
+key Ctrl+A
+type (
+wait-idle
+state target/essais/ecarts/m5-7-sans-regex.json
+quit

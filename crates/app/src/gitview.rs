@@ -23,6 +23,7 @@ use julie_vcs::{
 use crate::diffpane::DiffPane;
 use crate::icons::{self, Icon};
 use crate::kit;
+use crate::merge::Ineligible;
 use crate::texts as t;
 use crate::theme::Palette;
 
@@ -127,6 +128,22 @@ struct LogState {
     file_selected: Option<usize>,
 }
 
+/// Ce que l'on sait d'avance d'un fichier en conflit pour le bouton « Fusionner… ».
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeCheck {
+    /// Les versions se chargent en tâche de fond.
+    Loading,
+    /// Le dialogue peut s'ouvrir.
+    Fine,
+    /// Le dialogue est impossible, pour cette raison.
+    Refused(Ineligible),
+    /// Le chargement a échoué : on ne grise pas, le refus éventuel viendra au clic.
+    Unknown,
+}
+
+/// Nombre de chargements de versions en même temps (les gros fichiers pèsent en mémoire).
+const MAX_PRECHECKS: usize = 2;
+
 pub struct GitView {
     pub tab: GitTab,
     status: Option<Arc<Status>>,
@@ -153,6 +170,10 @@ pub struct GitView {
     pub merge_loading: Option<PathBuf>,
     /// Le journal prend le focus clavier à la prochaine image.
     log_focus_request: bool,
+    /// Vérification d'avance de « Fusionner… », par fichier en conflit.
+    merge_checks: HashMap<PathBuf, MergeCheck>,
+    /// Tâches `vcs.conflict` lancées pour cette vérification (et non pour ouvrir le dialogue).
+    check_tasks: HashMap<TaskId, PathBuf>,
 }
 
 impl GitView {
@@ -181,6 +202,8 @@ impl GitView {
             message_id: Id::unique("git-message"),
             merge_loading: None,
             log_focus_request: false,
+            merge_checks: HashMap::new(),
+            check_tasks: HashMap::new(),
         }
     }
 
@@ -205,6 +228,9 @@ impl GitView {
         }
         self.known.retain(|p| present.contains(p));
         self.checked.retain(|p| present.contains(p));
+        let conflicted: HashSet<&PathBuf> = status.conflicts().map(|f| &f.path).collect();
+        self.merge_checks.retain(|p, _| conflicted.contains(p));
+        self.check_tasks.retain(|_, p| conflicted.contains(p));
         match &self.selected {
             Some(selected) if !present.contains(selected) => {
                 self.selected = None;
@@ -233,6 +259,72 @@ impl GitView {
             None => self.merge_prefilled = false,
         }
         self.status = Some(Arc::new(status.clone()));
+    }
+
+    /// Fichiers en conflit dont il faut encore vérifier d'avance la fusion (au plus
+    /// `MAX_PRECHECKS` à la fois) ; ils passent à « en chargement ».
+    pub fn next_prechecks(&mut self) -> Vec<PathBuf> {
+        let Some(status) = self.status.clone() else {
+            return Vec::new();
+        };
+        let mut loading = self
+            .merge_checks
+            .values()
+            .filter(|c| **c == MergeCheck::Loading)
+            .count();
+        let mut wanted = Vec::new();
+        for file in status.conflicts() {
+            if loading >= MAX_PRECHECKS {
+                break;
+            }
+            let decided = file
+                .conflict
+                .is_none_or(|k| merge_disabled_reason(k).is_some());
+            if decided || self.merge_checks.contains_key(&file.path) {
+                continue;
+            }
+            self.merge_checks
+                .insert(file.path.clone(), MergeCheck::Loading);
+            loading += 1;
+            wanted.push(file.path.clone());
+        }
+        wanted
+    }
+
+    pub fn note_precheck_task(&mut self, task: TaskId, path: PathBuf) {
+        self.check_tasks.insert(task, path);
+    }
+
+    /// Cette tâche est-elle une vérification d'avance ? Rend le fichier concerné.
+    pub fn precheck_path(&self, task: Option<TaskId>) -> Option<PathBuf> {
+        self.check_tasks.get(&task?).cloned()
+    }
+
+    pub fn finish_precheck(&mut self, task: Option<TaskId>) {
+        if let Some(task) = task {
+            self.check_tasks.remove(&task);
+        }
+    }
+
+    pub fn set_merge_check(&mut self, path: &Path, check: MergeCheck) {
+        if let Some(slot) = self.merge_checks.get_mut(path) {
+            *slot = check;
+        }
+    }
+
+    pub fn merge_check(&self, path: &Path) -> Option<MergeCheck> {
+        self.merge_checks.get(path).copied()
+    }
+
+    /// Pourquoi « Fusionner… » est grisé pour ce fichier, s'il l'est.
+    fn merge_disabled(&self, file: &FileStatus) -> Option<String> {
+        if let Some(reason) = file.conflict.and_then(merge_disabled_reason) {
+            return Some(reason.to_owned());
+        }
+        match self.merge_checks.get(&file.path) {
+            Some(MergeCheck::Refused(why)) => Some(t::merge_disabled_tip(why.reason())),
+            _ => None,
+        }
     }
 
     /// À rappeler quand un fichier a changé sur le disque : l'aperçu se refait.
@@ -1041,7 +1133,7 @@ impl GitView {
                 if ui.small_button(theirs_label).clicked() {
                     *keep = Some((ConflictSide::Theirs, file.path.clone()));
                 }
-                let disabled = kind.and_then(merge_disabled_reason);
+                let disabled = self.merge_disabled(file);
                 let busy = self.merge_loading.as_ref() == Some(&file.path);
                 let merge = ui.add_enabled(
                     disabled.is_none() && !busy,
@@ -1059,8 +1151,8 @@ impl GitView {
                         p.bg_alt
                     }),
                 );
-                if let Some(reason) = disabled {
-                    merge.on_disabled_hover_text(reason);
+                if let Some(reason) = &disabled {
+                    merge.on_disabled_hover_text(reason.as_str());
                 } else if merge.clicked() {
                     *merge_request = Some(file.path.clone());
                 }
@@ -1494,6 +1586,8 @@ impl GitView {
                         "kind": format!("{:?}", f.kind),
                         "group": format!("{:?}", f.group()),
                         "conflict": f.conflict.map(|c| format!("{c:?}")),
+                        "merge_check": self.merge_check(&f.path).map(|c| format!("{c:?}")),
+                        "merge_disabled": self.merge_disabled(f),
                         "checked": self.checked.contains(&f.path),
                         "selected": self.selected.as_ref() == Some(&f.path),
                     })
