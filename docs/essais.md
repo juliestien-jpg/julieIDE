@@ -96,7 +96,7 @@ l'état, à partir de 0), les côtés par `left` / `right` (ou `gauche` / `droit
 | `git.commit` | Valider (ou conclure la fusion quand il n'y a plus de conflit) : comme le bouton. Échec si le bouton serait grisé. |
 | `git.diff` | Ouvre le diff du fichier sélectionné en grande fenêtre (Ctrl+D). |
 | `git.refresh` | Relit l'état Git. |
-| `git.keep ours\|theirs [fichier]` | « Garder la nôtre » / « Prendre la leur » (ouvre la confirmation ; sans fichier : tous les conflits). |
+| `git.keep ours\|theirs\|yours\|incoming [fichier]` | Garder un côté (ouvre la confirmation ; sans fichier : tous les conflits). `ours` / `theirs` désignent les **étages de Git** (pendant un rebase, `ours` est l'amont) ; `yours` / `incoming` suivent les boutons « Garder votre version » / « Prendre <nom> » et sont les mêmes quelle que soit l'opération. |
 | `git.abort` | « Abandonner » la fusion (ouvre la confirmation). |
 | `git.log-select <n>` | Sélectionne le n-ième commit du journal (base 1) et lui donne le focus clavier (flèches, Début, Fin, pages). |
 | `git.commit-file <n>` | Diff du n-ième fichier du commit sélectionné, en grande fenêtre. |
@@ -137,11 +137,12 @@ registre** (`vcs.add`, `branch.checkout`, `log.reset`…, la liste est dans
 | `menu.expand <clé>` | Ouvre un sous-menu (`sub.git`, `sub.copy`, `sub.ignore`). |
 | `menu.choose <clé d'action>` | Choisit l'entrée (sous-menus compris) comme un clic. **Échec avec la raison du grisé** si l'entrée est grisée. |
 | `menu.close` | Ferme le menu (Échap). |
-| `dialog.set <champ> <valeur>` | Règle un champ du dialogue Git ouvert : `name` (créer, renommer), `switch`, `remember`, `remote`, `branch`, `follow_tags`, `commit`, `also_remote`, `stash_first`, `mode` (`soft`, `mixed`, `hard`). |
-| `dialog.choose <clé>` | Presse un bouton : `create`, `rename`, `stash`, `force`, `force_confirm`, `merge`, `rebase`, `push`, `merge_push`, `rebase_push`, `delete`, `force_delete`, `delete_remote`, `reset`, `discard`, `checkout`, `use_suggestion`, `terminal`, `push_new`, `back`, `cancel`, `close`. Échec si le bouton n'existe pas ou est grisé. |
-| `toast.action` | Presse le bouton de la notification (« Restaurer » une branche supprimée ou une copie de sécurité). |
+| `dialog.set <champ> <valeur>` | Règle un champ du dialogue Git ouvert : `name` (créer, renommer), `switch`, `remember`, `remote`, `branch`, `follow_tags`, `commit`, `also_remote`, `stash_first`, `mode` (`soft`, `mixed`, `hard`), `upstream` (dialogue « Choisir l'amont » : `origin/x`), `file` (liste « diff avec l'arbre de travail » : chemin relatif). |
+| `dialog.choose <clé>` | Presse un bouton : `create`, `rename`, `stash` (« Mettre de côté et basculer / fusionner / rebaser / reprendre le commit / annuler le commit », selon l'opération refusée), `force`, `force_confirm`, `merge`, `rebase`, `push`, `merge_push`, `rebase_push`, `delete`, `force_delete`, `delete_remote`, `reset`, `discard`, `checkout`, `use_suggestion`, `terminal`, `push_new`, `back`, `create_first` / `anyway` (HEAD détachée : « Créer une branche d'abord » / « Basculer quand même »), `choose_upstream` / `remove_upstream` (message « pas d'amont » ou « amont supprimé »), `set_upstream` (dialogue « Choisir l'amont »), `open_diff` (liste « diff avec l'arbre de travail »), `cancel`, `close`. Échec si le bouton n'existe pas ou est grisé. |
+| `toast.action` | Presse le bouton de la notification : « Restaurer » une branche supprimée (avec son amont), « Rétablir » une copie de sécurité (après « Annuler les modifications », une bascule forcée ou « tout jeter »), « Créer une branche » sur un commit laissé sur aucune branche. |
 | `op.continue` / `op.skip` | « Continuer » (rebase, cherry-pick, revert ; échoue s'il reste des conflits) / « Passer ce commit » (ouvre la confirmation). `git.abort` abandonne. |
 | `net.cancel` | La croix d'annulation de la barre d'état : annule l'opération réseau en cours. |
+| `git.banner stash\|branch` | Presse le bouton d'un bandeau de la fenêtre Git : `stash` = « Remettre mes changements » (ou « Remettre » pour une mise de côté gardée), `branch` = « Créer une branche ici » (HEAD détachée avec des commits sur aucune branche). Échec si le bandeau n'a pas ce bouton. |
 | `git.file-history <chemin relatif>` | « Historique du fichier » : journal filtré sur ce chemin. |
 | `git.log-filter <champ> <valeur>` | Filtre du journal : `text`, `author`, `since`, `until` (`AAAA-MM-JJ`), `branch`, `clear`. |
 
@@ -222,6 +223,13 @@ Ajouts de la v1 :
 - `toast` : la notification de la barre d'état (`text`, `error`, `action`).
 - `update_method_session` (choix fusion / rebase mémorisé pour la session), `safety_copy` (dossier
   de la dernière copie de sécurité), `net_progress`.
+- Corrections de la recette v1 : `git.pending_stashes` (mises de côté de l'IDE en attente : `message`, `commit`,
+  `state` = `AwaitingOperation(Merge)`, `OperationOver`, `Kept`), `git.detached` (`head`, `orphan_commits`,
+  `subjects` ; nul sur une branche), `git.banners` (`stash`, `stash_button`, `detached`, `detached_button` :
+  textes et boutons des bandeaux), `git.conflict_labels` (`yours` = l'étage qui porte votre travail, `ours` /
+  `theirs` = rôle, nom, commit, sujet et titre de chaque étage ; `keep_buttons` = ce que disent les boutons de
+  chaque fichier en conflit), `git_dialog.fields` des dialogues `detached_left`, `set_upstream`, `diff_worktree`,
+  et `toast.action` = `restore_branch:<nom>`, `restore_copy:<id>` ou `new_branch_at:<commit>`.
 - `git.log.filters` et `git.log.graph` (`lanes`, `rows`, `merge_rows`, `first` : couloir du point et
   nombre de segments des 8 premières lignes) ; `status.progress` (ligne de progression réseau) et
   `status.message_action` (libellé du bouton de la notification).
@@ -364,6 +372,43 @@ script se lance avec `bash tests/fixtures/branches.sh "$TEMP/jsessai-ui-branches
 | `menus-changements.txt` | (aucune) | clic droit dans la liste des changements : ajouter, annuler (confirmation, copie de sécurité, Restaurer), .gitignore |
 | `menus-onglets-journal.txt` | `tout` | clic droit sur un onglet et sur un commit (cherry-pick grisé sur une fusion, copier le hash) |
 | `branches-ecrans.txt` | `tout` | widget, fenêtre et dialogues en 1280×720, 1920×1080, 100 % et 150 %, thème clair |
+
+### Corrections de la recette v1 (M1 à M5, m1 à m13)
+
+Décors : `bash tests/fixtures/recette-v1-corrections.sh <dossier> <cas>` (construit sur `branches.sh`, dépôt nu
+local, jamais de vrai distant ; cas `force`, `maj-conflit`, `ops-over`, `reset-hard`, `detachee`, `arbre`,
+`pick-present`, `merge-sale`, `supprimer`, `sans-amont`, `js-php`) puis
+`bash tests/fixtures/recette-v1-run.sh <dossier> <scénario>` : joue le scénario avec un `JULIESTORM_STATE_DIR` neuf
+(`@A@`, `@D@`, `@OUT@` remplacés ; états et captures dans `<dossier>/out`). Chaque scénario dit son cas en tête.
+
+| Scénario | Cas | Écart | Ce qu'il joue et ce qu'il faut voir |
+|---|---|---|---|
+| `recette-v1-b06-maj-conflit.txt` | `maj-conflit` | M1 | Ctrl+T, fusion en conflit : bandeau « Vos changements locaux sont mis de côté… », notification qui le dit ; `git.keep yours`, Valider : « Fusion terminée ; vos changements locaux ont été remis », `LISEZMOI.md` et `nv.txt` de retour |
+| `recette-v1-b07-maj-abandon.txt` | `maj-conflit` | M1, m12 | même chose puis « Abandonner la fusion » : « Fusion abandonnée ; vos changements locaux ont été remis » (le message d'arrêt est remplacé) |
+| `recette-v1-b08-maj-rebase-conflit.txt` | `maj-conflit` | M1, M5 | rebase : boutons « Garder votre version » (= votre commit) / « Prendre origin/main » ; Continuer, remise |
+| `recette-v1-b09-rebase-titres.txt` | `maj-conflit` | M5 | dialogue de fusion pendant un rebase : à gauche « Votre commit — main : … », à droite « Amont — origin/main : … », aide en bandeau |
+| `recette-v1-corr-m1-terminal-a.txt` puis `-b.txt` | `ops-over` | M1 | a) conflit puis fermeture ; ligne de commande : `git checkout --ours a.txt && git add a.txt && git commit --no-edit` ; b) rouvrir : bandeau « Remettre mes changements » (`OperationOver`), `git.banner stash` |
+| `recette-v1-b04-force.txt` | `force` | M2 | bascule forcée : « Jetés : a.txt, login.txt (copie gardée, « Rétablir » les remet). Ont suivi : n.txt, u.txt. », `toast.action` rétablit |
+| `recette-v1-b12-reset-hard.txt` | `reset-hard` | M2 | « tout jeter » sans mise de côté : fichiers jetés nommés, « Rétablir » |
+| `recette-v1-b13-detachee.txt` | `detachee` | M3 | HEAD détachée : bandeau « Vos commits ne sont sur aucune branche » après un commit ; sortie vers `main` refusée par le dialogue (3 boutons) |
+| `recette-v1-corr-detachee-branche.txt` | `detachee` | M3 | « Créer une branche d'abord » puis la bascule reprend |
+| `recette-v1-corr-detachee-quand-meme.txt` | `detachee` | M3 | « Basculer quand même » : notification et « Créer une branche » sur le commit laissé |
+| `recette-v1-b14-arbre-perime.txt` | `arbre` | M4 | l'arbre suit la bascule en moins de 2 s |
+| `recette-v1-corr-merge-sale.txt` | `merge-sale` | m1 | fusion refusée : dialogue « Mettre de côté et fusionner » (plus de texte brut) |
+| `recette-v1-corr-pick-present.txt` | `pick-present` | m2 | « Cherry-pick » grisé : « Déjà sur la branche courante » |
+| `recette-v1-corr-supprimer.txt` | `supprimer` | m3 | « Restaurer » remet aussi l'amont (`git branch -vv`) |
+| `recette-v1-corr-sans-amont.txt` | `sans-amont` | m5, amont | Ctrl+T : « pas de branche distante associée » avant toute question, « Choisir l'amont… », « Retirer l'amont » |
+| `recette-v1-corr-diff-arbre.txt` | `arbre` | m4 | « Voir le diff avec l'arbre de travail » (liste puis diff) ; pas de « Basculer et rebaser » sur une distante |
+| `recette-v1-corr-onglet-bascule.txt` | `arbre` | M4 | un onglet ouvert dont le fichier disparaît dans la bascule : bandeau `Deleted`, arbre à jour |
+| `recette-v1-corr-reset-stash.txt` | `reset-hard` | M1 | « tout jeter » avec mise de côté : bandeau « Mise de côté gardée » + « Remettre » (ici remise en conflit, l'entrée est gardée) |
+| `recette-v1-corr-ecrans-a.txt` / `-ecrans-b.txt` | `maj-conflit` / `detachee` | M1, M3, M5 | bandeaux, boutons de conflit, dialogue de fusion pendant un rebase, dialogue de la HEAD détachée : 1280×720 et plein écran, 100 % et 150 %, thème clair |
+| `recette-v1-corr-nav-js-php.txt` | `js-php` | m11 | Ctrl+clic / Alt+F7 sur du JavaScript d'un `<script>` : message ; une fonction PHP saute |
+
+Remarques de métier côté interface : `Ctrl+Maj+B` ouvre la fenêtre des branches (remplacement de Ctrl+Maj+accent grave,
+action `vcs.branches_alt`, m6) ; la liste « diff avec l'arbre de travail » lit `git diff --name-status` **depuis
+l'interface** (`project::spawn_diff_worktree`), faute d'appel dans `julie-vcs`. Les scénarios d'un push attendent
+l'aperçu des commits sortants par `wait-idle` (0,3 à 1,6 s) et non par un délai fixe ; `menus-arbre.txt` ouvre ses
+menus par `ui menu.open tree <chemin>` (plus de coordonnée codée en dur).
 
 Copie de sécurité : « Annuler les modifications » et la bascule forcée copient d'abord les fichiers
 touchés dans `<projet>/.juliestorm/annulations/AAAAMMJJ-HHMMSS/` (7 jours) ; « Restaurer » les

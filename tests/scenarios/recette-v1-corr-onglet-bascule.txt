@@ -1,0 +1,21 @@
+# M4 : les onglets ouverts suivent une bascule qui retire ou change leurs fichiers (en même temps
+# que l'arbre du projet).
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> arbre
+project @A@
+resize 1280 720
+wait-idle
+file c3.txt
+file c1.txt
+wait-idle
+state @OUT@/onglet-0.json
+ui git.tab log
+wait-idle
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 500
+ui dialog.choose checkout
+wait-idle
+wait 1500
+state @OUT@/onglet-1.json
+screenshot @OUT@/onglet-1.png
+quit

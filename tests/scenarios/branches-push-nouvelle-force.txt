@@ -11,7 +11,9 @@ ui dialog.choose create
 wait-idle
 wait 400
 key Ctrl+Maj+K
-wait 700
+wait 300
+wait-idle
+wait 300
 screenshot target/essais/branches/18-push-nouvelle.png
 state target/essais/branches/18-push-nouvelle.json
 ui dialog.choose push
@@ -37,7 +39,9 @@ ui git.commit
 wait-idle
 wait 600
 key Ctrl+Maj+K
-wait 700
+wait 300
+wait-idle
+wait 300
 ui dialog.choose force
 wait 400
 screenshot target/essais/branches/20-forcer-bail.png

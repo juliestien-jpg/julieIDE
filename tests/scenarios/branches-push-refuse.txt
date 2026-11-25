@@ -4,7 +4,9 @@ project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
 resize 1280 720
 wait-idle
 key Ctrl+Maj+K
-wait 600
+wait 300
+wait-idle
+wait 300
 ui dialog.choose push
 wait-idle
 wait 500

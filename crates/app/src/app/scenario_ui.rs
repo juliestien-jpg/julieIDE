@@ -115,15 +115,27 @@ impl JulieStormApp {
             }
             "git.keep" => {
                 let mut parts = arg.splitn(2, char::is_whitespace);
+                let labels = self.git.labels();
                 let side = match parts.next() {
                     Some("ours" | "nous") => ConflictSide::Ours,
                     Some("theirs" | "eux") => ConflictSide::Theirs,
-                    _ => return Err("`git.keep ours|theirs [fichier]`".to_owned()),
+                    // « Garder votre version » / « Prendre <nom> » : indépendant des étages de Git.
+                    Some("yours" | "votre") => labels.yours(),
+                    Some("incoming" | "autre") => labels.incoming(),
+                    _ => return Err("`git.keep ours|theirs|yours|incoming [fichier]`".to_owned()),
                 };
                 let wanted = parts.next().map(str::trim).filter(|w| !w.is_empty());
                 if !self.git.conflicts_keep(side, wanted) {
                     return Err("aucun fichier en conflit correspondant".to_owned());
                 }
+            }
+            "git.banner" => {
+                // Le bouton d'un bandeau de la fenêtre Git : `stash` (« Remettre… ») ou `branch`.
+                let intent = self
+                    .git
+                    .banner_intent(arg.trim())
+                    .ok_or("pas de bandeau ni de bouton de ce nom (`stash`, `branch`)")?;
+                self.run_git_intents(vec![intent]);
             }
             "git.continue" => {
                 let intent = self

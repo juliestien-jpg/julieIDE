@@ -1,0 +1,42 @@
+# Correction M3 : depuis la HEAD détachée, « Créer une branche d'abord » crée la branche sur le
+# commit orphelin, puis la bascule vers main reprend d'elle-même.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> detachee
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+state @OUT@/detachee-banniere.json
+screenshot @OUT@/detachee-banniere.png
+ui branches.open
+wait-idle
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 600
+state @OUT@/detachee-dialogue.json
+ui dialog.choose create_first
+wait 400
+ui dialog.set name sauvetage/orphelin
+wait 600
+ui dialog.choose create
+wait-idle
+wait 1500
+state @OUT@/detachee-apres.json
+screenshot @OUT@/detachee-apres.png
+quit

@@ -103,6 +103,23 @@
 //! [`AutoStash::restore`] le dit (`Conflicts`, `Pending` quand l'opération
 //! s'est arrêtée, `Failed`). L'étagère maison prendra ce rôle plus tard.
 //!
+//! **Corrections de la recette v1** (détail dans `docs/contrats.md`) :
+//!
+//! ```ignore
+//! // M1 : une mise de côté `Pending` est liée à l'opération (fichier
+//! // PENDING_STASH_FILE du dossier Git) et revient d'elle-même :
+//! vcs.continue_operation(&repo, None); // -> OperationContinued, StashRestored(s) si finie
+//! vcs.abort_operation(&repo);          // -> OperationAborted, StashRestored(s)
+//! // Bandeau : PendingStashes(Vec<PendingStash>) après chaque écriture ;
+//! vcs.load_pending_stashes(&repo);  vcs.restore_pending_stash(&repo);
+//! // M3 : Failed(DetachedCommitsLeft { count, .. }) -> « Basculer quand même » :
+//! vcs.switch_branch_with(&repo, request, SwitchOptions { leave_detached_commits: true });
+//! // DetachedHead(DetachedHeadReport) après chaque écriture tant que HEAD est détachée.
+//! // M5 : versions.labels.yours() / incoming() -> ConflictSide (rebase : Theirs = votre commit)
+//! // m2 : vcs.check_cherry_pick(&repo, commits) -> CherryPickChecked
+//! // m3 : vcs.restore_deleted_branch(&repo, outcome);  amont : vcs.set_upstream(&repo, b, Some(u) | None)
+//! ```
+//!
 //! **Destructif, toujours nommé** : [`switch_discarding_changes`],
 //! [`force_delete_branch`], [`delete_remote_branch`], [`reset_hard`],
 //! [`discard_changes`], [`skip_operation`], [`accept_side`],
@@ -180,17 +197,19 @@ mod status;
 
 pub use branches::{
     branch_name_collision, branch_tree, check_branch_name, commits_only_on_detached_head,
-    create_branch, delete_branch, force_delete_branch, is_ancestor, list_branches, list_remotes,
-    rename_branch, restore_branch, suggest_branch_name, switch_branch, switch_discarding_changes,
-    Branch, BranchCommit, BranchKind, BranchList, BranchNode, CreateBranchOutcome,
-    CreateBranchRequest, DeleteBranchOutcome, RenameBranchOutcome, SwitchOutcome, SwitchRequest,
-    SwitchTarget, Tracking, RECENT_BRANCHES,
+    create_branch, delete_branch, detached_head_report, force_delete_branch, is_ancestor,
+    list_branches, list_remotes, rename_branch, restore_branch, restore_deleted_branch,
+    set_upstream, suggest_branch_name, switch_branch, switch_branch_with,
+    switch_discarding_changes, switch_discarding_changes_with, unset_upstream, Branch,
+    BranchCommit, BranchKind, BranchList, BranchNode, BranchUpstream, CreateBranchOutcome,
+    CreateBranchRequest, DeleteBranchOutcome, DetachedHeadReport, RenameBranchOutcome,
+    SwitchOptions, SwitchOutcome, SwitchRequest, SwitchTarget, Tracking, RECENT_BRANCHES,
 };
 pub use commit::{commit, CommitOutcome, CommitRequest};
 pub use conflict::{
-    abort_operation, accept_side, conflict_versions, continue_operation, mark_resolved,
-    resolve_with_content, unmerged_paths, ConflictSide, ConflictVersions, ContinueOutcome,
-    SideResolution,
+    abort_operation, abort_operation_restoring, accept_side, conflict_versions, continue_operation,
+    mark_resolved, resolve_with_content, unmerged_paths, AbortOutcome, ConflictLabels,
+    ConflictSide, ConflictVersions, ContinueOutcome, SideLabel, SideResolution, SideRole,
 };
 pub use content::{
     is_binary, load_diff, read_version, Content, DiffRequest, DiffSides, FileMode, Revision, Stage,
@@ -211,9 +230,9 @@ pub use history::{
     RefKind, RefLabel, DEFAULT_PAGE_SIZE,
 };
 pub use operations::{
-    cherry_pick, merge, rebase, reset, reset_hard, reset_preview, revert_commits, skip_operation,
-    FastForward, MergeRequest, OperationOutcome, RebaseRequest, ResetMode, ResetOutcome,
-    ResetPreview,
+    cherry_pick, commits_presence, merge, rebase, reset, reset_hard, reset_preview, revert_commits,
+    skip_operation, CommitPresence, FastForward, MergeRequest, OperationOutcome, RebaseRequest,
+    ResetMode, ResetOutcome, ResetPreview,
 };
 pub use remote::{
     classify_rejection, delete_remote_branch, fast_forward_branch, fetch, parse_fetch_porcelain,
@@ -225,8 +244,9 @@ pub use remote::{
 pub use repo::{open_repository, Operation, OperationKind, Repository};
 pub use service::{is_relevant_change, Action, Failure, Vcs, VcsEvent, STATUS_DEBOUNCE};
 pub use stash::{
-    list_stashes, parse_overwrite, restore_auto_stash, AutoStash, LocalChanges, StashEntry,
-    StashReason, StashRestore, AUTO_STASH_PREFIX,
+    list_stashes, parse_overwrite, pending_auto_stashes, restore_auto_stash, restore_pending_stash,
+    AutoStash, LocalChanges, PendingStash, PendingStashState, StashEntry, StashReason,
+    StashRestore, AUTO_STASH_PREFIX, PENDING_STASH_FILE,
 };
 pub use status::{
     parse_status, status, Change, ConflictKind, FileKind, FileStatus, Group, Head, IndexState,

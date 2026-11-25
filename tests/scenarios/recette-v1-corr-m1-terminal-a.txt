@@ -1,0 +1,15 @@
+# M1, première partie : la mise à jour s'arrête sur un conflit puis l'IDE se ferme (le travail local
+# est mis de côté, lié à l'opération). La suite se fait en ligne de commande :
+#   git -C A checkout --ours a.txt && git -C A add a.txt && git -C A commit -q --no-edit
+# puis recette-v1-corr-m1-terminal-b.txt (banniere « Remettre mes changements »).
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> ops-over
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose merge
+wait-idle
+wait 1000
+state @OUT@/m1t-a-conflit.json
+quit

@@ -633,10 +633,37 @@ pub fn push_preview(
 ) -> Result<PushPreview> {
     check_target(target)?;
     let local = format!("refs/heads/{}", target.branch);
-    git.resolve_commit(repo.work_tree(), &local, cancel)?
-        .ok_or_else(|| VcsError::BranchNotFound(target.branch.clone()))?;
     let remote_ref = format!("refs/remotes/{}/{}", target.remote, target.remote_branch);
-    let remote_tip = git.resolve_commit(repo.work_tree(), &remote_ref, cancel)?;
+    // Une seule commande pour les deux sommets et l'amont (recette v1, m7 :
+    // chaque `git` coûte sous Windows).
+    let refs = git.read(
+        repo.work_tree(),
+        &args([
+            "for-each-ref".to_owned(),
+            "--format=%(refname)%00%(objectname)%00%(upstream)".to_owned(),
+            local.clone(),
+            remote_ref.clone(),
+        ]),
+        cancel,
+    )?;
+    let mut local_found = false;
+    let mut has_upstream = false;
+    let mut remote_tip = None;
+    for line in refs.lines() {
+        let fields: Vec<&str> = line.split('\0').collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        if fields[0] == local {
+            local_found = true;
+            has_upstream = !fields[2].is_empty();
+        } else if fields[0] == remote_ref {
+            remote_tip = Some(fields[1].to_owned());
+        }
+    }
+    if !local_found {
+        return Err(VcsError::BranchNotFound(target.branch.clone()));
+    }
     let mut options: Vec<OsString> = vec!["--max-count=1000".into(), "--date-order".into()];
     let remote_only = match &remote_tip {
         Some(tip) => {
@@ -658,7 +685,7 @@ pub fn push_preview(
         outgoing,
         remote_only,
         protected: is_protected(protected, &target.remote_branch),
-        sets_upstream: upstream_config(git, repo, &target.branch, cancel)?.is_none(),
+        sets_upstream: !has_upstream,
         remote_tip,
         target: target.clone(),
     })

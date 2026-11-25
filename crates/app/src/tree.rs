@@ -126,12 +126,26 @@ impl ProjectTree {
     }
 
     /// Relit les dossiers dépliés (Ctrl+Alt+Y).
+    ///
+    /// Les anciennes lignes restent affichées (« … » à côté du dossier) jusqu'à l'arrivée de
+    /// la relecture : pas de clignotement après une opération Git.
     pub fn refresh(&mut self) {
         let dirs: Vec<PathBuf> = self.expanded.iter().cloned().collect();
-        self.listings.clear();
+        let (Some((index, channel)), Some(root)) = (&self.lister, &self.root) else {
+            return;
+        };
         for dir in dirs {
-            self.ensure_listed(&dir);
+            self.listings
+                .entry(dir.clone())
+                .and_modify(|l| l.loading = true)
+                .or_insert(Listing {
+                    entries: Vec::new(),
+                    loading: true,
+                });
+            project::spawn_list_dir(dir, root.clone(), index.clone(), channel.clone());
         }
+        // Les dossiers qui ne sont plus dépliés se relisent à l'ouverture.
+        self.listings.retain(|dir, _| self.expanded.contains(dir));
     }
 
     /// État Git : couleur des fichiers et des dossiers qui en contiennent.

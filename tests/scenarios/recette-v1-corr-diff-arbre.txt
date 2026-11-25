@@ -1,0 +1,25 @@
+# Sous-menu de branche : « Voir le diff avec l'arbre de travail » ; « Basculer et rebaser »
+# n'existe pas pour une branche distante.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> arbre   (ou n'importe lequel)
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+state @OUT@/diff-arbre-menu.json
+ui menu.choose branch.diff_worktree
+wait 1200
+state @OUT@/diff-arbre-liste.json
+screenshot @OUT@/diff-arbre-liste.png
+ui dialog.choose open_diff
+wait-idle
+wait 800
+state @OUT@/diff-arbre-diff.json
+screenshot @OUT@/diff-arbre-diff.png
+ui diff.close
+ui branches.open
+ui branches.select origin/feature/login
+ui branches.menu
+state @OUT@/diff-arbre-menu-distante.json
+quit

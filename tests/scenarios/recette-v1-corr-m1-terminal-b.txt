@@ -1,0 +1,15 @@
+# M1, seconde partie : l'opération a été conclue au terminal ; au rouvrir, le bandeau propose
+# « Remettre mes changements » (état OperationOver, relu depuis le dossier Git).
+project @A@
+resize 1280 720
+wait-idle
+wait 800
+ui git.tab changes
+state @OUT@/m1t-b-bandeau.json
+screenshot @OUT@/m1t-b-bandeau.png
+ui git.banner stash
+wait-idle
+wait 1000
+state @OUT@/m1t-b-remis.json
+screenshot @OUT@/m1t-b-remis.png
+quit

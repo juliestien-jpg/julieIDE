@@ -1,0 +1,36 @@
+# Écrans des corrections (a) : bandeau des mises de côté, boutons « Garder votre version / Prendre… »,
+# dialogue de fusion pendant un rebase ; 1280x720 et plein écran, 100 % et 150 %, thème clair.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> maj-conflit
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+ui dialog.choose rebase
+wait-idle
+wait 1000
+screenshot @OUT@/ecrans-a-1280-100.png
+scale 1.5
+wait 600
+screenshot @OUT@/ecrans-a-1280-150.png
+scale 1.0
+fullscreen on
+wait 800
+screenshot @OUT@/ecrans-a-plein-100.png
+scale 1.5
+wait 600
+screenshot @OUT@/ecrans-a-plein-150.png
+ui merge.open a.txt
+wait-idle
+wait 600
+screenshot @OUT@/ecrans-a-fusion-plein-150.png
+scale 1.0
+wait 600
+screenshot @OUT@/ecrans-a-fusion-plein-100.png
+ui merge.close
+fullscreen off
+resize 1280 720
+theme light
+wait 600
+screenshot @OUT@/ecrans-a-clair-1280.png
+quit

@@ -21,8 +21,18 @@ impl Harness {
         Self { bus, vcs }
     }
 
-    /// Les événements Vcs (hors journal des commandes) et l'issue des tâches.
+    /// Les événements Vcs (hors journal des commandes et hors bandeaux
+    /// `PendingStashes` / `DetachedHead`) et l'issue des tâches.
     fn drain(&self) -> (Vec<VcsEvent>, Vec<TaskOutcome>, usize) {
+        self.drain_inner(false)
+    }
+
+    /// Comme [`Harness::drain`], bandeaux compris.
+    fn drain_all(&self) -> (Vec<VcsEvent>, Vec<TaskOutcome>, usize) {
+        self.drain_inner(true)
+    }
+
+    fn drain_inner(&self, banners: bool) -> (Vec<VcsEvent>, Vec<TaskOutcome>, usize) {
         let mut events = Vec::new();
         let mut outcomes = Vec::new();
         let mut commands = 0;
@@ -32,6 +42,8 @@ impl Harness {
                     assert_eq!(event.domain, Domain::Vcs);
                     match event.take::<VcsEvent>() {
                         Ok(VcsEvent::Command(_)) => commands += 1,
+                        Ok(VcsEvent::PendingStashes(_) | VcsEvent::DetachedHead(_)) if !banners => {
+                        }
                         Ok(event) => events.push(event),
                         Err(other) => panic!("charge inattendue : {}", other.type_name()),
                     }
@@ -414,4 +426,109 @@ fn switching_through_the_service_reports_kept_stashes() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+// ---------------------------------------------------------------- recette v1
+
+/// M1 par le service : mise à jour en conflit, bandeau, abandon, remise.
+#[test]
+fn an_aborted_update_publishes_the_restored_stash_and_clears_the_banner() {
+    let team = support::Team::new();
+    let a = &team.a;
+    std::fs::write(team.b.join("a.txt"), "un\nDEUX (B)\ntrois\n").unwrap();
+    team.b_run(&["commit", "-q", "-am", "B"]);
+    team.b_run(&["push", "-q"]);
+    a.write("a.txt", "un\nDEUX (A)\ntrois\n");
+    a.commit_all("A");
+    a.write("local.txt", "local\n");
+    let harness = Harness::new(a);
+    let repo = a.repo();
+    harness
+        .vcs
+        .update_project(
+            &repo,
+            UpdateRequest {
+                method: IntegrationMethod::Merge,
+                local_changes: LocalChanges::Stash,
+            },
+        )
+        .join();
+    let (events, _, _) = harness.drain_all();
+    let pending = events
+        .iter()
+        .find_map(|event| match event {
+            VcsEvent::PendingStashes(list) => Some(list.clone()),
+            _ => None,
+        })
+        .expect("bandeau publié après l'écriture");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].state,
+        PendingStashState::AwaitingOperation(OperationKind::Merge)
+    );
+
+    harness.vcs.abort_operation(&repo).join();
+    let (events, outcomes, _) = harness.drain_all();
+    assert_eq!(outcomes, vec![TaskOutcome::Done]);
+    match events.as_slice() {
+        [VcsEvent::OperationAborted(OperationKind::Merge), VcsEvent::StashRestored(stash), VcsEvent::Status(status), VcsEvent::PendingStashes(list)] =>
+        {
+            assert_eq!(stash.restore, StashRestore::Restored);
+            assert_eq!(status.untracked().count(), 1, "local.txt est revenu");
+            assert!(list.is_empty(), "plus de bandeau");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// M3 par le service : un commit sur une HEAD détachée publie le bandeau.
+#[test]
+fn a_commit_on_a_detached_head_publishes_the_banner() {
+    let test = TestRepo::new();
+    test.write("a.txt", "a\n");
+    test.commit_all("Base");
+    let base = test.head();
+    test.write("b.txt", "b\n");
+    test.commit_all("Deux");
+    test.run(&["switch", "-q", "--detach", &base]);
+    test.write("c.txt", "c\n");
+    let harness = Harness::new(&test);
+    let repo = test.repo();
+    harness
+        .vcs
+        .commit(
+            &repo,
+            CommitRequest {
+                paths: vec![test.path("c.txt")],
+                message: "Orphelin".into(),
+                amend: false,
+            },
+        )
+        .join();
+    let (events, _, _) = harness.drain_all();
+    match events.as_slice() {
+        [VcsEvent::Committed(_), VcsEvent::Status(_), VcsEvent::DetachedHead(report)] => {
+            assert_eq!(report.orphan_commits, 1);
+            assert_eq!(report.subjects, vec!["Orphelin".to_owned()]);
+        }
+        other => panic!("{other:?}"),
+    }
+    harness
+        .vcs
+        .switch_branch(
+            &repo,
+            SwitchRequest {
+                target: SwitchTarget::Branch("main".into()),
+                local_changes: LocalChanges::Keep,
+            },
+        )
+        .join();
+    let (events, _, _) = harness.drain();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        VcsEvent::Failed(Failure {
+            action: Action::Switch,
+            error: VcsError::DetachedCommitsLeft { count: 1, .. }
+        })
+    )));
 }

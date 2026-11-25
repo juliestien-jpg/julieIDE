@@ -1,4 +1,6 @@
 # Recette v1 branches 4 : forcer la bascule, annuler à la seconde confirmation, puis forcer
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> force
+# Correction M2 : la notification nomme ce qui a été jeté et propose « Rétablir » (copie de sécurité).
 project @A@
 resize 1280 720
 wait-idle
@@ -25,4 +27,8 @@ wait-idle
 wait 800
 state @OUT@/b04-force.json
 screenshot @OUT@/b04-force.png
+ui toast.action
+wait-idle
+wait 800
+state @OUT@/b04-retabli.json
 quit

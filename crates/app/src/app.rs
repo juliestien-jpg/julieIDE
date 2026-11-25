@@ -190,6 +190,12 @@ pub struct JulieStormApp {
     ctx_target: Option<Target>,
     git_dialog: Option<GitDialog>,
     pending_switch: Option<Pending>,
+    /// La bascule à refaire une fois la branche « d'abord » créée (HEAD détachée).
+    resume_after_branch: Option<Pending>,
+    /// Ce que l'opération qui vient de se terminer a dit (repris par la remise de la mise de côté).
+    op_done_text: Option<String>,
+    /// Présence des commits dans la branche courante (grise « Cherry-pick »).
+    cherry_presence: std::collections::HashMap<String, julie_vcs::CommitPresence>,
     /// Un push à rejouer après « Fusionner / Rebaser puis pousser ».
     after_update_push: Option<PushRequest>,
     last_push: Option<PushRequest>,
@@ -298,6 +304,9 @@ impl JulieStormApp {
             ctx_target: None,
             git_dialog: None,
             pending_switch: None,
+            resume_after_branch: None,
+            op_done_text: None,
+            cherry_presence: std::collections::HashMap::new(),
             after_update_push: None,
             last_push: None,
             delete_remote_after: None,
@@ -426,6 +435,7 @@ impl JulieStormApp {
                 }
                 Msg::Trashed { paths, result } => self.on_trashed(paths, result),
                 Msg::Moved { from, to } => self.after_move(&from, &to),
+                Msg::DiffWorktree { branch, result } => self.on_diff_worktree(branch, result),
                 Msg::FilesChanged {
                     text,
                     error,
@@ -695,23 +705,13 @@ impl JulieStormApp {
             AppDiffEvent::MergeReady { versions, session } => {
                 self.git.merge_loading = None;
                 let Some(project) = &self.project else { return };
-                let (our_branch, their_branch) = match &self.git.status() {
-                    Some(status) => (
-                        project.branch_name(),
-                        status
-                            .operation
-                            .as_ref()
-                            .and_then(|o| o.message.as_deref())
-                            .and_then(merge::their_name),
-                    ),
-                    None => (None, None),
-                };
+                // Les noms des côtés viennent de `versions.labels` : plus de « nôtre / leur ».
+                self.git
+                    .set_labels(versions.operation, versions.labels.clone());
                 self.merge = Some(MergeDialog::new(
                     &versions,
                     *session,
                     project.project.root(),
-                    our_branch,
-                    their_branch,
                     &self.waker,
                     self.dark,
                 ));
@@ -877,6 +877,8 @@ impl JulieStormApp {
         match event {
             VcsEvent::Conflict(versions) => {
                 self.git.finish_precheck(task);
+                self.git
+                    .set_labels(versions.operation, versions.labels.clone());
                 let versions = versions.clone();
                 self.tasks
                     .spawn(Domain::Diff, "diff.merge_check", move |ctx| {
@@ -1028,6 +1030,13 @@ impl JulieStormApp {
                     vcs.load_commit(&repo, id);
                 }
                 GitIntent::Notify(text) => self.say(text, false),
+                GitIntent::RestorePendingStash => {
+                    vcs.restore_pending_stash(&repo);
+                }
+                GitIntent::RestoreStash(commit) => {
+                    vcs.restore_auto_stash(&repo, commit);
+                }
+                GitIntent::NewBranchHere => self.open_new_branch(None, "HEAD".to_owned()),
             }
         }
     }
@@ -1508,6 +1517,12 @@ impl JulieStormApp {
         let focused = ctx.input(|i| i.focused) || self.scenario_active;
         let regained = focused && !self.window_focused;
         self.window_focused = focused;
+        if regained {
+            // Une remise ou une opération faite au terminal : le bandeau des mises de côté suit.
+            if let Some((vcs, repo)) = self.vcs_pair() {
+                vcs.load_pending_stashes(&repo);
+            }
+        }
         if self.editors.items.is_empty() || !focused {
             return;
         }
@@ -1548,7 +1563,9 @@ impl JulieStormApp {
             message_action: self.message.as_ref().and_then(|m| m.action.as_ref()).map(
                 |a| match a {
                     ToastAction::OpenFile(..) => t::SETTINGS_UNREADABLE_OPEN.to_owned(),
-                    _ => t::BTN_RESTORE.to_owned(),
+                    ToastAction::RestoreCopy(_) => t::BTN_REVERT_COPY.to_owned(),
+                    ToastAction::NewBranchAt(_) => t::BTN_CREATE_BRANCH.to_owned(),
+                    ToastAction::RestoreBranch(_) => t::BTN_RESTORE.to_owned(),
                 },
             ),
         };

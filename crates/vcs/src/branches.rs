@@ -628,6 +628,8 @@ pub fn create_branch(
             hook_output: (!output.status.success()).then(|| text.clone()),
             behind_upstream: None,
             output: text,
+            discarded: Vec::new(),
+            left_detached: None,
         })
     } else {
         let mut command = args(["branch"]);
@@ -738,6 +740,20 @@ pub struct DeleteBranchOutcome {
     pub tip: String,
     /// Son amont (case « Supprimer aussi origin/X »).
     pub upstream: Option<String>,
+    /// Configuration exacte de l'amont (distant et référence), pour que
+    /// « Restaurer » le remette ([`restore_deleted_branch`]) même si la
+    /// branche distante a disparu entre-temps.
+    pub upstream_config: Option<BranchUpstream>,
+}
+
+/// L'amont d'une branche tel que configuré (`branch.<nom>.remote` et
+/// `branch.<nom>.merge`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BranchUpstream {
+    /// `origin` (`.` pour un amont local).
+    pub remote: String,
+    /// `refs/heads/main` (sur le distant).
+    pub merge: String,
 }
 
 /// `git branch -d` : refuse une branche non fusionnée
@@ -777,6 +793,11 @@ fn delete(
         return Err(VcsError::CurrentBranch(name.to_owned()));
     }
     let upstream = upstream_of(git, repo, name, cancel)?;
+    let upstream_config =
+        crate::remote::upstream_config(git, repo, name, cancel)?.map(|config| BranchUpstream {
+            remote: config.remote,
+            merge: config.remote_ref,
+        });
     let command = args(["branch", if force { "-D" } else { "-d" }, name]);
     let output = git.run(repo.work_tree(), &command, Access::Write, None, cancel)?;
     if !output.status.success() {
@@ -802,6 +823,7 @@ fn delete(
         name: name.to_owned(),
         tip,
         upstream,
+        upstream_config,
     })
 }
 
@@ -885,6 +907,117 @@ pub fn restore_branch(
     Ok(())
 }
 
+/// « Restaurer » une branche supprimée **avec son amont** (rendu par la
+/// suppression, [`DeleteBranchOutcome::upstream_config`]) : même commit, même
+/// configuration d'amont, même si la branche distante n'existe plus (elle
+/// apparaît alors « amont supprimé », comme avant). **Bloquant.**
+pub fn restore_deleted_branch(
+    git: &Git,
+    repo: &Repository,
+    deleted: &DeleteBranchOutcome,
+    cancel: &CancelToken,
+) -> Result<()> {
+    restore_branch(git, repo, &deleted.name, &deleted.tip, cancel)?;
+    if let Some(upstream) = &deleted.upstream_config {
+        write_upstream_config(git, repo, &deleted.name, upstream, cancel)?;
+    }
+    Ok(())
+}
+
+fn write_upstream_config(
+    git: &Git,
+    repo: &Repository,
+    branch: &str,
+    upstream: &BranchUpstream,
+    cancel: &CancelToken,
+) -> Result<()> {
+    check_revision(&upstream.remote)?;
+    check_revision(&upstream.merge)?;
+    for (key, value) in [("remote", &upstream.remote), ("merge", &upstream.merge)] {
+        git.run_ok(
+            repo.work_tree(),
+            &args([
+                "config".to_owned(),
+                format!("branch.{branch}.{key}"),
+                value.clone(),
+            ]),
+            Access::Write,
+            None,
+            cancel,
+        )?;
+    }
+    Ok(())
+}
+
+/// « Choisir l'amont… » : `git branch --set-upstream-to=<amont> <branche>`
+/// (`amont` : branche distante `origin/x` ou locale). Amont inexistant :
+/// [`VcsError::BranchNotFound`] (rien n'a changé). **Bloquant.**
+pub fn set_upstream(
+    git: &Git,
+    repo: &Repository,
+    branch: &str,
+    upstream: &str,
+    cancel: &CancelToken,
+) -> Result<()> {
+    check_revision(upstream)?;
+    local_exists(git, repo, branch, cancel)?
+        .ok_or_else(|| VcsError::BranchNotFound(branch.to_owned()))?;
+    let known = ["refs/remotes/", "refs/heads/"].iter().any(|prefix| {
+        git.resolve_commit(repo.work_tree(), &format!("{prefix}{upstream}"), cancel)
+            .ok()
+            .flatten()
+            .is_some()
+    });
+    if !known {
+        return Err(VcsError::BranchNotFound(upstream.to_owned()));
+    }
+    git.run_ok(
+        repo.work_tree(),
+        &args([
+            "branch".to_owned(),
+            format!("--set-upstream-to={upstream}"),
+            branch.to_owned(),
+        ]),
+        Access::Write,
+        None,
+        cancel,
+    )?;
+    Ok(())
+}
+
+/// « Retirer l'amont » : `git branch --unset-upstream <branche>`. Sans amont :
+/// rien à faire. **Bloquant.**
+pub fn unset_upstream(
+    git: &Git,
+    repo: &Repository,
+    branch: &str,
+    cancel: &CancelToken,
+) -> Result<()> {
+    local_exists(git, repo, branch, cancel)?
+        .ok_or_else(|| VcsError::BranchNotFound(branch.to_owned()))?;
+    if crate::remote::upstream_config(git, repo, branch, cancel)?.is_none() {
+        return Ok(());
+    }
+    git.run_ok(
+        repo.work_tree(),
+        &args(["branch", "--unset-upstream", branch]),
+        Access::Write,
+        None,
+        cancel,
+    )?;
+    Ok(())
+}
+
+/// L'amont d'une branche après [`set_upstream`] (nom court), `None` sans amont.
+pub(crate) fn upstream_short(
+    git: &Git,
+    repo: &Repository,
+    branch: &str,
+    cancel: &CancelToken,
+) -> Result<Option<String>> {
+    upstream_of(git, repo, branch, cancel)
+}
+
 // ------------------------------------------------------------------ basculer
 
 /// Où basculer.
@@ -923,6 +1056,102 @@ pub struct SwitchOutcome {
     /// mettre à jour.
     pub behind_upstream: Option<u32>,
     pub output: String,
+    /// « Forcer la bascule » ([`switch_discarding_changes`]) : fichiers dont
+    /// les changements ont été **réellement jetés** (suivis remis à HEAD, non
+    /// suivis supprimés). Vide pour une bascule ordinaire. Les autres
+    /// changements locaux, s'il y en a, ont suivi : relire l'état pour le dire.
+    pub discarded: Vec<PathBuf>,
+    /// Commits laissés sur aucune branche en quittant une HEAD détachée
+    /// ([`SwitchOptions::leave_detached_commits`]) : leur nombre et le commit
+    /// quitté (récupérable par le reflog : « Créer une branche » dessus).
+    pub left_detached: Option<(u32, String)>,
+}
+
+/// Options d'une bascule qui demandent un accord explicite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SwitchOptions {
+    /// Quitter une HEAD détachée même si elle porte des commits sur aucune
+    /// branche (« Basculer quand même »). Sans cela :
+    /// [`VcsError::DetachedCommitsLeft`].
+    pub leave_detached_commits: bool,
+}
+
+/// HEAD détachée : de quoi afficher le bandeau « Vos commits ne sont sur
+/// aucune branche » (avec « Créer une branche ici »).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachedHeadReport {
+    /// Commit de HEAD.
+    pub head: String,
+    /// Commits atteignables depuis HEAD seulement (aucune branche, distante ni
+    /// étiquette). 0 : rien à perdre, pas de bandeau d'alerte.
+    pub orphan_commits: u32,
+    /// Sujets des 5 plus récents.
+    pub subjects: Vec<String>,
+}
+
+/// `Some` si HEAD est détachée (sur un commit), `None` sur une branche ou
+/// dans un dépôt sans commit. **Bloquant.**
+pub fn detached_head_report(
+    git: &Git,
+    repo: &Repository,
+    cancel: &CancelToken,
+) -> Result<Option<DetachedHeadReport>> {
+    if current_branch_name(repo.git_dir()).is_some() {
+        return Ok(None);
+    }
+    let Some(head) = git.resolve_commit(repo.work_tree(), "HEAD", cancel)? else {
+        return Ok(None);
+    };
+    let (orphan_commits, subjects) =
+        only_reachable_from(git, repo, &["HEAD".to_owned()], None, 5, cancel)?;
+    Ok(Some(DetachedHeadReport {
+        head,
+        orphan_commits,
+        subjects,
+    }))
+}
+
+/// Refuse de quitter une HEAD détachée qui porte des commits sur aucune
+/// branche, sauf si `target` les contient. Rend ce qui serait laissé.
+fn check_leaving_detached(
+    git: &Git,
+    repo: &Repository,
+    target: Option<&str>,
+    options: SwitchOptions,
+    cancel: &CancelToken,
+) -> Result<Option<(u32, String)>> {
+    let Some(report) = detached_head_report(git, repo, cancel)? else {
+        return Ok(None);
+    };
+    if report.orphan_commits == 0 {
+        return Ok(None);
+    }
+    // Ceux que la cible garde dans son historique ne sont pas perdus.
+    let (count, subjects) = match target {
+        Some(target) => {
+            check_revision(target)?;
+            only_reachable_from(
+                git,
+                repo,
+                &["HEAD".to_owned(), format!("^{target}")],
+                None,
+                5,
+                cancel,
+            )?
+        }
+        None => (report.orphan_commits, report.subjects),
+    };
+    if count == 0 {
+        return Ok(None);
+    }
+    if options.leave_detached_commits {
+        return Ok(Some((count, report.head)));
+    }
+    Err(VcsError::DetachedCommitsLeft {
+        head: report.head,
+        count,
+        subjects,
+    })
 }
 
 /// Bascule. Refusée pendant une fusion ou un rebase
@@ -931,11 +1160,25 @@ pub struct SwitchOutcome {
 /// [`VcsError::WouldOverwrite`] avec les fichiers (rien n'a changé). Avec
 /// [`LocalChanges::Stash`] : mise de côté « avant bascule », bascule,
 /// restauration ; une restauration en conflit garde l'entrée
-/// ([`crate::StashRestore::Conflicts`]). **Bloquant.**
+/// ([`crate::StashRestore::Conflicts`]). Depuis une HEAD détachée qui porte
+/// des commits sur aucune branche : [`VcsError::DetachedCommitsLeft`], rien
+/// n'a changé (voir [`switch_branch_with`]). **Bloquant.**
 pub fn switch_branch(
     git: &Git,
     repo: &Repository,
     request: &SwitchRequest,
+    cancel: &CancelToken,
+) -> Result<SwitchOutcome> {
+    switch_branch_with(git, repo, request, SwitchOptions::default(), cancel)
+}
+
+/// [`switch_branch`] avec des options accordées par l'utilisatrice
+/// (« Basculer quand même » depuis une HEAD détachée). **Bloquant.**
+pub fn switch_branch_with(
+    git: &Git,
+    repo: &Repository,
+    request: &SwitchRequest,
+    options: SwitchOptions,
     cancel: &CancelToken,
 ) -> Result<SwitchOutcome> {
     if let Some(operation) = repo.operation() {
@@ -1009,6 +1252,17 @@ pub fn switch_branch(
         Expected::Branch(name) => name.clone(),
         Expected::Detached(commit) => commit[..commit.len().min(7)].to_owned(),
     };
+    let target_commit = match (&request.target, &expect) {
+        (_, Expected::Detached(commit)) => Some(commit.clone()),
+        (SwitchTarget::Remote(remote_name), _) if created => git.resolve_commit(
+            repo.work_tree(),
+            &format!("refs/remotes/{remote_name}"),
+            cancel,
+        )?,
+        (_, Expected::Branch(name)) => local_exists(git, repo, name, cancel)?,
+    };
+    let left_detached =
+        check_leaving_detached(git, repo, target_commit.as_deref(), options, cancel)?;
 
     let ((output, hook_output), stash) = with_local_changes(
         git,
@@ -1038,6 +1292,8 @@ pub fn switch_branch(
         hook_output,
         behind_upstream,
         output,
+        discarded: Vec::new(),
+        left_detached,
     })
 }
 
@@ -1109,34 +1365,65 @@ pub fn switch_discarding_changes(
     discard: &OverwriteConflict,
     cancel: &CancelToken,
 ) -> Result<SwitchOutcome> {
+    switch_discarding_changes_with(git, repo, target, discard, SwitchOptions::default(), cancel)
+}
+
+/// [`switch_discarding_changes`] avec des options accordées. La vérification
+/// de la HEAD détachée a lieu **avant** de jeter quoi que ce soit.
+/// **Destructif.** **Bloquant.**
+pub fn switch_discarding_changes_with(
+    git: &Git,
+    repo: &Repository,
+    target: &SwitchTarget,
+    discard: &OverwriteConflict,
+    options: SwitchOptions,
+    cancel: &CancelToken,
+) -> Result<SwitchOutcome> {
     if let Some(operation) = repo.operation() {
         return Err(VcsError::OperationInProgress(operation.kind));
     }
+    let target_commit = match target {
+        SwitchTarget::Branch(name) => local_exists(git, repo, name, cancel)?,
+        SwitchTarget::Remote(name) => {
+            check_revision(name)?;
+            git.resolve_commit(repo.work_tree(), &format!("refs/remotes/{name}"), cancel)?
+        }
+        SwitchTarget::Detach(revision) => {
+            check_revision(revision)?;
+            git.resolve_commit(repo.work_tree(), revision, cancel)?
+        }
+    };
+    check_leaving_detached(git, repo, target_commit.as_deref(), options, cancel)?;
+    let mut discarded = Vec::new();
     if !discard.tracked.is_empty() {
         let mut command = args(["restore", "--source=HEAD", "--staged", "--worktree", "--"]);
         for path in &discard.tracked {
             command.push(repo.to_repo_path(path)?.into());
         }
         git.run_ok(repo.work_tree(), &command, Access::Write, None, cancel)?;
+        discarded.extend(discard.tracked.iter().cloned());
     }
     for path in &discard.untracked {
         let repo_path = repo.to_repo_path(path)?;
         let absolute: PathBuf = repo.to_absolute(&repo_path);
         match std::fs::remove_file(&absolute) {
-            Ok(()) => {}
+            Ok(()) => discarded.push(path.clone()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => return Err(julie_core::Error::io(&absolute, source).into()),
         }
     }
-    switch_branch(
+    let mut outcome = switch_branch_with(
         git,
         repo,
         &SwitchRequest {
             target: target.clone(),
             local_changes: LocalChanges::Keep,
         },
+        options,
         cancel,
-    )
+    )?;
+    outcome.discarded = discarded;
+    Ok(outcome)
 }
 
 /// HEAD détachée : nombre de commits qui ne sont sur aucune branche, aucune

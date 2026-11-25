@@ -392,9 +392,39 @@ impl JulieStormApp {
         }
     }
 
+    /// Le curseur est-il dans un `<script>` d'un fichier PHP ou HTML ? Le JavaScript qui s'y
+    /// trouve n'est pas indexé : un message vaut mieux qu'un clic sans effet.
+    fn cursor_in_script_block(&self) -> bool {
+        let Some(editor) = self.editors.active_editor() else {
+            return false;
+        };
+        let markup = editor.path().is_some_and(|p| {
+            p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "php" | "phtml" | "html" | "htm"
+                )
+            })
+        });
+        if !markup {
+            return false;
+        }
+        let offset = editor
+            .document
+            .buffer()
+            .position_to_offset(editor.document.cursor_position());
+        let head: String = editor.document.text().chars().take(offset).collect();
+        in_script_block(&head)
+    }
+
     fn nav_nothing(&mut self, why: NoTarget, indexing: Option<u8>) {
+        let in_script = self.cursor_in_script_block();
         let text = match why {
+            NoTarget::NotASymbol if in_script => t::NAV_JS_IN_PHP.to_owned(),
             NoTarget::NotASymbol => return,
+            NoTarget::NotInProject { .. } | NoTarget::NotFound { .. } if in_script => {
+                t::NAV_JS_IN_PHP.to_owned()
+            }
             NoTarget::NotInProject { .. } | NoTarget::NotFound { .. } if indexing.is_some() => {
                 t::nav_indexing(indexing.unwrap_or(0))
             }
@@ -917,5 +947,34 @@ impl JulieStormApp {
         if self.tools.bottom == BottomTool::Usages {
             self.tools.bottom = BottomTool::Git;
         }
+    }
+}
+
+/// Le texte qui précède le curseur finit-il à l'intérieur d'un `<script>…</script>` ?
+fn in_script_block(head: &str) -> bool {
+    let lower = head.to_ascii_lowercase();
+    match (lower.rfind("<script"), lower.rfind("</script")) {
+        (Some(open), close) if close.is_none_or(|c| c < open) => lower[open..].contains('>'),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::in_script_block;
+
+    #[test]
+    fn script_blocks_are_detected_before_the_cursor() {
+        assert!(in_script_block(
+            "<?php ?><script>
+function a() {"
+        ));
+        assert!(in_script_block("<SCRIPT type=\"x\">var x"));
+        assert!(!in_script_block(
+            "<script>a</script>
+<?php foo"
+        ));
+        assert!(!in_script_block("<script"));
+        assert!(!in_script_block("<?php function a() {}"));
     }
 }

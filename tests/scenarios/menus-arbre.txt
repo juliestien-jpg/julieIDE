@@ -1,6 +1,9 @@
 # Clic droit dans l'arbre du projet : Git > Ajouter à Git, Retirer de l'index, entrées grisées
 # avec leur raison (menus-contextuels.md, critères 1, 3, 4, 18).
 # Avant : branches.sh <dossier>
+# Les menus s'ouvrent par `ui menu.open tree <chemin>` et non par des coordonnées : l'arbre gagne ou
+# perd des lignes (dossier `.juliestorm` écrit par l'index) sans que le scénario se trompe de cible.
+# Le vrai clic droit de la souris est joué par menus-clics-droits.txt et recette-v1-menu*.txt.
 project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
 resize 1280 720
 wait-idle
@@ -10,7 +13,7 @@ wait-idle
 wait 1600
 screenshot target/essais/branches/30-arbre-avant.png
 state target/essais/branches/30-arbre-avant.json
-rclick 120 149
+ui menu.open tree nouveau.php
 wait 400
 screenshot target/essais/branches/31-menu-arbre.png
 state target/essais/branches/31-menu-arbre.json
@@ -23,7 +26,7 @@ wait 1500
 state target/essais/branches/32-apres-ajout.json
 screenshot target/essais/branches/32-apres-ajout.png
 # Maintenant « Retirer de l'index » est actif et « Ajouter à Git » grisé.
-rclick 120 149
+ui menu.open tree nouveau.php
 wait 300
 ui menu.expand sub.git
 state target/essais/branches/33-menu-apres-ajout.json
@@ -32,7 +35,7 @@ wait-idle
 wait 1500
 state target/essais/branches/33-apres-retrait.json
 # Un fichier suivi et inchangé : Annuler les modifications grisé.
-rclick 120 123
+ui menu.open tree a.txt
 wait 300
 ui menu.expand sub.git
 wait 300

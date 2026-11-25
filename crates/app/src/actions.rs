@@ -128,6 +128,11 @@ pub enum ActionId {
     BranchPush,
     BranchRename,
     BranchDelete,
+    BranchSetUpstream,
+    BranchUnsetUpstream,
+    BranchDiffWorktree,
+    /// Remplacement de Ctrl+Maj+` pour les claviers où l'accent grave est peu accessible.
+    BranchesPopupAlt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,13 +477,20 @@ impl Registry {
             ),
             git(Push, "vcs.push", t::ACTION_PUSH, sc(CTRL_SHIFT, Key::K)),
             git(NewBranch, "vcs.new_branch", t::ACTION_NEW_BRANCH, None),
-            // Ctrl+Maj+` : réflexe PhpStorm (peu commode en AZERTY : le widget de la barre
-            // du haut reste cliquable ; le remplacement n'est pas encore tranché).
+            // Ctrl+Maj+` : réflexe PhpStorm (peu commode en AZERTY) ; le remplacement
+            // Ctrl+Maj+B (`BranchesPopupAlt`) ouvre la même fenêtre.
             git(
                 BranchesPopup,
                 "vcs.branches",
                 t::ACTION_BRANCHES,
                 sc(CTRL_SHIFT, Key::Backtick),
+            ),
+            // Remplacement sans accent grave (m6 de la recette) : même fenêtre, Ctrl+Maj+B.
+            ctx(
+                BranchesPopupAlt,
+                "vcs.branches_alt",
+                t::ACTION_BRANCHES_ALT,
+                sc(CTRL_SHIFT, Key::B),
             ),
             git(Fetch, "vcs.fetch", t::ACTION_FETCH, None),
             // La touche Menu reste à l'IDE, même dans le terminal.
@@ -633,6 +645,24 @@ impl Registry {
             ctx(BranchPush, "branch.push", t::ACTION_BRANCH_PUSH, None),
             ctx(BranchRename, "branch.rename", t::ACTION_BRANCH_RENAME, None),
             ctx(BranchDelete, "branch.delete", t::ACTION_BRANCH_DELETE, None),
+            ctx(
+                BranchSetUpstream,
+                "branch.set_upstream",
+                t::ACTION_BRANCH_SET_UPSTREAM,
+                None,
+            ),
+            ctx(
+                BranchUnsetUpstream,
+                "branch.unset_upstream",
+                t::ACTION_BRANCH_UNSET_UPSTREAM,
+                None,
+            ),
+            ctx(
+                BranchDiffWorktree,
+                "branch.diff_worktree",
+                t::ACTION_BRANCH_DIFF_WORKTREE,
+                None,
+            ),
         ]);
         // ----- v1 bis : menus de l'éditeur, de l'arbre, des tests, de la recherche, du terminal.
         // Les raccourcis sont seulement affichés (voir `Action::shown`) : la zone les traite.

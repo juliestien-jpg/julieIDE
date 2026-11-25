@@ -1,0 +1,15 @@
+# Corrections m2 : « Cherry-pick » grisé pour un commit déjà dans la branche courante.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> pick-present
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 2
+wait-idle
+wait 600
+state @OUT@/pick-present.json
+screenshot @OUT@/pick-present.png
+ui menu.close
+quit

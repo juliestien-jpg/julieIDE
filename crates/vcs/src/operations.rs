@@ -49,6 +49,10 @@ pub struct OperationOutcome {
     pub fetch: Option<FetchOutcome>,
     /// Sortie de Git (crochets compris).
     pub output: String,
+    /// Cherry-pick / revert : commits passés parce que leur changement était
+    /// **déjà** dans la branche (Git s'arrêtait sur un commit vide, sans
+    /// conflit). Rien n'est perdu : il n'y avait rien à appliquer.
+    pub empty_skipped: Vec<String>,
 }
 
 impl OperationOutcome {
@@ -66,6 +70,7 @@ impl OperationOutcome {
             stash: None,
             fetch: None,
             output: String::new(),
+            empty_skipped: Vec::new(),
         }
     }
 }
@@ -347,9 +352,77 @@ fn ensure_not_merges(
     Ok(())
 }
 
+/// Un commit est-il déjà dans la branche courante ?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommitPresence {
+    /// Absent : le cherry-pick a un sens.
+    Absent,
+    /// Le commit lui-même est dans l'historique de HEAD (« déjà sur la branche
+    /// courante »).
+    Contained,
+    /// Un autre commit de la branche apporte exactement le même changement
+    /// (`git cherry` : même identifiant de patch).
+    SameChange,
+}
+
+impl CommitPresence {
+    pub fn is_present(self) -> bool {
+        self != CommitPresence::Absent
+    }
+}
+
+/// Pour griser « Cherry-pick » : chaque commit (tel que donné) et sa présence
+/// dans la branche courante. Dépôt sans commit : tous absents. **Bloquant.**
+pub fn commits_presence(
+    git: &Git,
+    repo: &Repository,
+    commits: &[String],
+    cancel: &CancelToken,
+) -> Result<Vec<(String, CommitPresence)>> {
+    let head = git.resolve_commit(repo.work_tree(), "HEAD", cancel)?;
+    let mut result = Vec::new();
+    for commit in commits {
+        check_revision(commit)?;
+        let full = git
+            .resolve_commit(repo.work_tree(), commit, cancel)?
+            .ok_or_else(|| VcsError::InvalidRevision(commit.clone()))?;
+        let Some(head) = &head else {
+            result.push((commit.clone(), CommitPresence::Absent));
+            continue;
+        };
+        if crate::branches::is_ancestor(git, repo, &full, head, cancel)? {
+            result.push((commit.clone(), CommitPresence::Contained));
+            continue;
+        }
+        let parent = format!("{full}^");
+        let mut command = args(["cherry", head.as_str(), full.as_str()]);
+        if git
+            .resolve_commit(repo.work_tree(), &parent, cancel)?
+            .is_some()
+        {
+            command.push(parent.into());
+        }
+        let text = git.read(repo.work_tree(), &command, cancel)?;
+        let same = text.lines().any(|line| line.trim() == format!("- {full}"));
+        result.push((
+            commit.clone(),
+            if same {
+                CommitPresence::SameChange
+            } else {
+                CommitPresence::Absent
+            },
+        ));
+    }
+    Ok(result)
+}
+
 /// `git cherry-pick <commits>` dans l'ordre donné (l'appelant les donne du
 /// plus ancien au plus récent). Commit de fusion refusé
-/// ([`VcsError::MergeCommitNotSupported`]). **Bloquant.**
+/// ([`VcsError::MergeCommitNotSupported`]) ; commit **déjà** dans la branche
+/// (lui-même ou le même changement) refusé avant toute commande
+/// ([`VcsError::AlreadyApplied`], rien n'a changé). Un commit devenu vide en
+/// route est passé ([`OperationOutcome::empty_skipped`]) : jamais d'état
+/// « cherry-pick en cours » sans rien à résoudre. **Bloquant.**
 pub fn cherry_pick(
     git: &Git,
     repo: &Repository,
@@ -359,6 +432,14 @@ pub fn cherry_pick(
 ) -> Result<OperationOutcome> {
     ensure_no_operation(repo)?;
     ensure_not_merges(git, repo, commits, cancel)?;
+    let present: Vec<String> = commits_presence(git, repo, commits, cancel)?
+        .into_iter()
+        .filter(|(_, presence)| presence.is_present())
+        .map(|(commit, _)| commit)
+        .collect();
+    if !present.is_empty() {
+        return Err(VcsError::AlreadyApplied { commits: present });
+    }
     let mut command = args(["cherry-pick"]);
     command.extend(commits.iter().map(OsString::from));
     pick_like(
@@ -405,6 +486,7 @@ fn pick_like(
     let before = git.resolve_commit(repo.work_tree(), "HEAD", cancel)?;
     let mut outcome = OperationOutcome::new(kind, before);
     let branch = current_name(git, repo, cancel);
+    let mut skipped = Vec::new();
     let ((text, finished), stash) = with_local_changes(
         git,
         repo,
@@ -415,13 +497,58 @@ fn pick_like(
         },
         cancel,
         || {
-            run_stoppable(git, repo, &command, cancel)
-                .map(|(text, finished)| ((text, finished), finished))
+            let (mut text, mut finished) = run_stoppable(git, repo, &command, cancel)?;
+            while !finished {
+                let Some(commit) = empty_stop(git, repo, kind, cancel)? else {
+                    break;
+                };
+                let skip = args([
+                    if kind == OperationKind::Revert {
+                        "revert"
+                    } else {
+                        "cherry-pick"
+                    },
+                    "--skip",
+                ]);
+                let (more, done) = run_stoppable(git, repo, &skip, cancel)?;
+                text.push_str(&more);
+                skipped.push(commit);
+                finished = done;
+            }
+            Ok(((text, finished), finished))
         },
     )?;
     outcome.stash = stash;
+    outcome.empty_skipped = skipped;
     finish_outcome(git, repo, &mut outcome, finished, text, cancel)?;
     Ok(outcome)
+}
+
+/// L'opération `kind` est arrêtée sur un commit **vide** (aucun conflit,
+/// index identique à HEAD) : son commit. Sinon `None`.
+fn empty_stop(
+    git: &Git,
+    repo: &Repository,
+    kind: OperationKind,
+    cancel: &CancelToken,
+) -> Result<Option<String>> {
+    let Some(operation) = repo.operation().filter(|op| op.kind == kind) else {
+        return Ok(None);
+    };
+    if !unmerged_paths(git, repo, cancel)?.is_empty() {
+        return Ok(None);
+    }
+    let output = git.run(
+        repo.work_tree(),
+        &args(["diff", "--cached", "--quiet", "HEAD", "--"]),
+        Access::Read,
+        None,
+        cancel,
+    )?;
+    if output.status.code != Some(0) {
+        return Ok(None);
+    }
+    Ok(Some(operation.their_commit.unwrap_or_default()))
 }
 
 /// Passe le commit en cours d'un rebase, d'un cherry-pick ou d'un revert
@@ -456,6 +583,11 @@ pub fn skip_operation(
             unmerged_paths(git, repo, cancel)?
         },
         output: text,
+        stash: if finished {
+            crate::stash::after_operation(git, repo)?
+        } else {
+            None
+        },
     })
 }
 
@@ -537,6 +669,11 @@ pub struct ResetOutcome {
     /// `git stash list` (`StashRestore::Kept`).
     pub stash: Option<AutoStash>,
     pub output: String,
+    /// `reset_hard` sans mise de côté : fichiers suivis dont les changements
+    /// locaux ont été **réellement jetés** (ceux que l'appelant a dû copier).
+    /// Vide pour `--soft` / `--mixed`, et avec mise de côté (tout est dans
+    /// `stash`).
+    pub discarded: Vec<PathBuf>,
 }
 
 /// `git reset --soft|--mixed <cible>` : rien n'est perdu (les fichiers ne
@@ -568,6 +705,12 @@ pub fn reset_hard(
     cancel: &CancelToken,
 ) -> Result<ResetOutcome> {
     ensure_no_operation(repo)?;
+    let changed: Vec<PathBuf> = status(git, repo, cancel)?
+        .files
+        .into_iter()
+        .filter(|file| file.kind != FileKind::Untracked)
+        .map(|file| file.path)
+        .collect();
     let stash = if stash_first {
         let message = StashReason::Reset {
             branch: current_name(git, repo, cancel),
@@ -579,11 +722,17 @@ pub fn reset_hard(
             message,
             commit,
             restore: StashRestore::Kept,
+            untracked_not_restored: Vec::new(),
         })
     } else {
         None
     };
-    run_reset(git, repo, target, "--hard", stash, cancel)
+    let stashed = stash.is_some();
+    let mut outcome = run_reset(git, repo, target, "--hard", stash, cancel)?;
+    if !stashed {
+        outcome.discarded = changed;
+    }
+    Ok(outcome)
 }
 
 fn run_reset(
@@ -611,5 +760,6 @@ fn run_reset(
         head: commit,
         stash,
         output: format!("{}{}", output.stdout_text(), output.stderr_text()),
+        discarded: Vec::new(),
     })
 }

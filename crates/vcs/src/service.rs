@@ -9,14 +9,16 @@ use julie_core::{CancelToken, Domain, TaskContext, TaskHandle, Tasks};
 
 use crate::branches::{
     check_branch_name, commits_only_on_detached_head, create_branch, delete_branch,
-    force_delete_branch, list_branches, rename_branch, restore_branch, switch_branch,
-    switch_discarding_changes, BranchList, CreateBranchOutcome, CreateBranchRequest,
-    DeleteBranchOutcome, RenameBranchOutcome, SwitchOutcome, SwitchRequest, SwitchTarget,
+    detached_head_report, force_delete_branch, list_branches, rename_branch, restore_branch,
+    restore_deleted_branch, set_upstream, switch_branch_with, switch_discarding_changes_with,
+    unset_upstream, upstream_short, BranchList, CreateBranchOutcome, CreateBranchRequest,
+    DeleteBranchOutcome, DetachedHeadReport, RenameBranchOutcome, SwitchOptions, SwitchOutcome,
+    SwitchRequest, SwitchTarget,
 };
 use crate::commit::{commit, CommitOutcome, CommitRequest};
 use crate::conflict::{
-    abort_operation, accept_side, conflict_versions, continue_operation, resolve_with_content,
-    ConflictSide, ConflictVersions, ContinueOutcome, SideResolution,
+    abort_operation_restoring, accept_side, conflict_versions, continue_operation,
+    resolve_with_content, ConflictSide, ConflictVersions, ContinueOutcome, SideResolution,
 };
 use crate::content::{load_diff, DiffRequest, DiffSides};
 use crate::error::{BranchNameProblem, OverwriteConflict};
@@ -28,8 +30,9 @@ use crate::files::{
 use crate::git::{CommandRecord, Git, VcsSettings};
 use crate::history::{commit_details, log, CommitDetails, LogPage, LogQuery};
 use crate::operations::{
-    cherry_pick, merge, rebase, reset, reset_hard, reset_preview, revert_commits, skip_operation,
-    MergeRequest, OperationOutcome, RebaseRequest, ResetMode, ResetOutcome, ResetPreview,
+    cherry_pick, commits_presence, merge, rebase, reset, reset_hard, reset_preview, revert_commits,
+    skip_operation, CommitPresence, MergeRequest, OperationOutcome, RebaseRequest, ResetMode,
+    ResetOutcome, ResetPreview,
 };
 use crate::remote::{
     delete_remote_branch, fast_forward_branch, fetch, pull, push, push_preview, push_target,
@@ -37,7 +40,10 @@ use crate::remote::{
     PushTarget, RemoteBranchDeleted, RemoteProgress, UpdateRequest,
 };
 use crate::repo::{open_repository, OperationKind, Repository};
-use crate::stash::{list_stashes, restore_auto_stash, AutoStash, LocalChanges, StashEntry};
+use crate::stash::{
+    list_stashes, pending_auto_stashes, restore_auto_stash, restore_pending_stash, AutoStash,
+    LocalChanges, PendingStash, StashEntry,
+};
 use crate::status::{status, Status};
 
 /// Délai de calme après le dernier changement sur disque avant de relire l'état.
@@ -124,7 +130,31 @@ pub enum VcsEvent {
     ResetPreview(ResetPreview),
     ResetDone(ResetOutcome),
     Stashes(Vec<StashEntry>),
+    /// Une mise de côté remise : sur demande ([`Vcs::restore_auto_stash`],
+    /// [`Vcs::restore_pending_stash`]) **ou d'elle-même** juste après
+    /// `OperationContinued` / `OperationSkipped` (opération terminée) et
+    /// `OperationAborted`, quand l'opération avait mis de côté des changements.
+    /// `restore` dit l'issue : `Restored` (entrée supprimée), `Conflicts` (liste
+    /// des conflits), `Failed` ; `untracked_not_restored` à signaler.
     StashRestored(AutoStash),
+    /// Les mises de côté de l'IDE encore dans `git stash list` (bandeau « Vos
+    /// changements sont mis de côté »). Publié à l'ouverture, après **chaque**
+    /// écriture, et par [`Vcs::load_pending_stashes`]. Liste vide : plus de
+    /// bandeau.
+    PendingStashes(Vec<PendingStash>),
+    /// HEAD détachée (bandeau « Vos commits ne sont sur aucune branche » si
+    /// `orphan_commits > 0`). Publié à l'ouverture et après chaque écriture
+    /// **tant que HEAD est détachée** ; sur une branche, rien (se fier à
+    /// `Status::head`).
+    DetachedHead(DetachedHeadReport),
+    /// Présence des commits dans la branche courante
+    /// ([`Vcs::check_cherry_pick`]) : griser « Cherry-pick » si `is_present()`.
+    CherryPickChecked(Vec<(String, CommitPresence)>),
+    /// Amont posé ou retiré ([`Vcs::set_upstream`]).
+    UpstreamChanged {
+        branch: String,
+        upstream: Option<String>,
+    },
     // ---------------------------------------------------------- fichiers
     Staged {
         paths: Vec<PathBuf>,
@@ -184,6 +214,9 @@ pub enum Action {
     Reset,
     Stashes,
     RestoreStash,
+    PendingStashes,
+    CheckCherryPick,
+    SetUpstream,
     Stage,
     Unstage,
     Discard,
@@ -264,6 +297,7 @@ impl Vcs {
                 Ok(repo) => {
                     ctx.publish(VcsEvent::Opened(repo.clone()));
                     ctx.publish(VcsEvent::Status(status(git, &repo, ctx.cancel_token())?));
+                    publish_pending(git, &repo, ctx);
                     Ok(())
                 }
                 Err(VcsError::NotARepository(dir)) => {
@@ -425,17 +459,36 @@ impl Vcs {
         let repo = repo.clone();
         self.spawn("vcs.continue", Action::Continue, true, move |git, ctx| {
             let result = continue_operation(git, &repo, message.as_deref(), ctx.cancel_token());
-            then_status(git, &repo, ctx, result, VcsEvent::OperationContinued)
+            if let Ok(outcome) = &result {
+                ctx.publish(VcsEvent::OperationContinued(outcome.clone()));
+                if let Some(stash) = &outcome.stash {
+                    ctx.publish(VcsEvent::StashRestored(stash.clone()));
+                }
+            }
+            let outcome = result.map(|_| ());
+            publish_status(git, &repo, ctx);
+            publish_pending(git, &repo, ctx);
+            outcome
         })
     }
 
     /// Abandonne l'opération en cours (**défait la fusion et ses résolutions**) →
-    /// `OperationAborted` puis `Status`.
+    /// `OperationAborted`, puis `StashRestored` si l'opération avait mis de
+    /// côté des changements (ils sont remis), puis `Status`.
     pub fn abort_operation(&self, repo: &Repository) -> TaskHandle {
         let repo = repo.clone();
         self.spawn("vcs.abort", Action::Abort, true, move |git, ctx| {
-            let result = abort_operation(git, &repo, ctx.cancel_token());
-            then_status(git, &repo, ctx, result, VcsEvent::OperationAborted)
+            let result = abort_operation_restoring(git, &repo, ctx.cancel_token());
+            if let Ok(outcome) = &result {
+                ctx.publish(VcsEvent::OperationAborted(outcome.kind));
+                if let Some(stash) = &outcome.stash {
+                    ctx.publish(VcsEvent::StashRestored(stash.clone()));
+                }
+            }
+            let outcome = result.map(|_| ());
+            publish_status(git, &repo, ctx);
+            publish_pending(git, &repo, ctx);
+            outcome
         })
     }
 
@@ -539,6 +592,52 @@ impl Vcs {
         )
     }
 
+    /// « Restaurer » avec l'amont d'avant la suppression (le `BranchDeleted`
+    /// reçu) → `BranchRestored`. À préférer à [`Vcs::restore_branch`].
+    pub fn restore_deleted_branch(
+        &self,
+        repo: &Repository,
+        deleted: DeleteBranchOutcome,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.branch_restore",
+            Action::RestoreBranch,
+            repo,
+            move |git, repo, cancel| {
+                restore_deleted_branch(git, repo, &deleted, cancel).map(|()| {
+                    VcsEvent::BranchRestored {
+                        name: deleted.name,
+                        tip: deleted.tip,
+                    }
+                })
+            },
+        )
+    }
+
+    /// « Choisir l'amont… » (`Some("origin/x")`) ou « Retirer l'amont »
+    /// (`None`) → `UpstreamChanged { branch, upstream }` puis `Status` et
+    /// `Branches`. Amont inexistant : `Failed(BranchNotFound)`.
+    pub fn set_upstream(
+        &self,
+        repo: &Repository,
+        branch: String,
+        upstream: Option<String>,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.upstream",
+            Action::SetUpstream,
+            repo,
+            move |git, repo, cancel| {
+                match &upstream {
+                    Some(upstream) => set_upstream(git, repo, &branch, upstream, cancel)?,
+                    None => unset_upstream(git, repo, &branch, cancel)?,
+                }
+                let upstream = upstream_short(git, repo, &branch, cancel)?;
+                Ok(VcsEvent::UpstreamChanged { branch, upstream })
+            },
+        )
+    }
+
     /// **Destructif pour tout le monde** : supprime la branche sur le distant
     /// (refusé si protégée) → `RemoteBranchDeleted`.
     pub fn delete_remote_branch(
@@ -560,32 +659,56 @@ impl Vcs {
     }
 
     /// Bascule → `Switched` (ou `Failed` avec [`VcsError::WouldOverwrite`] :
-    /// proposer « Mettre de côté et basculer » ou « Forcer la bascule »).
+    /// proposer « Mettre de côté et basculer » ou « Forcer la bascule » ; avec
+    /// [`VcsError::DetachedCommitsLeft`] : avertir, « Créer une branche
+    /// d'abord » ou « Basculer quand même » = [`Vcs::switch_branch_with`]).
     pub fn switch_branch(&self, repo: &Repository, request: SwitchRequest) -> TaskHandle {
-        self.write(
-            "vcs.switch",
-            Action::Switch,
-            repo,
-            move |git, repo, cancel| {
-                switch_branch(git, repo, &request, cancel).map(VcsEvent::Switched)
-            },
-        )
+        self.switch_branch_with(repo, request, SwitchOptions::default())
     }
 
-    /// **Destructif** : « Forcer la bascule » en jetant les changements des
-    /// seuls fichiers de `discard` → `Switched`.
-    pub fn switch_discarding_changes(
+    /// Bascule avec des options accordées par l'utilisatrice → `Switched`.
+    pub fn switch_branch_with(
         &self,
         repo: &Repository,
-        target: SwitchTarget,
-        discard: OverwriteConflict,
+        request: SwitchRequest,
+        options: SwitchOptions,
     ) -> TaskHandle {
         self.write(
             "vcs.switch",
             Action::Switch,
             repo,
             move |git, repo, cancel| {
-                switch_discarding_changes(git, repo, &target, &discard, cancel)
+                switch_branch_with(git, repo, &request, options, cancel).map(VcsEvent::Switched)
+            },
+        )
+    }
+
+    /// **Destructif** : « Forcer la bascule » en jetant les changements des
+    /// seuls fichiers de `discard` → `Switched` (`discarded` : ce qui a
+    /// réellement été jeté).
+    pub fn switch_discarding_changes(
+        &self,
+        repo: &Repository,
+        target: SwitchTarget,
+        discard: OverwriteConflict,
+    ) -> TaskHandle {
+        self.switch_discarding_changes_with(repo, target, discard, SwitchOptions::default())
+    }
+
+    /// **Destructif** : [`Vcs::switch_discarding_changes`] avec options.
+    pub fn switch_discarding_changes_with(
+        &self,
+        repo: &Repository,
+        target: SwitchTarget,
+        discard: OverwriteConflict,
+        options: SwitchOptions,
+    ) -> TaskHandle {
+        self.write(
+            "vcs.switch",
+            Action::Switch,
+            repo,
+            move |git, repo, cancel| {
+                switch_discarding_changes_with(git, repo, &target, &discard, options, cancel)
                     .map(VcsEvent::Switched)
             },
         )
@@ -741,6 +864,23 @@ impl Vcs {
         )
     }
 
+    /// Les commits sont-ils déjà dans la branche courante ? →
+    /// `CherryPickChecked` (griser « Cherry-pick » : « déjà sur la branche
+    /// courante »).
+    pub fn check_cherry_pick(&self, repo: &Repository, commits: Vec<String>) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn(
+            "vcs.cherry_pick_check",
+            Action::CheckCherryPick,
+            false,
+            move |git, ctx| {
+                let presence = commits_presence(git, &repo, &commits, ctx.cancel_token())?;
+                ctx.publish(VcsEvent::CherryPickChecked(presence));
+                Ok(())
+            },
+        )
+    }
+
     /// → `OperationRan`.
     pub fn revert_commits(
         &self,
@@ -760,10 +900,23 @@ impl Vcs {
     }
 
     /// Passe le commit en cours (abandonne ses changements) →
-    /// `OperationSkipped`.
+    /// `OperationSkipped`, puis `StashRestored` si l'opération s'est terminée
+    /// et avait mis de côté des changements.
     pub fn skip_operation(&self, repo: &Repository) -> TaskHandle {
-        self.write("vcs.skip", Action::Skip, repo, move |git, repo, cancel| {
-            skip_operation(git, repo, cancel).map(VcsEvent::OperationSkipped)
+        let repo = repo.clone();
+        self.spawn("vcs.skip", Action::Skip, true, move |git, ctx| {
+            let result = skip_operation(git, &repo, ctx.cancel_token());
+            if let Ok(outcome) = &result {
+                ctx.publish(VcsEvent::OperationSkipped(outcome.clone()));
+                if let Some(stash) = &outcome.stash {
+                    ctx.publish(VcsEvent::StashRestored(stash.clone()));
+                }
+            }
+            let outcome = result.map(|_| ());
+            publish_status(git, &repo, ctx);
+            publish_branches(git, &repo, ctx);
+            publish_pending(git, &repo, ctx);
+            outcome
         })
     }
 
@@ -831,6 +984,41 @@ impl Vcs {
             repo,
             move |git, repo, cancel| {
                 restore_auto_stash(git, repo, &commit, cancel).map(VcsEvent::StashRestored)
+            },
+        )
+    }
+
+    /// Les mises de côté de l'IDE en attente → `PendingStashes`.
+    pub fn load_pending_stashes(&self, repo: &Repository) -> TaskHandle {
+        let repo = repo.clone();
+        self.spawn(
+            "vcs.pending_stashes",
+            Action::PendingStashes,
+            false,
+            move |git, ctx| {
+                let pending = pending_auto_stashes(git, &repo, ctx.cancel_token())?;
+                ctx.publish(VcsEvent::PendingStashes(pending));
+                Ok(())
+            },
+        )
+    }
+
+    /// Remet la mise de côté liée à une opération terminée ailleurs (état
+    /// `OperationOver`) → `StashRestored`, ou rien s'il n'y en a pas ;
+    /// `Failed(OperationInProgress)` si l'opération n'est pas finie.
+    pub fn restore_pending_stash(&self, repo: &Repository) -> TaskHandle {
+        self.write(
+            "vcs.stash_restore",
+            Action::RestoreStash,
+            repo,
+            move |git, repo, cancel| {
+                // Rien à remettre : on republie la liste (sans changement).
+                match restore_pending_stash(git, repo, cancel)? {
+                    Some(stash) => Ok(VcsEvent::StashRestored(stash)),
+                    None => Ok(VcsEvent::PendingStashes(pending_auto_stashes(
+                        git, repo, cancel,
+                    )?)),
+                }
             },
         )
     }
@@ -904,6 +1092,7 @@ impl Vcs {
             let outcome = result.map(|event| ctx.publish(event));
             publish_status(git, &repo, ctx);
             publish_branches(git, &repo, ctx);
+            publish_pending(git, &repo, ctx);
             outcome
         })
     }
@@ -942,6 +1131,7 @@ impl Vcs {
             let outcome = result.map(|event| ctx.publish(event));
             publish_status(git, &repo, ctx);
             publish_branches(git, &repo, ctx);
+            publish_pending(git, &repo, ctx);
             outcome
         })
     }
@@ -983,6 +1173,22 @@ fn publish_status(git: &Git, repo: &Repository, ctx: &TaskContext) {
     }
 }
 
+/// Mises de côté en attente, et HEAD détachée s'il y a lieu, après une
+/// écriture ; un échec de relecture est tu.
+fn publish_pending(git: &Git, repo: &Repository, ctx: &TaskContext) {
+    if let Ok(pending) = pending_auto_stashes(git, repo, &CancelToken::new()) {
+        ctx.publish(VcsEvent::PendingStashes(pending));
+    }
+    publish_detached(git, repo, ctx);
+}
+
+/// `DetachedHead` si HEAD est détachée (aucune commande sinon).
+fn publish_detached(git: &Git, repo: &Repository, ctx: &TaskContext) {
+    if let Ok(Some(report)) = detached_head_report(git, repo, &CancelToken::new()) {
+        ctx.publish(VcsEvent::DetachedHead(report));
+    }
+}
+
 /// Les branches relues après une écriture ; un échec de relecture est tu.
 fn publish_branches(git: &Git, repo: &Repository, ctx: &TaskContext) {
     if let Ok(list) = list_branches(git, repo, &CancelToken::new()) {
@@ -1003,6 +1209,9 @@ fn then_status<T>(
 ) -> Result<()> {
     let outcome = result.map(|value| ctx.publish(event(value)));
     publish_status(git, repo, ctx);
+    // Commit, résolution, côté gardé : rien ne touche aux mises de côté, mais
+    // un commit sur une HEAD détachée fait naître le bandeau.
+    publish_detached(git, repo, ctx);
     outcome
 }
 

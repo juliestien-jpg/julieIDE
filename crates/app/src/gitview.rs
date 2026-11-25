@@ -15,9 +15,9 @@ use eframe::egui::{
 };
 use julie_core::TaskId;
 use julie_vcs::{
-    BranchList, CommandRecord, CommandResult, CommitRequest, ConflictKind, ConflictSide,
-    DiffRequest, FileKind, FileStatus, Group, IndexState, LogQuery, OperationKind, Status,
-    VcsError, VcsEvent,
+    BranchList, CommandRecord, CommandResult, CommitRequest, ConflictKind, ConflictLabels,
+    ConflictSide, DetachedHeadReport, DiffRequest, FileKind, FileStatus, Group, IndexState,
+    LogQuery, OperationKind, PendingStash, PendingStashState, Status, VcsError, VcsEvent,
 };
 
 use crate::diffpane::DiffPane;
@@ -99,6 +99,12 @@ pub enum GitIntent {
     LoadLog(LogQuery),
     LoadCommit(String),
     Notify(String),
+    /// « Remettre mes changements » : la mise de côté liée à une opération terminée ailleurs.
+    RestorePendingStash,
+    /// « Remettre » une mise de côté gardée (son commit).
+    RestoreStash(String),
+    /// « Créer une branche ici » (bandeau de la HEAD détachée).
+    NewBranchHere,
 }
 
 /// Question posée avant une action qui écrase du travail.
@@ -170,6 +176,15 @@ pub struct GitView {
     merge_checks: HashMap<PathBuf, MergeCheck>,
     /// Tâches `vcs.conflict` lancées pour cette vérification (et non pour ouvrir le dialogue).
     check_tasks: HashMap<TaskId, PathBuf>,
+    /// Mises de côté de l'IDE encore dans `git stash list` (bandeau).
+    pending_stashes: Vec<PendingStash>,
+    /// HEAD détachée : commits sur aucune branche (bandeau).
+    detached: Option<DetachedHeadReport>,
+    /// Qui est qui dans les conflits, avec les noms lus par la vérification d'avance
+    /// (`None` : on ne sait que les rôles, d'après l'opération).
+    labels: Option<(Option<OperationKind>, ConflictLabels)>,
+    /// Opération et étape de l'état précédent : les noms changent quand l'étape change.
+    operation_key: Option<(OperationKind, Option<(u32, u32)>)>,
 }
 
 impl GitView {
@@ -202,6 +217,10 @@ impl GitView {
             merge_loading: None,
             merge_checks: HashMap::new(),
             check_tasks: HashMap::new(),
+            pending_stashes: Vec::new(),
+            detached: None,
+            labels: None,
+            operation_key: None,
         }
     }
 
@@ -227,6 +246,17 @@ impl GitView {
         self.known.retain(|p| present.contains(p));
         self.checked.retain(|p| present.contains(p));
         let conflicted: HashSet<&PathBuf> = status.conflicts().map(|f| &f.path).collect();
+        let operation_key = status.operation.as_ref().map(|o| (o.kind, o.step));
+        if operation_key != self.operation_key {
+            // Autre opération ou autre étape d'un rebase : les noms des côtés sont à relire.
+            self.operation_key = operation_key;
+            self.labels = None;
+            self.merge_checks.clear();
+            self.check_tasks.clear();
+        }
+        if matches!(status.head, julie_vcs::Head::Branch { .. }) {
+            self.detached = None;
+        }
         self.merge_checks.retain(|p, _| conflicted.contains(p));
         self.check_tasks.retain(|_, p| conflicted.contains(p));
         match &self.selected {
@@ -287,6 +317,80 @@ impl GitView {
             wanted.push(file.path.clone());
         }
         wanted
+    }
+
+    /// Les noms des côtés, lus avec les versions d'un fichier en conflit.
+    pub fn set_labels(&mut self, kind: Option<OperationKind>, labels: ConflictLabels) {
+        self.labels = Some((kind, labels));
+    }
+
+    /// Qui est qui dans les conflits de l'état courant : les noms lus s'ils sont de la bonne
+    /// opération, sinon les seuls rôles.
+    pub fn labels(&self) -> ConflictLabels {
+        let kind = self
+            .status
+            .as_ref()
+            .and_then(|s| s.operation.as_ref())
+            .map(|o| o.kind);
+        match &self.labels {
+            Some((k, labels)) if *k == kind => labels.clone(),
+            _ => ConflictLabels::for_operation(kind),
+        }
+    }
+
+    pub fn set_pending_stashes(&mut self, list: Vec<PendingStash>) {
+        self.pending_stashes = list;
+    }
+
+    pub fn set_detached(&mut self, report: Option<DetachedHeadReport>) {
+        self.detached = report;
+    }
+
+    /// La mise de côté la plus à dire dans le bandeau : celle qui attend l'opération en cours,
+    /// puis celle d'une opération finie ailleurs, puis une gardée.
+    fn main_pending(&self) -> Option<&PendingStash> {
+        let rank = |s: &PendingStash| match s.state {
+            PendingStashState::AwaitingOperation(_) => 0,
+            PendingStashState::OperationOver => 1,
+            PendingStashState::Kept => 2,
+        };
+        self.pending_stashes.iter().min_by_key(|s| rank(s))
+    }
+
+    /// Texte du bandeau des mises de côté, s'il y en a.
+    fn stash_banner_text(&self) -> Option<String> {
+        let main = self.main_pending()?;
+        let more = self.pending_stashes.len() - 1;
+        Some(match main.state {
+            PendingStashState::AwaitingOperation(kind) => {
+                t::banner_stash_waiting(kind, &main.message, more)
+            }
+            PendingStashState::OperationOver => t::banner_stash_over(&main.message, more),
+            PendingStashState::Kept => t::banner_stash_kept(&main.message, more),
+        })
+    }
+
+    /// Ce que fait le bouton d'un bandeau (scénario) : `stash` ou `branch`.
+    pub fn banner_intent(&self, which: &str) -> Option<GitIntent> {
+        match which {
+            "stash" => self.main_pending().and_then(|m| match m.state {
+                PendingStashState::AwaitingOperation(_) => None,
+                PendingStashState::OperationOver => Some(GitIntent::RestorePendingStash),
+                PendingStashState::Kept => Some(GitIntent::RestoreStash(m.entry.commit.clone())),
+            }),
+            "branch" => self
+                .detached_banner_text()
+                .map(|_| GitIntent::NewBranchHere),
+            _ => None,
+        }
+    }
+
+    /// Texte du bandeau de la HEAD détachée, s'il y a des commits sur aucune branche.
+    fn detached_banner_text(&self) -> Option<String> {
+        self.detached
+            .as_ref()
+            .filter(|d| d.orphan_commits > 0)
+            .map(|d| t::banner_detached(d.orphan_commits))
     }
 
     pub fn note_precheck_task(&mut self, task: TaskId, path: PathBuf) {
@@ -780,6 +884,16 @@ impl GitView {
                 top += 34.0;
             }
         }
+        if let Some(text) = self.stash_banner_text() {
+            let banner = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 30.0));
+            self.show_stash_banner(ui, banner, p, &text, &mut out);
+            top += 30.0;
+        }
+        if let Some(text) = self.detached_banner_text() {
+            let banner = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 30.0));
+            self.show_detached_banner(ui, banner, p, &text, &mut out);
+            top += 30.0;
+        }
         // Barre d'onglets Git.
         let bar = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), TAB_BAR));
         self.show_tab_bar(ui, bar, p, &mut out);
@@ -798,6 +912,106 @@ impl GitView {
 
     pub fn list_has_focus(&self, ctx: &egui::Context) -> bool {
         ctx.memory(|m| m.has_focus(self.list_focus))
+    }
+
+    /// Bandeau « Vos changements locaux sont mis de côté… » (avec « Remettre » quand rien ne
+    /// les remettra seul).
+    fn show_stash_banner(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        p: &Palette,
+        text: &str,
+        out: &mut Vec<GitIntent>,
+    ) {
+        ui.painter()
+            .rect_filled(rect, 0.0, p.warn.gamma_multiply(0.22));
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(16.0, 16.0)),
+            Icon::Warning,
+            p.warn,
+        );
+        let main = self.main_pending().cloned();
+        let button = main.as_ref().and_then(|m| match m.state {
+            PendingStashState::AwaitingOperation(_) => None,
+            PendingStashState::OperationOver => Some((
+                t::BTN_RESTORE_STASH,
+                Some(t::TIP_RESTORE_STASH_OVER),
+                GitIntent::RestorePendingStash,
+            )),
+            PendingStashState::Kept => Some((
+                t::BTN_RESTORE_STASH_SHORT,
+                None,
+                GitIntent::RestoreStash(m.entry.commit.clone()),
+            )),
+        });
+        let text_right = if button.is_some() {
+            rect.right() - 190.0
+        } else {
+            rect.right() - 10.0
+        };
+        let clip = ui
+            .painter()
+            .with_clip_rect(Rect::from_min_max(rect.min, pos2(text_right, rect.max.y)));
+        clip.text(
+            pos2(rect.left() + 34.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(13.5),
+            p.text,
+        );
+        if let Some((label, tip, intent)) = button {
+            kit::child(ui, rect.shrink2(vec2(10.0, 4.0)), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let response = kit::button(ui, p, label, true, true);
+                    let response = match tip {
+                        Some(tip) => response.on_hover_text(tip),
+                        None => response,
+                    };
+                    if response.clicked() {
+                        out.push(intent);
+                    }
+                });
+            });
+        }
+    }
+
+    /// Bandeau « Vos commits ne sont sur aucune branche » avec « Créer une branche ici ».
+    fn show_detached_banner(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        p: &Palette,
+        text: &str,
+        out: &mut Vec<GitIntent>,
+    ) {
+        ui.painter()
+            .rect_filled(rect, 0.0, p.error.gamma_multiply(0.25));
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(16.0, 16.0)),
+            Icon::Warning,
+            p.error,
+        );
+        let clip = ui.painter().with_clip_rect(Rect::from_min_max(
+            rect.min,
+            pos2(rect.right() - 190.0, rect.max.y),
+        ));
+        clip.text(
+            pos2(rect.left() + 34.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(14.0),
+            p.text,
+        );
+        kit::child(ui, rect.shrink2(vec2(10.0, 4.0)), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if kit::button(ui, p, t::BTN_CREATE_BRANCH_HERE, true, true).clicked() {
+                    out.push(GitIntent::NewBranchHere);
+                }
+            });
+        });
     }
 
     fn show_banner(
@@ -971,7 +1185,8 @@ impl GitView {
 
         // Zone de message en bas de la colonne de gauche.
         let operation = status.operation.is_some();
-        let message_height = 112.0;
+        // Fenêtre basse (bandeaux en plus) : la zone de message cède de la place à la liste.
+        let message_height = (rect.height() - 130.0).clamp(84.0, 112.0);
         let list_rect =
             Rect::from_min_max(left.min, pos2(left.right(), left.bottom() - message_height));
         let message_rect = Rect::from_min_max(pos2(left.left(), list_rect.bottom()), left.max);
@@ -1295,11 +1510,12 @@ impl GitView {
             p.text_dim,
         );
         let kind = file.conflict;
+        let labels = self.labels();
         if let Some(kind) = kind {
             clip.text(
                 pos2(rect.right() - 8.0, rect.top() + 14.0),
                 Align2::RIGHT_CENTER,
-                t::conflict_kind(kind),
+                t::conflict_kind_for(kind, labels.yours()),
                 FontId::proportional(12.0),
                 p.text_dim,
             );
@@ -1311,12 +1527,43 @@ impl GitView {
         kit::child(ui, buttons, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let (ours_label, theirs_label) = t::keep_labels(kind);
-                if ui.small_button(ours_label).clicked() {
-                    *keep = Some((ConflictSide::Ours, file.path.clone()));
-                }
-                if ui.small_button(theirs_label).clicked() {
-                    *keep = Some((ConflictSide::Theirs, file.path.clone()));
+                // Suppressions : les boutons disent ce qui arrive au fichier, dans l'ordre des
+                // étages de Git. Sinon : « votre version » d'abord, puis ce que l'on intègre.
+                let deletion = matches!(
+                    kind,
+                    Some(ConflictKind::DeletedByThem | ConflictKind::DeletedByUs)
+                );
+                let buttons: [(ConflictSide, String, Option<String>); 2] = if deletion {
+                    let (a, b) = t::keep_labels(kind);
+                    [
+                        (ConflictSide::Ours, a.to_owned(), None),
+                        (ConflictSide::Theirs, b.to_owned(), None),
+                    ]
+                } else {
+                    let yours = labels.yours();
+                    let incoming = labels.incoming();
+                    [
+                        (
+                            yours,
+                            t::KEEP_YOURS.to_owned(),
+                            Some(t::keep_yours_tip(labels.side(yours))),
+                        ),
+                        (
+                            incoming,
+                            t::keep_incoming(labels.side(incoming)),
+                            Some(t::keep_incoming_tip(labels.side(incoming))),
+                        ),
+                    ]
+                };
+                for (side, label, tip) in buttons {
+                    let response = ui.small_button(label);
+                    let response = match tip {
+                        Some(tip) => response.on_hover_text(tip),
+                        None => response,
+                    };
+                    if response.clicked() {
+                        *keep = Some((side, file.path.clone()));
+                    }
                 }
                 let disabled = self.merge_disabled(file);
                 let busy = self.merge_loading.as_ref() == Some(&file.path);
@@ -1368,7 +1615,7 @@ impl GitView {
                 TextEdit::multiline(&mut self.message)
                     .id(self.message_id)
                     .hint_text(t::COMMIT_HINT)
-                    .desired_rows(3)
+                    .desired_rows(if rect.height() < 100.0 { 2 } else { 3 })
                     .desired_width(f32::INFINITY)
                     .font(FontId::proportional(13.5)),
             );
@@ -1510,9 +1757,12 @@ impl GitView {
                         .filter(|(_, d)| *d)
                         .map(|(f, _)| file_name(f))
                         .collect();
+                    let labels = self.labels();
+                    let yours = labels.yours() == *side;
+                    let label = labels.side(*side);
                     (
-                        t::confirm_keep_title(*side, &names),
-                        t::confirm_keep_detail(*side, &deletes),
+                        t::confirm_keep_title_for(yours, label, &names),
+                        t::confirm_keep_detail_for(yours, label, &deletes),
                     )
                 }
                 Confirm::AbortOperation(kind) => (
@@ -1602,6 +1852,42 @@ impl GitView {
             "tab": self.tab.key(),
             "files": files,
             "operation": self.status.as_ref().and_then(|s| s.operation.as_ref()).map(|o| format!("{:?}", o.kind)),
+            "conflict_labels": {
+                "yours": format!("{:?}", self.labels().yours()),
+                "ours": side_json(&self.labels().ours),
+                "theirs": side_json(&self.labels().theirs),
+                "keep_buttons": self.status.as_ref().map(|s| s.conflicts().map(|f| {
+                    let labels = self.labels();
+                    serde_json::json!({
+                        "file": f.repo_path,
+                        "kind": f.conflict.map(|c| t::conflict_kind_for(c, labels.yours())),
+                        "yours": t::KEEP_YOURS,
+                        "incoming": t::keep_incoming(labels.side(labels.incoming())),
+                    })
+                }).collect::<Vec<_>>()),
+            },
+            "pending_stashes": self.pending_stashes.iter().map(|s| serde_json::json!({
+                "message": s.message,
+                "commit": s.entry.commit,
+                "state": match s.state {
+                    PendingStashState::AwaitingOperation(k) => format!("AwaitingOperation({k:?})"),
+                    PendingStashState::OperationOver => "OperationOver".to_owned(),
+                    PendingStashState::Kept => "Kept".to_owned(),
+                },
+            })).collect::<Vec<_>>(),
+            "detached": self.detached.as_ref().map(|d| serde_json::json!({
+                "head": d.head, "orphan_commits": d.orphan_commits, "subjects": d.subjects,
+            })),
+            "banners": {
+                "stash": self.stash_banner_text(),
+                "stash_button": self.main_pending().and_then(|m| match m.state {
+                    PendingStashState::AwaitingOperation(_) => None,
+                    PendingStashState::OperationOver => Some(t::BTN_RESTORE_STASH),
+                    PendingStashState::Kept => Some(t::BTN_RESTORE_STASH_SHORT),
+                }),
+                "detached": self.detached_banner_text(),
+                "detached_button": self.detached_banner_text().map(|_| t::BTN_CREATE_BRANCH_HERE),
+            },
             "message": self.message,
             "amend": self.amend,
             "commit_pending": self.commit_pending,
@@ -1629,6 +1915,16 @@ struct RowEvent {
     toggled: bool,
     secondary: bool,
     pos: egui::Pos2,
+}
+
+fn side_json(label: &julie_vcs::SideLabel) -> serde_json::Value {
+    serde_json::json!({
+        "role": label.role.map(|r| format!("{r:?}")),
+        "name": label.name,
+        "commit": label.commit,
+        "subject": label.subject,
+        "title": t::merge_side_title(label),
+    })
 }
 
 fn kind_color(kind: FileKind, p: &Palette) -> Color32 {

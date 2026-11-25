@@ -1,0 +1,20 @@
+# Corrections m3 : « Restaurer » une branche supprimée remet aussi son amont.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> supprimer
+# Preuve en ligne de commande : git branch -vv doit montrer [origin/bugfix/crash].
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select bugfix/crash
+ui branches.menu
+ui menu.choose branch.delete
+wait 400
+ui dialog.choose delete
+wait-idle
+wait 600
+state @OUT@/supprimer-apres.json
+ui toast.action
+wait-idle
+wait 800
+state @OUT@/supprimer-restaure.json
+quit

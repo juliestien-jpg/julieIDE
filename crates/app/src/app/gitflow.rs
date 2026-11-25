@@ -9,9 +9,10 @@
 use super::*;
 
 use julie_vcs::{
-    Action as VcsAction, CreateBranchRequest, IntegrationMethod, LocalChanges, OperationOutcome,
-    OverwriteConflict, PushForce, PushRejection, PushRequest, PushTarget, Repository, ResetMode,
-    StashRestore, SwitchOutcome, SwitchRequest, SwitchTarget, UpdateRequest, VcsError,
+    Action as VcsAction, AutoStash, CreateBranchRequest, DeleteBranchOutcome, IntegrationMethod,
+    LocalChanges, MergeRequest, OperationOutcome, OverwriteConflict, PushForce, PushRejection,
+    PushRequest, PushTarget, RebaseRequest, Repository, ResetMode, StashRestore, SwitchOptions,
+    SwitchOutcome, SwitchRequest, SwitchTarget, UpdateRequest, VcsError,
 };
 
 use crate::branchui::{BranchPopup, PopupOut, WidgetInfo, WidgetKind};
@@ -20,20 +21,29 @@ use crate::safety::AfterCopy;
 use crate::target::Target;
 use crate::texts as t;
 
-/// Ce qu'il faut rejouer si la bascule est refusée puis autorisée avec mise de côté.
+/// Ce qu'il faut rejouer si l'opération est refusée (changements locaux, HEAD détachée) puis
+/// autorisée.
+#[derive(Clone)]
 pub(super) enum Pending {
     Switch(SwitchTarget),
     Create(CreateBranchRequest),
+    /// Bascule forcée (les changements ont été copiés puis jetés).
+    Force(SwitchTarget, OverwriteConflict),
+    Merge(MergeRequest),
+    Rebase(RebaseRequest),
+    CherryPick(Vec<String>),
+    Revert(Vec<String>),
 }
 
 /// Le bouton de la notification de la barre d'état.
 #[derive(Clone)]
 pub(super) enum ToastAction {
-    RestoreBranch {
-        name: String,
-        tip: String,
-    },
+    /// « Restaurer » une branche supprimée, avec son amont.
+    RestoreBranch(Box<DeleteBranchOutcome>),
+    /// « Rétablir » : remet la copie de sécurité.
     RestoreCopy(String),
+    /// « Créer une branche » sur un commit laissé sur aucune branche.
+    NewBranchAt(String),
     /// Ouvrir un fichier de réglages illisible, à la ligne de l'erreur.
     OpenFile(PathBuf, Option<u32>),
 }
@@ -66,6 +76,8 @@ fn shows_output(action: VcsAction) -> bool {
             | Unstage
             | Discard
             | Ignore
+            | SetUpstream
+            | RestoreStash
     )
 }
 
@@ -311,6 +323,10 @@ impl JulieStormApp {
                 if let Some(switched) = &outcome.switched {
                     self.after_switch(switched, false);
                 }
+                // « Créer une branche d'abord » (HEAD détachée) : la bascule demandée reprend.
+                if let Some(pending) = self.resume_after_branch.take() {
+                    self.replay_pending(pending);
+                }
             }
             VcsEvent::BranchRenamed(outcome) => {
                 self.toast(t::branch_renamed(&outcome.old, &outcome.new), false, None);
@@ -319,10 +335,7 @@ impl JulieStormApp {
                 self.toast(
                     t::branch_deleted(&outcome.name),
                     false,
-                    Some(ToastAction::RestoreBranch {
-                        name: outcome.name.clone(),
-                        tip: outcome.tip.clone(),
-                    }),
+                    Some(ToastAction::RestoreBranch(Box::new(outcome.clone()))),
                 );
                 if let Some((remote, branch)) = self.delete_remote_after.take() {
                     self.git_dialog =
@@ -360,7 +373,36 @@ impl JulieStormApp {
                 self.after_integration(outcome, false);
             }
             VcsEvent::OperationSkipped(outcome) => {
+                self.after_git_write();
+                self.op_done_text = outcome.finished.then(|| t::skipped(true));
                 self.toast(t::skipped(outcome.finished), false, None);
+            }
+            VcsEvent::OperationContinued(outcome) => {
+                self.after_git_write();
+                self.pending_switch = None;
+                if outcome.finished {
+                    self.op_done_text = Some(t::operation_done(outcome.kind));
+                }
+            }
+            VcsEvent::OperationAborted(kind) => {
+                // Le message « La fusion s'est arrêtée… » est périmé : l'abandon le remplace.
+                self.after_git_write();
+                self.after_update_push = None;
+                let text = t::operation_aborted(*kind);
+                self.op_done_text = Some(text.clone());
+                self.toast(text, false, None);
+            }
+            VcsEvent::SideAccepted { .. } => self.after_git_write(),
+            VcsEvent::StashRestored(stash) => self.on_stash_restored(stash),
+            VcsEvent::PendingStashes(list) => self.git.set_pending_stashes(list.clone()),
+            VcsEvent::DetachedHead(report) => self.git.set_detached(Some(report.clone())),
+            VcsEvent::CherryPickChecked(list) => self.on_cherry_checked(list),
+            VcsEvent::UpstreamChanged { branch, upstream } => {
+                self.toast(
+                    t::upstream_changed(branch, upstream.as_deref()),
+                    false,
+                    None,
+                );
             }
             VcsEvent::PushPreview(preview) => {
                 if let Some(GitDialog::Push(d)) = &mut self.git_dialog {
@@ -399,11 +441,27 @@ impl JulieStormApp {
             }
             VcsEvent::ResetDone(outcome) => {
                 self.git.invalidate_diff();
-                self.toast(
-                    t::reset_done(&outcome.head, outcome.stash.is_some()),
-                    false,
-                    None,
-                );
+                self.after_git_write();
+                if outcome.discarded.is_empty() {
+                    self.toast(
+                        t::reset_done(&outcome.head, outcome.stash.is_some()),
+                        false,
+                        None,
+                    );
+                } else {
+                    // « Tout jeter » sans mise de côté : on nomme ce qui est parti et la copie.
+                    let names: Vec<String> = outcome
+                        .discarded
+                        .iter()
+                        .map(|p| self.display_name(p))
+                        .collect();
+                    let copy = self.last_copy.clone();
+                    self.toast(
+                        t::reset_done_discarded(&outcome.head, &names),
+                        false,
+                        copy.map(ToastAction::RestoreCopy),
+                    );
+                }
             }
             VcsEvent::Staged { paths } => self.toast(t::staged(paths.len()), false, None),
             VcsEvent::Unstaged { paths } => self.toast(t::unstaged(paths.len()), false, None),
@@ -418,6 +476,8 @@ impl JulieStormApp {
                         julie_text::spawn_load(&self.tasks, path.clone());
                     }
                 }
+                // Un fichier supprimé qui revient : l'arbre le montre.
+                self.tree.refresh();
                 self.git.invalidate_diff();
                 let copy = self.last_copy.take();
                 self.toast(
@@ -439,23 +499,93 @@ impl JulieStormApp {
         }
     }
 
+    /// Nom d'un fichier pour les messages : relatif au projet, séparateurs `/`.
+    pub(super) fn display_name(&self, path: &Path) -> String {
+        let root = self.project_root().unwrap_or_default();
+        relative_to(&root, path)
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    }
+
+    /// Après toute écriture de Git qui touche aux fichiers (bascule, mise de côté, rebase,
+    /// reset, pull…) : l'arbre, les onglets ouverts, les diffs et l'index se relisent.
+    pub(super) fn after_git_write(&mut self) {
+        self.tree.refresh();
+        self.editors.check_disk(&self.tasks);
+        self.git.invalidate_diff();
+        self.git.reset_log_now();
+        self.cherry_presence.clear();
+        if let Some(project) = &mut self.project {
+            // Pas de surveillance du disque dans l'index : on le relit (Aller au fichier,
+            // recherche). Une relecture déjà en cours suffit.
+            if self.scan_task.is_none() || project.index_ready {
+                project.index_ready = false;
+                self.scan_task = Some(project.index.scan().id());
+            }
+        }
+    }
+
     fn after_switch(&mut self, outcome: &SwitchOutcome, announce: bool) {
         self.git.invalidate_diff();
+        self.after_git_write();
         let name = outcome
             .branch
             .clone()
             .unwrap_or_else(|| outcome.head.chars().take(7).collect());
-        // Des changements locaux existaient avant la bascule : ils ont suivi (ou ont été remis).
-        let mut followed = self.git_status().is_some_and(|s| !s.files.is_empty());
+        // Les changements locaux d'avant la bascule, moins ceux qui ont été jetés : ce qui a
+        // vraiment suivi (l'état est celui d'avant l'opération).
+        let discarded: Vec<String> = outcome
+            .discarded
+            .iter()
+            .map(|p| self.display_name(p))
+            .collect();
+        let followed: Vec<String> = self
+            .git_status()
+            .map(|s| {
+                s.files
+                    .iter()
+                    .map(|f| f.repo_path.clone())
+                    .filter(|name| !discarded.contains(name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut text: Option<String> = None;
         if let Some(stash) = &outcome.stash {
             match &stash.restore {
-                StashRestore::Restored => followed = true,
-                StashRestore::Conflicts(_) | StashRestore::Pending | StashRestore::Failed(_) => {
+                StashRestore::Restored => {
+                    text = Some(t::stash_restored(Some(&if outcome.created {
+                        format!("Branche locale {name} créée et basculée")
+                    } else {
+                        format!("Basculé sur {name}")
+                    })));
+                }
+                StashRestore::Conflicts(_) => {
+                    self.show_git_changes();
+                    self.toast(t::stash_restored_conflicts(&stash.message), true, None);
+                    return;
+                }
+                StashRestore::Failed(output) => {
+                    self.show_git_changes();
+                    self.open_message(
+                        t::STASH_RESTORE_FAILED_TITLE.to_owned(),
+                        output.clone(),
+                        true,
+                        Vec::new(),
+                    );
+                    self.toast(t::stash_restore_failed(&stash.message), true, None);
+                    return;
+                }
+                StashRestore::Pending => {
                     self.show_git_changes();
                     self.toast(t::stash_kept(&stash.message), true, None);
                     return;
                 }
                 StashRestore::Kept => {}
+            }
+            if let Some(note) = self.untracked_note(stash) {
+                self.toast(note, false, None);
+                return;
             }
         }
         if let Some(output) = &outcome.hook_output {
@@ -466,36 +596,149 @@ impl JulieStormApp {
                 Vec::new(),
             );
         }
-        if let Some(behind) = outcome.behind_upstream.filter(|n| *n > 0) {
+        let mut action = None;
+        if !discarded.is_empty() {
+            // Forcer la bascule : on dit ce qui a été jeté et on propose « Rétablir ».
+            let mut forced = t::switched_forced(&name, &discarded, &followed);
+            if let Some((n, commit)) = &outcome.left_detached {
+                let short: String = commit.chars().take(7).collect();
+                forced.push(' ');
+                forced.push_str(&t::left_detached_suffix(*n, &short));
+            }
+            text = Some(forced);
+            action = self.last_copy.clone().map(ToastAction::RestoreCopy);
+        } else if let Some((n, commit)) = &outcome.left_detached {
+            let short: String = commit.chars().take(7).collect();
+            text = Some(t::switched_left_detached(&name, *n, &short));
+            action = Some(ToastAction::NewBranchAt(commit.clone()));
+        }
+        if let Some(text) = text {
+            self.toast(text, false, action);
+        } else if let Some(behind) = outcome.behind_upstream.filter(|n| *n > 0) {
             self.toast(t::switched_behind(&name, behind), false, None);
         } else if announce {
-            self.toast(t::switched(&name, outcome.created, followed), false, None);
+            self.toast(
+                t::switched_followed(&name, outcome.created, &followed),
+                false,
+                None,
+            );
+        }
+    }
+
+    /// Fichiers non suivis que la remise n'a pas pu rendre : leur version reste dans la mise de côté.
+    fn untracked_note(&self, stash: &AutoStash) -> Option<String> {
+        (!stash.untracked_not_restored.is_empty()).then(|| {
+            let names: Vec<String> = stash
+                .untracked_not_restored
+                .iter()
+                .map(|p| self.display_name(p))
+                .collect();
+            t::untracked_not_restored(&names, &stash.message)
+        })
+    }
+
+    /// Une mise de côté remise : après `Continuer`, `Passer`, `Abandonner`, ou sur demande.
+    fn on_stash_restored(&mut self, stash: &AutoStash) {
+        self.after_git_write();
+        let done = self.op_done_text.take();
+        match &stash.restore {
+            StashRestore::Restored => {
+                let text = self
+                    .untracked_note(stash)
+                    .unwrap_or_else(|| t::stash_restored(done.as_deref()));
+                self.toast(text, false, None);
+            }
+            StashRestore::Conflicts(_) => {
+                self.show_git_changes();
+                self.toast(t::stash_restored_conflicts(&stash.message), true, None);
+            }
+            StashRestore::Failed(output) => {
+                self.show_git_changes();
+                self.open_message(
+                    t::STASH_RESTORE_FAILED_TITLE.to_owned(),
+                    output.clone(),
+                    true,
+                    Vec::new(),
+                );
+                self.toast(t::stash_restore_failed(&stash.message), true, None);
+            }
+            StashRestore::Pending | StashRestore::Kept => {}
+        }
+    }
+
+    /// Présence des commits dans la branche courante : grise « Cherry-pick » dans le menu ouvert.
+    fn on_cherry_checked(&mut self, list: &[(String, julie_vcs::CommitPresence)]) {
+        for (commit, presence) in list {
+            self.cherry_presence.insert(commit.clone(), *presence);
+        }
+        let Some(Target::Commit(commit)) = self.ctx_target.clone() else {
+            return;
+        };
+        if let (Some(menu), Some(presence)) =
+            (&mut self.ctx_menu, self.cherry_presence.get(&commit.id))
+        {
+            if presence.is_present() {
+                for entry in &mut menu.entries {
+                    if entry.id == Some(ActionId::LogCherryPick) {
+                        entry.disabled = Some(t::REASON_ALREADY_APPLIED.to_owned());
+                    }
+                }
+            }
         }
     }
 
     fn after_integration(&mut self, outcome: &OperationOutcome, update: bool) {
         self.git.invalidate_diff();
         self.git.reset_log_now();
+        // « Déjà à jour » : rien n'a bougé sur le disque.
+        if !outcome.up_to_date {
+            self.after_git_write();
+        }
         self.net_progress = None;
+        self.pending_switch = None;
+        let pending = outcome
+            .stash
+            .as_ref()
+            .is_some_and(|s| matches!(s.restore, StashRestore::Pending));
         if !outcome.finished {
             self.after_update_push = None;
             self.show_git_changes();
-            self.toast(
-                t::operation_stopped(outcome.kind, outcome.conflicts.len()),
-                true,
-                None,
-            );
+            let text = if pending {
+                // Les changements mis de côté reviendront à la fin : on le dit.
+                t::operation_stopped_with_stash(outcome.kind, outcome.conflicts.len())
+            } else {
+                t::operation_stopped(outcome.kind, outcome.conflicts.len())
+            };
+            self.toast(text, true, None);
             return;
         }
         if let Some(stash) = &outcome.stash {
-            if matches!(
-                stash.restore,
-                StashRestore::Conflicts(_) | StashRestore::Pending | StashRestore::Failed(_)
-            ) {
-                self.after_update_push = None;
-                self.show_git_changes();
-                self.toast(t::stash_kept(&stash.message), true, None);
-                return;
+            match &stash.restore {
+                StashRestore::Conflicts(_) => {
+                    self.after_update_push = None;
+                    self.show_git_changes();
+                    self.toast(t::stash_restored_conflicts(&stash.message), true, None);
+                    return;
+                }
+                StashRestore::Failed(output) => {
+                    self.after_update_push = None;
+                    self.show_git_changes();
+                    self.open_message(
+                        t::STASH_RESTORE_FAILED_TITLE.to_owned(),
+                        output.clone(),
+                        true,
+                        Vec::new(),
+                    );
+                    self.toast(t::stash_restore_failed(&stash.message), true, None);
+                    return;
+                }
+                StashRestore::Pending => {
+                    self.after_update_push = None;
+                    self.show_git_changes();
+                    self.toast(t::stash_kept(&stash.message), true, None);
+                    return;
+                }
+                StashRestore::Restored | StashRestore::Kept => {}
             }
         }
         if update {
@@ -506,7 +749,7 @@ impl JulieStormApp {
                 }
             }
         }
-        let text = if outcome.up_to_date {
+        let mut text = if outcome.up_to_date {
             t::UP_TO_DATE.to_owned()
         } else {
             t::integrated(
@@ -516,6 +759,17 @@ impl JulieStormApp {
                 outcome.fast_forward,
             )
         };
+        if let Some(stash) = &outcome.stash {
+            if matches!(stash.restore, StashRestore::Restored) {
+                text = t::stash_restored(Some(&text));
+            }
+            if let Some(note) = self.untracked_note(stash) {
+                text = note;
+            }
+        }
+        if !outcome.empty_skipped.is_empty() {
+            text = format!("{text} {}", t::empty_skipped(outcome.empty_skipped.len()));
+        }
         self.toast(text, false, None);
     }
 
@@ -525,8 +779,32 @@ impl JulieStormApp {
         self.net_progress = None;
         match (&failure.action, &failure.error) {
             (VcsAction::CheckBranchName, _) => true,
-            (VcsAction::Switch | VcsAction::CreateBranch, VcsError::WouldOverwrite(conflict)) => {
+            (
+                VcsAction::Switch
+                | VcsAction::CreateBranch
+                | VcsAction::Merge
+                | VcsAction::Rebase
+                | VcsAction::CherryPick
+                | VcsAction::Revert,
+                VcsError::WouldOverwrite(conflict),
+            ) => {
                 self.open_switch_overwrite(conflict.clone());
+                true
+            }
+            (
+                VcsAction::Switch | VcsAction::CreateBranch,
+                VcsError::DetachedCommitsLeft {
+                    head,
+                    count,
+                    subjects,
+                },
+            ) => {
+                self.open_detached_left(head.clone(), *count, subjects.clone());
+                true
+            }
+            (VcsAction::CherryPick | VcsAction::Revert, VcsError::AlreadyApplied { commits }) => {
+                self.pending_switch = None;
+                self.toast(t::already_applied(commits), true, None);
                 true
             }
             (
@@ -557,21 +835,16 @@ impl JulieStormApp {
                 true
             }
             (_, VcsError::NoUpstream { branch }) => {
-                self.open_message(
-                    t::NO_UPSTREAM_TITLE.to_owned(),
-                    t::no_upstream_text(branch),
-                    false,
-                    vec![("push_new", t::BTN_PUSH_TO_CREATE.to_owned())],
-                );
+                self.open_no_upstream(branch);
                 true
             }
             (_, VcsError::UpstreamGone { branch, upstream }) => {
-                self.open_message(
-                    t::UPSTREAM_GONE_TITLE.to_owned(),
-                    t::upstream_gone_text(branch, upstream),
-                    false,
-                    vec![("push_new", t::BTN_PUSH_TO_RECREATE.to_owned())],
-                );
+                self.open_upstream_gone(branch, upstream);
+                true
+            }
+            (_, VcsError::GitNotFound { program }) => {
+                self.after_update_push = None;
+                self.toast(t::git_not_found(program), true, None);
                 true
             }
             (_, VcsError::DetachedHead) => {
@@ -656,17 +929,249 @@ impl JulieStormApp {
     fn open_switch_overwrite(&mut self, conflict: OverwriteConflict) {
         let root = self.project_root().unwrap_or_default();
         let files: Vec<PathBuf> = conflict.files().map(|f| relative_to(&root, f)).collect();
-        let (target, can_force) = match &self.pending_switch {
-            Some(Pending::Switch(target)) => (target_label(target), true),
-            Some(Pending::Create(request)) => (request.name.clone(), false),
-            None => (String::new(), false),
+        let short = |id: &str| id.chars().take(7).collect::<String>();
+        let (target, can_force, what, verb, is_switch) = match &self.pending_switch {
+            Some(Pending::Switch(target)) => {
+                let label = target_label(target);
+                (
+                    label.clone(),
+                    true,
+                    format!("la bascule vers {label}"),
+                    "basculer".to_owned(),
+                    true,
+                )
+            }
+            Some(Pending::Create(request)) => (
+                request.name.clone(),
+                false,
+                format!("la bascule vers {}", request.name),
+                "basculer".to_owned(),
+                true,
+            ),
+            Some(Pending::Merge(request)) => (
+                request.revision.clone(),
+                false,
+                format!("la fusion de {}", request.revision),
+                "fusionner".to_owned(),
+                false,
+            ),
+            Some(Pending::Rebase(request)) => (
+                request.onto.clone(),
+                false,
+                format!("le rebase sur {}", request.onto),
+                "rebaser".to_owned(),
+                false,
+            ),
+            Some(Pending::CherryPick(commits)) => {
+                let label = commits
+                    .iter()
+                    .map(|c| short(c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    label.clone(),
+                    false,
+                    format!("le cherry-pick de {label}"),
+                    "reprendre le commit".to_owned(),
+                    false,
+                )
+            }
+            Some(Pending::Revert(commits)) => {
+                let label = commits
+                    .iter()
+                    .map(|c| short(c))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    label.clone(),
+                    false,
+                    format!("le revert de {label}"),
+                    "annuler le commit".to_owned(),
+                    false,
+                )
+            }
+            Some(Pending::Force(..)) | None => {
+                (String::new(), false, String::new(), String::new(), true)
+            }
         };
         self.git_dialog = Some(GitDialog::SwitchOverwrite(gd::SwitchOverwrite {
             target,
             files,
             conflict,
             can_force,
+            what,
+            verb,
+            is_switch,
         }));
+    }
+
+    /// Quitter une HEAD détachée qui porte des commits sur aucune branche.
+    fn open_detached_left(&mut self, head: String, count: u32, subjects: Vec<String>) {
+        let (target, can_anyway) = match &self.pending_switch {
+            Some(Pending::Switch(target)) | Some(Pending::Force(target, _)) => {
+                (target_label(target), true)
+            }
+            Some(Pending::Create(request)) => (request.name.clone(), false),
+            _ => (String::new(), false),
+        };
+        self.git_dialog = Some(GitDialog::DetachedLeft(gd::DetachedLeft {
+            target,
+            head,
+            count,
+            subjects,
+            can_anyway,
+        }));
+    }
+
+    /// « Pas d'amont » : dit avant de demander fusion ou rebase, avec « Choisir l'amont… ».
+    pub(super) fn open_no_upstream(&mut self, branch: &str) {
+        self.branch_popup = None;
+        self.open_message(
+            t::NO_UPSTREAM_TITLE.to_owned(),
+            t::no_upstream_text(branch),
+            false,
+            vec![
+                ("choose_upstream", t::BTN_CHOOSE_UPSTREAM.to_owned()),
+                ("push_new", t::BTN_PUSH_TO_CREATE.to_owned()),
+            ],
+        );
+    }
+
+    pub(super) fn open_upstream_gone(&mut self, branch: &str, upstream: &str) {
+        self.branch_popup = None;
+        self.open_message(
+            t::UPSTREAM_GONE_TITLE.to_owned(),
+            t::upstream_gone_text(branch, upstream),
+            false,
+            vec![
+                ("push_new", t::BTN_PUSH_TO_RECREATE.to_owned()),
+                ("remove_upstream", t::BTN_REMOVE_UPSTREAM.to_owned()),
+                ("choose_upstream", t::BTN_CHOOSE_UPSTREAM.to_owned()),
+            ],
+        );
+    }
+
+    /// « Choisir l'amont… » : la liste des branches distantes connues.
+    pub(super) fn open_set_upstream(&mut self, branch: String) {
+        let choices: Vec<String> = self
+            .branches
+            .as_ref()
+            .map(|l| l.remote.iter().map(|b| b.name.clone()).collect())
+            .unwrap_or_default();
+        if choices.is_empty() {
+            self.toast(t::REASON_NO_REMOTE_BRANCH, true, None);
+            return;
+        }
+        let guess = choices
+            .iter()
+            .position(|c| c.split_once('/').map(|(_, b)| b) == Some(branch.as_str()))
+            .unwrap_or(0);
+        self.branch_popup = None;
+        self.git_dialog = Some(GitDialog::SetUpstream(gd::SetUpstream {
+            branch,
+            choices,
+            selected: guess,
+        }));
+    }
+
+    /// « Voir le diff avec l'arbre de travail » : ouvre la liste, la lecture part en tâche de fond.
+    pub(super) fn open_diff_worktree(&mut self, branch: String) {
+        let (Some(root), Some((vcs, _))) = (self.project_root(), self.vcs_pair()) else {
+            return;
+        };
+        self.branch_popup = None;
+        self.git_dialog = Some(GitDialog::DiffWorktree(gd::DiffWorktree {
+            branch: branch.clone(),
+            files: None,
+            selected: 0,
+            error: None,
+        }));
+        project::spawn_diff_worktree(
+            root,
+            vcs.git().program().to_owned(),
+            branch,
+            self.channel.clone(),
+        );
+    }
+
+    pub(super) fn on_diff_worktree(
+        &mut self,
+        branch: String,
+        result: Result<Vec<(String, PathBuf)>, String>,
+    ) {
+        if let Some(GitDialog::DiffWorktree(d)) = &mut self.git_dialog {
+            if d.branch == branch {
+                match result {
+                    Ok(files) => d.files = Some(files),
+                    Err(error) => d.error = Some(error),
+                }
+            }
+        }
+    }
+
+    /// Le diff du fichier choisi dans la liste : branche à gauche, disque à droite.
+    fn open_worktree_diff(&mut self, d: &gd::DiffWorktree) {
+        let (Some(root), Some(files)) = (self.project_root(), &d.files) else {
+            return;
+        };
+        let Some((_, relative)) = files.get(d.selected) else {
+            return;
+        };
+        let request = julie_vcs::DiffRequest {
+            path: root.join(relative),
+            left_path: None,
+            left: julie_vcs::Revision::Commit(d.branch.clone()),
+            right: julie_vcs::Revision::WorkTree,
+        };
+        self.run_git_intents(vec![GitIntent::RequestDiff {
+            request,
+            job: DiffJob {
+                target: DiffTarget::Window,
+                token: 0,
+            },
+        }]);
+    }
+
+    /// Rejoue une demande mise de côté (après « Créer une branche d'abord »).
+    fn replay_pending(&mut self, pending: Pending) {
+        match pending {
+            Pending::Switch(target) => self.request_switch(target, LocalChanges::Keep),
+            Pending::Merge(request) => self.run_merge(request),
+            Pending::Rebase(request) => self.run_rebase(request),
+            Pending::CherryPick(commits) => self.run_cherry_pick(commits, LocalChanges::Keep),
+            Pending::Revert(commits) => self.run_revert(commits, LocalChanges::Keep),
+            Pending::Create(_) | Pending::Force(..) => {}
+        }
+    }
+
+    // ----- Opérations qui peuvent être refusées pour des changements locaux ---------------------
+
+    pub(super) fn run_merge(&mut self, request: MergeRequest) {
+        if let Some((vcs, repo)) = self.vcs_pair() {
+            self.pending_switch = Some(Pending::Merge(request.clone()));
+            vcs.merge(&repo, request);
+        }
+    }
+
+    pub(super) fn run_rebase(&mut self, request: RebaseRequest) {
+        if let Some((vcs, repo)) = self.vcs_pair() {
+            self.pending_switch = Some(Pending::Rebase(request.clone()));
+            vcs.rebase(&repo, request);
+        }
+    }
+
+    pub(super) fn run_cherry_pick(&mut self, commits: Vec<String>, local: LocalChanges) {
+        if let Some((vcs, repo)) = self.vcs_pair() {
+            self.pending_switch = Some(Pending::CherryPick(commits.clone()));
+            vcs.cherry_pick(&repo, commits, local);
+        }
+    }
+
+    pub(super) fn run_revert(&mut self, commits: Vec<String>, local: LocalChanges) {
+        if let Some((vcs, repo)) = self.vcs_pair() {
+            self.pending_switch = Some(Pending::Revert(commits.clone()));
+            vcs.revert_commits(&repo, commits, local);
+        }
     }
 
     // ----- Demandes --------------------------------------------------------------
@@ -759,6 +1264,14 @@ impl JulieStormApp {
             self.toast(t::DETACHED_NOT_POSSIBLE, true, None);
             return;
         };
+        // Pas d'amont, ou amont supprimé : on le dit **avant** de demander fusion ou rebase.
+        match self.git_status().and_then(|s| s.upstream.clone()) {
+            None => return self.open_no_upstream(&branch),
+            Some(up) if up.ahead_behind.is_none() => {
+                return self.open_upstream_gone(&branch, &up.name)
+            }
+            Some(_) => {}
+        }
         match self.update_method {
             Some(method) => self.do_update(method),
             None => {
@@ -857,6 +1370,7 @@ impl JulieStormApp {
             return;
         }
         if matches!(key, "cancel" | "close") {
+            self.resume_after_branch = None;
             self.focus_editor();
             return;
         }
@@ -915,7 +1429,21 @@ impl JulieStormApp {
                             self.pending_switch = Some(Pending::Create(request.clone()));
                             vcs.create_branch(&repo, request);
                         }
-                        None => {}
+                        Some(Pending::Merge(mut request)) => {
+                            request.local_changes = LocalChanges::Stash;
+                            self.run_merge(request);
+                        }
+                        Some(Pending::Rebase(mut request)) => {
+                            request.local_changes = LocalChanges::Stash;
+                            self.run_rebase(request);
+                        }
+                        Some(Pending::CherryPick(commits)) => {
+                            self.run_cherry_pick(commits, LocalChanges::Stash);
+                        }
+                        Some(Pending::Revert(commits)) => {
+                            self.run_revert(commits, LocalChanges::Stash);
+                        }
+                        Some(Pending::Force(..)) | None => {}
                     }
                 }
                 let _ = d;
@@ -952,6 +1480,48 @@ impl JulieStormApp {
                         self.channel.clone(),
                     );
                 }
+            }
+            (GitDialog::DetachedLeft(_), "create_first") => {
+                // Même commit, rien ne bouge : la branche garde les commits, puis la bascule reprend.
+                self.resume_after_branch = self.pending_switch.take();
+                self.open_new_branch(None, "HEAD".to_owned());
+            }
+            (GitDialog::DetachedLeft(_), "anyway") => {
+                if let Some((vcs, repo)) = pair {
+                    let options = SwitchOptions {
+                        leave_detached_commits: true,
+                    };
+                    match &self.pending_switch {
+                        Some(Pending::Switch(target)) => {
+                            vcs.switch_branch_with(
+                                &repo,
+                                SwitchRequest {
+                                    target: target.clone(),
+                                    local_changes: LocalChanges::Keep,
+                                },
+                                options,
+                            );
+                        }
+                        Some(Pending::Force(target, conflict)) => {
+                            vcs.switch_discarding_changes_with(
+                                &repo,
+                                target.clone(),
+                                conflict.clone(),
+                                options,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            (GitDialog::SetUpstream(d), "set_upstream") => {
+                if let (Some((vcs, repo)), Some(choice)) = (pair, d.choices.get(d.selected)) {
+                    vcs.set_upstream(&repo, d.branch.clone(), Some(choice.clone()));
+                }
+            }
+            (GitDialog::DiffWorktree(d), "open_diff") => {
+                // La liste se ferme : le diff s'ouvre dans la grande fenêtre.
+                self.open_worktree_diff(d);
             }
             (GitDialog::UpdateMethod(d), "merge" | "rebase") => {
                 let method = if key == "merge" {
@@ -1124,6 +1694,16 @@ impl JulieStormApp {
                 }
             }
             (GitDialog::Message(_), "push_new") => self.open_push_dialog(None),
+            (GitDialog::Message(_), "choose_upstream") => {
+                if let Some(branch) = self.current_branch() {
+                    self.open_set_upstream(branch);
+                }
+            }
+            (GitDialog::Message(_), "remove_upstream") => {
+                if let (Some((vcs, repo)), Some(branch)) = (pair, self.current_branch()) {
+                    vcs.set_upstream(&repo, branch, None);
+                }
+            }
             _ => {}
         }
     }
@@ -1150,7 +1730,7 @@ impl JulieStormApp {
                 vcs.discard_changes(&repo, paths);
             }
             AfterCopy::ForceSwitch { target, conflict } => {
-                self.pending_switch = None;
+                self.pending_switch = Some(Pending::Force(target.clone(), conflict.clone()));
                 vcs.switch_discarding_changes(&repo, target, conflict);
             }
             AfterCopy::ResetHard {
@@ -1168,10 +1748,15 @@ impl JulieStormApp {
             return;
         };
         match action {
-            ToastAction::RestoreBranch { name, tip } => {
+            ToastAction::RestoreBranch(outcome) => {
+                // Avec l'amont d'avant la suppression (m3 de la recette).
                 if let Some((vcs, repo)) = self.vcs_pair() {
-                    vcs.restore_branch(&repo, name, tip);
+                    vcs.restore_deleted_branch(&repo, *outcome);
                 }
+            }
+            ToastAction::NewBranchAt(commit) => {
+                let short: String = commit.chars().take(7).collect();
+                self.open_new_branch(Some(commit), short);
             }
             ToastAction::RestoreCopy(id) => {
                 if let Some(root) = self.project_root() {
@@ -1225,8 +1810,11 @@ impl JulieStormApp {
             "toast": self.message.as_ref().map(|m| serde_json::json!({
                 "text": m.text, "error": m.error,
                 "action": m.action.as_ref().map(|a| match a {
-                    ToastAction::RestoreBranch { name, .. } => format!("restore_branch:{name}"),
+                    ToastAction::RestoreBranch(outcome) => {
+                        format!("restore_branch:{}", outcome.name)
+                    }
                     ToastAction::RestoreCopy(id) => format!("restore_copy:{id}"),
+                    ToastAction::NewBranchAt(commit) => format!("new_branch_at:{commit}"),
                     ToastAction::OpenFile(path, _) => format!("open_file:{}", path.display()),
                 }),
             })),

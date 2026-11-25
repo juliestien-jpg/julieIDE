@@ -89,6 +89,11 @@ pub enum Msg {
         from: PathBuf,
         to: PathBuf,
     },
+    /// Les fichiers qui diffèrent entre une branche et le disque (statut, chemin relatif).
+    DiffWorktree {
+        branch: String,
+        result: Result<Vec<(String, PathBuf)>, String>,
+    },
 }
 
 /// Ce que la corbeille a répondu (`julie_core::trash`).
@@ -305,6 +310,55 @@ pub fn spawn_safety_copy(root: PathBuf, files: Vec<PathBuf>, then: AfterCopy, ch
         let result = safety::copy(&root, then.reason(), &files);
         channel.send(Msg::SafetyCopied { then, result });
     });
+}
+
+/// Les fichiers qui diffèrent entre `branch` et l'arbre de travail (`git diff --name-status`),
+/// lus dans un fil, puis `Msg::DiffWorktree`.
+///
+/// `julie-vcs` n'a pas (encore) cet appel : l'interface lance elle-même la commande de
+/// lecture seule, avec le même exécutable que le service.
+pub fn spawn_diff_worktree(
+    root: PathBuf,
+    git: std::ffi::OsString,
+    branch: String,
+    channel: Channel,
+) {
+    std::thread::spawn(move || {
+        let result = diff_worktree(&root, &git, &branch);
+        channel.send(Msg::DiffWorktree { branch, result });
+    });
+}
+
+fn diff_worktree(
+    root: &Path,
+    git: &std::ffi::OsStr,
+    branch: &str,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err(format!("nom de branche refusé : « {branch} »"));
+    }
+    let mut command = std::process::Command::new(git);
+    command
+        .current_dir(root)
+        .args(["diff", "--name-status", "-z", "--no-renames"])
+        .arg(branch)
+        .arg("--");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut tokens = text.split('\0').filter(|t| !t.is_empty());
+    let mut files = Vec::new();
+    while let (Some(status), Some(path)) = (tokens.next(), tokens.next()) {
+        files.push((status.to_owned(), PathBuf::from(path.replace('/', "\\"))));
+    }
+    Ok(files)
 }
 
 /// Rétablit une copie de sécurité dans un fil, puis `Msg::Notice`.

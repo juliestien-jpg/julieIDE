@@ -105,6 +105,38 @@ pub struct SwitchOverwrite {
     pub conflict: OverwriteConflict,
     /// « Forcer la bascule » n'existe que pour une bascule (pas pour une création).
     pub can_force: bool,
+    /// Ce qui est refusé, dit pour le titre : « la bascule vers X », « la fusion de X »…
+    pub what: String,
+    /// Le verbe du bouton « Mettre de côté et … » (« basculer », « fusionner »…).
+    pub verb: String,
+    /// C'est une bascule (les textes historiques de la bascule s'appliquent).
+    pub is_switch: bool,
+}
+
+/// Quitter une HEAD détachée qui porte des commits sur aucune branche.
+pub struct DetachedLeft {
+    pub target: String,
+    pub head: String,
+    pub count: u32,
+    pub subjects: Vec<String>,
+    /// « Basculer quand même » n'existe que pour une bascule.
+    pub can_anyway: bool,
+}
+
+/// « Choisir l'amont… » : la liste des branches distantes.
+pub struct SetUpstream {
+    pub branch: String,
+    pub choices: Vec<String>,
+    pub selected: usize,
+}
+
+/// « Voir le diff avec l'arbre de travail » : les fichiers qui diffèrent.
+pub struct DiffWorktree {
+    pub branch: String,
+    /// `None` : en cours de lecture. (statut, chemin relatif)
+    pub files: Option<Vec<(String, PathBuf)>>,
+    pub selected: usize,
+    pub error: Option<String>,
 }
 
 pub struct ForceSwitch {
@@ -195,6 +227,9 @@ pub enum Dialog {
     NewBranch(NewBranch),
     Rename(Rename),
     SwitchOverwrite(SwitchOverwrite),
+    DetachedLeft(DetachedLeft),
+    SetUpstream(SetUpstream),
+    DiffWorktree(DiffWorktree),
     ForceSwitch(ForceSwitch),
     UpdateMethod(UpdateMethod),
     Push(Push),
@@ -218,6 +253,9 @@ impl Dialog {
             Dialog::NewBranch(_) => "new_branch",
             Dialog::Rename(_) => "rename",
             Dialog::SwitchOverwrite(_) => "switch_overwrite",
+            Dialog::DetachedLeft(_) => "detached_left",
+            Dialog::SetUpstream(_) => "set_upstream",
+            Dialog::DiffWorktree(_) => "diff_worktree",
             Dialog::ForceSwitch(_) => "force_switch",
             Dialog::UpdateMethod(_) => "update_method",
             Dialog::Push(_) => "push",
@@ -236,7 +274,10 @@ impl Dialog {
         match self {
             Dialog::NewBranch(_) => t::DLG_NEW_BRANCH.to_owned(),
             Dialog::Rename(d) => t::dlg_rename(&d.old),
-            Dialog::SwitchOverwrite(d) => t::dlg_switch_overwrite(&d.target),
+            Dialog::SwitchOverwrite(d) => t::dlg_overwrite_for(&d.what),
+            Dialog::DetachedLeft(d) => t::dlg_detached_left(d.count),
+            Dialog::SetUpstream(d) => t::dlg_set_upstream(&d.branch),
+            Dialog::DiffWorktree(d) => t::dlg_diff_worktree(&d.branch),
             Dialog::ForceSwitch(_) => t::DLG_FORCE_SWITCH.to_owned(),
             Dialog::UpdateMethod(_) => t::DLG_UPDATE_METHOD.to_owned(),
             Dialog::Push(d) => t::dlg_push(&d.branch),
@@ -254,7 +295,11 @@ impl Dialog {
     fn width(&self) -> f32 {
         match self {
             Dialog::Push(_) => 680.0,
-            Dialog::Message(_) | Dialog::Reset(_) | Dialog::DeleteUnmerged(_) => 560.0,
+            Dialog::Message(_)
+            | Dialog::Reset(_)
+            | Dialog::DeleteUnmerged(_)
+            | Dialog::DetachedLeft(_)
+            | Dialog::DiffWorktree(_) => 560.0,
             _ => 470.0,
         }
     }
@@ -286,13 +331,39 @@ impl Dialog {
                 ]
             }
             Dialog::SwitchOverwrite(d) => {
-                let mut buttons = vec![Btn::new("stash", t::BTN_STASH_AND_SWITCH).primary()];
+                let label = if d.is_switch {
+                    t::BTN_STASH_AND_SWITCH.to_owned()
+                } else {
+                    t::stash_and(&d.verb)
+                };
+                let mut buttons = vec![Btn::new("stash", label).primary()];
                 if d.can_force {
                     buttons.push(Btn::new("force", t::BTN_FORCE_SWITCH).danger());
                 }
                 buttons.push(cancel);
                 buttons
             }
+            Dialog::DetachedLeft(d) => {
+                let mut buttons =
+                    vec![Btn::new("create_first", t::BTN_CREATE_BRANCH_FIRST).primary()];
+                if d.can_anyway {
+                    buttons.push(Btn::new("anyway", t::BTN_SWITCH_ANYWAY).danger());
+                }
+                buttons.push(cancel);
+                buttons
+            }
+            Dialog::SetUpstream(d) => vec![
+                Btn::new("set_upstream", t::BTN_SET_UPSTREAM)
+                    .primary()
+                    .when(!d.choices.is_empty(), t::UPSTREAM_PICK_NONE),
+                cancel,
+            ],
+            Dialog::DiffWorktree(d) => vec![
+                Btn::new("open_diff", t::BTN_OPEN_DIFF)
+                    .primary()
+                    .when(d.files.as_ref().is_some_and(|f| !f.is_empty()), ""),
+                Btn::new("close", t::CLOSE),
+            ],
             Dialog::ForceSwitch(_) => vec![
                 cancel.primary(),
                 Btn::new("force_confirm", t::BTN_FORCE_AND_DISCARD).danger(),
@@ -409,6 +480,20 @@ impl Dialog {
             (Dialog::Push(d), "commit") => {
                 d.selected = value.parse::<usize>().map_err(|_| "numéro attendu")?
             }
+            (Dialog::SetUpstream(d), "upstream") => {
+                d.selected = d
+                    .choices
+                    .iter()
+                    .position(|c| c == value)
+                    .ok_or_else(|| format!("amont inconnu : « {value} »"))?;
+            }
+            (Dialog::DiffWorktree(d), "file") => {
+                let files = d.files.as_ref().ok_or("la liste n'est pas encore lue")?;
+                d.selected = files
+                    .iter()
+                    .position(|(_, p)| p.to_string_lossy().replace('\\', "/") == value)
+                    .ok_or_else(|| format!("fichier absent de la liste : « {value} »"))?;
+            }
             (Dialog::DeleteBranch(d), "also_remote") => d.also_remote = flag()?,
             (Dialog::Discard(d), "delete_added") => d.delete_added = flag()?,
             (Dialog::Reset(d), "stash_first") => d.stash_first = flag()?,
@@ -452,7 +537,24 @@ impl Dialog {
             }),
             Dialog::SwitchOverwrite(d) => serde_json::json!({
                 "target": d.target,
+                "what": d.what,
+                "verb": d.verb,
                 "files": d.files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+            }),
+            Dialog::DetachedLeft(d) => serde_json::json!({
+                "target": d.target, "head": d.head, "count": d.count, "subjects": d.subjects,
+                "can_anyway": d.can_anyway,
+            }),
+            Dialog::SetUpstream(d) => serde_json::json!({
+                "branch": d.branch, "choices": d.choices,
+                "selected": d.choices.get(d.selected),
+            }),
+            Dialog::DiffWorktree(d) => serde_json::json!({
+                "branch": d.branch, "loaded": d.files.is_some(), "error": d.error,
+                "files": d.files.as_ref().map(|f| f.iter()
+                    .map(|(s, p)| format!("{s} {}", p.display().to_string().replace('\\', "/")))
+                    .collect::<Vec<_>>()),
+                "selected": d.selected,
             }),
             Dialog::ForceSwitch(d) => serde_json::json!({
                 "target": d.target,
@@ -599,12 +701,83 @@ impl Dialog {
                 }
             }
             Dialog::SwitchOverwrite(d) => {
-                ui.label(dim(t::SWITCH_OVERWRITE_INTRO.to_owned()));
+                ui.label(dim(if d.is_switch {
+                    t::SWITCH_OVERWRITE_INTRO.to_owned()
+                } else {
+                    t::OVERWRITE_INTRO_OPERATION.to_owned()
+                }));
                 ui.add_space(4.0);
                 file_list(ui, p, &d.files);
                 ui.add_space(6.0);
-                ui.label(dim(t::SWITCH_OVERWRITE_STASH_NOTE.to_owned()));
+                ui.label(dim(if d.is_switch {
+                    t::SWITCH_OVERWRITE_STASH_NOTE.to_owned()
+                } else {
+                    t::overwrite_stash_note(&d.verb)
+                }));
             }
+            Dialog::DetachedLeft(d) => {
+                ui.label(RichText::new(t::detached_left_intro(d.count)).color(p.error));
+                ui.add_space(4.0);
+                for subject in &d.subjects {
+                    ui.label(RichText::new(format!("•  {subject}")).color(p.text));
+                }
+                if d.count as usize > d.subjects.len() {
+                    ui.label(dim(t::and_n_more(d.count as usize - d.subjects.len())));
+                }
+                ui.add_space(6.0);
+                ui.label(dim(t::DETACHED_LEFT_HELP.to_owned()));
+                ui.label(dim(t::DETACHED_LEFT_CREATE_HELP.to_owned()));
+            }
+            Dialog::SetUpstream(d) => {
+                ui.label(dim(t::UPSTREAM_PICK_HELP.to_owned()));
+                ui.add_space(4.0);
+                if d.choices.is_empty() {
+                    ui.label(dim(t::UPSTREAM_PICK_NONE.to_owned()));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("amont-choix")
+                    .max_height(220.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, choice) in d.choices.iter().enumerate() {
+                            ui.radio_value(&mut d.selected, i, choice);
+                        }
+                    });
+            }
+            Dialog::DiffWorktree(d) => match (&d.files, &d.error) {
+                (_, Some(error)) => {
+                    ui.label(RichText::new(error).color(p.error));
+                }
+                (None, _) => {
+                    ui.label(dim(t::DIFF_WORKTREE_LOADING.to_owned()));
+                }
+                (Some(files), _) if files.is_empty() => {
+                    ui.label(dim(t::DIFF_WORKTREE_NONE.to_owned()));
+                }
+                (Some(files), _) => {
+                    let mut selected = d.selected;
+                    egui::ScrollArea::vertical()
+                        .id_salt("diff-arbre-fichiers")
+                        .max_height(260.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for (i, (status, path)) in files.iter().enumerate() {
+                                let label = format!("{status}   {}", path.display());
+                                let response = ui.selectable_label(selected == i, label);
+                                if response.clicked() {
+                                    selected = i;
+                                }
+                                if response.double_clicked() {
+                                    selected = i;
+                                    *answer = Some("open_diff");
+                                }
+                            }
+                        });
+                    d.selected = selected;
+                    ui.add_space(4.0);
+                    ui.label(dim(t::DIFF_WORKTREE_HELP.to_owned()));
+                }
+            },
             Dialog::ForceSwitch(d) => {
                 ui.label(RichText::new(t::FORCE_SWITCH_WARNING).color(p.error));
                 ui.add_space(4.0);
@@ -926,6 +1099,48 @@ mod tests {
         });
         assert_eq!(remote.buttons()[0].key, "cancel");
         assert!(remote.buttons()[0].primary);
+    }
+
+    #[test]
+    fn a_refused_merge_offers_to_stash_and_merge() {
+        let dialog = Dialog::SwitchOverwrite(SwitchOverwrite {
+            target: "feature/login".into(),
+            files: vec![],
+            conflict: OverwriteConflict::default(),
+            can_force: false,
+            what: "la fusion de feature/login".into(),
+            verb: "fusionner".into(),
+            is_switch: false,
+        });
+        assert_eq!(
+            dialog.title(),
+            "Des changements locaux gênent la fusion de feature/login"
+        );
+        let buttons = dialog.buttons();
+        assert_eq!(buttons[0].label, "Mettre de côté et fusionner");
+        assert!(
+            buttons.iter().all(|b| b.key != "force"),
+            "pas de forçage pour une fusion"
+        );
+    }
+
+    #[test]
+    fn leaving_a_detached_head_with_commits_asks_first() {
+        let dialog = Dialog::DetachedLeft(DetachedLeft {
+            target: "main".into(),
+            head: "abc".into(),
+            count: 2,
+            subjects: vec!["a".into(), "b".into()],
+            can_anyway: true,
+        });
+        let keys: Vec<&str> = dialog.buttons().iter().map(|b| b.key).collect();
+        assert_eq!(keys, ["create_first", "anyway", "cancel"]);
+        assert_eq!(dialog.title(), "2 commits ne sont sur aucune branche");
+        assert_eq!(t::dlg_detached_left(1), "1 commit n'est sur aucune branche");
+        assert!(
+            dialog.buttons()[0].primary,
+            "créer la branche est le choix sûr"
+        );
     }
 
     #[test]

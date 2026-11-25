@@ -1,4 +1,6 @@
 # Recette v1 branches 12 : réinitialiser main de 2 commits, tout jeter, avec changements locaux
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> reset-hard
+# Correction M2 : la notification nomme les fichiers jetés et propose « Rétablir ».
 project @A@
 resize 1280 720
 wait-idle
@@ -22,4 +24,8 @@ wait-idle
 wait 1000
 state @OUT@/b12-apres.json
 screenshot @OUT@/b12-apres.png
+ui toast.action
+wait-idle
+wait 800
+state @OUT@/b12-retabli.json
 quit

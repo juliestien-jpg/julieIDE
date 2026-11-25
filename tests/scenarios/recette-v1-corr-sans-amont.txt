@@ -1,0 +1,29 @@
+# Corrections m5 + amont : une branche sans amont, Ctrl+T dit « pas d'amont » AVANT de demander
+# fusion ou rebase et propose « Choisir l'amont… » ; puis « Retirer l'amont ».
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> sans-amont
+project @A@
+resize 1280 720
+wait-idle
+key Ctrl+T
+wait 600
+state @OUT@/sans-amont-message.json
+screenshot @OUT@/sans-amont-message.png
+ui dialog.choose choose_upstream
+wait 400
+ui dialog.set upstream origin/main
+state @OUT@/sans-amont-choix.json
+screenshot @OUT@/sans-amont-choix.png
+ui dialog.choose set_upstream
+wait-idle
+wait 800
+state @OUT@/sans-amont-pose.json
+ui branches.open
+ui branches.select sans-amont
+ui branches.menu
+state @OUT@/sans-amont-menu.json
+screenshot @OUT@/sans-amont-menu.png
+ui menu.choose branch.unset_upstream
+wait-idle
+wait 800
+state @OUT@/sans-amont-retire.json
+quit

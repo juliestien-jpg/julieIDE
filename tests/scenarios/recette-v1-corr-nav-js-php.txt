@@ -1,0 +1,23 @@
+# m11 : Ctrl+clic et Alt+F7 sur une fonction JavaScript d'un <script> dans un .php : un message
+# plutôt que rien ; une fonction PHP du même fichier saute normalement.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> js-php
+project @A@
+resize 1280 720
+wait-idle
+file page.php:6:12
+wait 800
+ui nav.ctrl-click 7:2
+wait 1500
+state @OUT@/js-php-ctrl-clic.json
+ui nav.click 7:2
+wait 400
+key Alt+F7
+wait 1500
+state @OUT@/js-php-alt-f7.json
+screenshot @OUT@/js-php.png
+file page.php:3:2
+wait 600
+ui nav.ctrl-click 3:2
+wait 1500
+state @OUT@/js-php-php.json
+quit

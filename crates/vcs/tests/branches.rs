@@ -505,7 +505,24 @@ fn a_detached_head_counts_its_orphan_commits() {
         commits_only_on_detached_head(&a.git(), &a.repo(), &cancel()).unwrap(),
         1
     );
-    switch(a, SwitchTarget::Branch("main".into()), LocalChanges::Keep).unwrap();
+    // Quitter sans accord est refusé (recette v1, M3) ; avec l'accord, on part.
+    assert!(matches!(
+        switch(a, SwitchTarget::Branch("main".into()), LocalChanges::Keep),
+        Err(VcsError::DetachedCommitsLeft { count: 1, .. })
+    ));
+    switch_branch_with(
+        &a.git(),
+        &a.repo(),
+        &SwitchRequest {
+            target: SwitchTarget::Branch("main".into()),
+            local_changes: LocalChanges::Keep,
+        },
+        SwitchOptions {
+            leave_detached_commits: true,
+        },
+        &cancel(),
+    )
+    .unwrap();
     assert_eq!(
         commits_only_on_detached_head(&a.git(), &a.repo(), &cancel()).unwrap(),
         0

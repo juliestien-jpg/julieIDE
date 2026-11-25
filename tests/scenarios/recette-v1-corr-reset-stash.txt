@@ -1,0 +1,30 @@
+# M1 (mise de côté gardée) : « tout jeter » précédé d'une mise de côté laisse l'entrée dans
+# `git stash list` ; le bandeau la montre avec « Remettre », qui la remet (ici avec des conflits :
+# c3.txt n'existe plus après le reset).
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> reset-hard
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.reset
+wait 500
+ui dialog.set mode hard
+wait 300
+ui dialog.choose reset
+wait 500
+ui dialog.choose reset
+wait-idle
+wait 1200
+ui git.tab changes
+wait 300
+state @OUT@/reset-stash-apres.json
+screenshot @OUT@/reset-stash-apres.png
+ui git.banner stash
+wait-idle
+wait 1200
+state @OUT@/reset-stash-remis.json
+screenshot @OUT@/reset-stash-remis.png
+quit

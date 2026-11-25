@@ -1,0 +1,38 @@
+# Correction M3 : « Basculer quand même » quitte la HEAD détachée ; la notification donne le
+# commit laissé et « Créer une branche » sur lui.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> detachee
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+ui branches.open
+wait-idle
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 600
+ui dialog.choose anyway
+wait-idle
+wait 1000
+state @OUT@/quand-meme-apres.json
+screenshot @OUT@/quand-meme-apres.png
+ui toast.action
+wait 500
+state @OUT@/quand-meme-dialogue-branche.json
+quit

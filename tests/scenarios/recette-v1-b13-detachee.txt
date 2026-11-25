@@ -1,4 +1,7 @@
 # Recette v1 branches 13 : HEAD détachée, commit orphelin, quitter, créer une branche ici
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> detachee
+# Correction M3 : bandeau « Vos commits ne sont sur aucune branche », et la sortie est refusée
+# avec le dialogue « Créer une branche d'abord / Basculer quand même / Annuler ».
 project @A@
 resize 1280 720
 wait-idle
@@ -17,8 +20,8 @@ state @OUT@/b13-detachee.json
 screenshot @OUT@/b13-detachee.png
 key Ctrl+Maj+K
 wait 600
+# Pousser une HEAD détachée : message d'état, pas de dialogue.
 state @OUT@/b13-push-detachee.json
-ui dialog.choose cancel
 ui git.tab changes
 wait 300
 ui git.check orphelin.txt
@@ -37,4 +40,7 @@ wait-idle
 wait 600
 state @OUT@/b13-quitter.json
 screenshot @OUT@/b13-quitter.png
+ui dialog.choose cancel
+wait 300
+state @OUT@/b13-annule.json
 quit

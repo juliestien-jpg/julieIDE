@@ -17,7 +17,7 @@ use eframe::egui::{
 use julie_core::CancelToken;
 use julie_diff::{ApplyScope, Block, BlockKind, HunkKind, MergeSession, Side, SideState};
 use julie_text::{Document, Language};
-use julie_vcs::{ConflictKind, ConflictVersions, Content, OperationKind, VcsError};
+use julie_vcs::{ConflictKind, ConflictVersions, Content, VcsError};
 
 use crate::diffpane::{map_top, paint_connector};
 use crate::editor::{
@@ -49,10 +49,29 @@ pub enum Ineligible {
 }
 
 /// Les trois textes à fusionner, en UTF-8 exact (fins de ligne comprises).
+///
+/// `ours` est le volet de **gauche** et `theirs` celui de **droite** : le travail de
+/// l'utilisatrice est à gauche. Pendant un rebase (ou la remise d'une mise de côté) c'est
+/// l'étage 3 de Git, les deux sont alors échangés (voir [`swapped`]).
 pub struct Inputs {
     pub base: String,
     pub ours: String,
     pub theirs: String,
+}
+
+/// Les volets sont-ils échangés par rapport aux étages de Git ? Oui quand l'étage 3 porte
+/// le travail de l'utilisatrice (rebase, remise d'une mise de côté).
+pub fn swapped(versions: &ConflictVersions) -> bool {
+    versions.labels.yours() == julie_vcs::ConflictSide::Theirs
+}
+
+/// (gauche, droite) : le contenu de chaque volet, votre travail à gauche.
+fn panes(versions: &ConflictVersions) -> (&Content, &Content) {
+    if swapped(versions) {
+        (&versions.theirs, &versions.ours)
+    } else {
+        (&versions.ours, &versions.theirs)
+    }
 }
 
 /// Vérifie les cas d'exclusion de la spécification et décode les trois versions.
@@ -86,10 +105,11 @@ pub fn inputs(versions: &ConflictVersions) -> Result<Inputs, Ineligible> {
             }
         }
     };
+    let (left, right) = panes(versions);
     Ok(Inputs {
         base: text(&versions.base, true)?,
-        ours: text(&versions.ours, false)?,
-        theirs: text(&versions.theirs, false)?,
+        ours: text(left, false)?,
+        theirs: text(right, false)?,
     })
 }
 
@@ -144,14 +164,6 @@ pub fn eligibility(versions: &ConflictVersions) -> Result<(), Ineligible> {
     check(&versions.base, true)?;
     check(&versions.ours, false)?;
     check(&versions.theirs, false)
-}
-
-/// Le nom de leur branche d'après `MERGE_MSG` (« Merge branch 'x' into y »).
-pub fn their_name(message: &str) -> Option<String> {
-    let first = message.lines().next()?;
-    let start = first.find('\'')? + 1;
-    let end = start + first[start..].find('\'')?;
-    Some(first[start..end].to_owned())
 }
 
 /// Ce que le dialogue demande à l'application.
@@ -322,14 +334,13 @@ impl MergeDialog {
         versions: &ConflictVersions,
         session: MergeSession,
         project_root: &std::path::Path,
-        our_branch: Option<String>,
-        their_branch: Option<String>,
         waker: &julie_text::Waker,
         dark: bool,
     ) -> Self {
         let language = Language::from_path(&versions.path);
-        let ours_text = display_text(&versions.ours);
-        let theirs_text = display_text(&versions.theirs);
+        let (left_content, right_content) = panes(versions);
+        let ours_text = display_text(left_content);
+        let theirs_text = display_text(right_content);
         let left = new_document(&ours_text, language, waker, true);
         let right = new_document(&theirs_text, language, waker, true);
         let center = new_document(&result_text_of(&session), language, waker, false);
@@ -351,11 +362,10 @@ impl MergeDialog {
         let bom_note = bom
             .differ
             .then(|| t::merge_bom_banner(bom.result, bom.their_change_is_dropped()));
-        let help = matches!(
-            versions.operation,
-            Some(OperationKind::Rebase | OperationKind::CherryPick | OperationKind::Revert)
-        )
-        .then_some(t::MERGE_REBASE_HELP);
+        let labels = &versions.labels;
+        let help = t::merge_side_help(labels.side(labels.yours()).role);
+        let (left_label, right_label) =
+            (labels.side(labels.yours()), labels.side(labels.incoming()));
         let expected = match &versions.work_tree {
             Content::Blob { bytes, .. } => Some(bytes.clone()),
             _ => None,
@@ -379,9 +389,9 @@ impl MergeDialog {
             dirty: true,
             current: None,
             titles: [
-                t::merge_pane_title(t::MERGE_TITLE_OURS, our_branch.as_deref()),
+                t::merge_side_title(left_label),
                 t::MERGE_TITLE_RESULT.to_owned(),
-                t::merge_pane_title(t::MERGE_TITLE_THEIRS, their_branch.as_deref()),
+                t::merge_side_title(right_label),
             ],
             help,
             eol_note,
@@ -1427,6 +1437,7 @@ mod tests {
             ours,
             theirs,
             work_tree: Content::Missing,
+            labels: julie_vcs::ConflictLabels::for_operation(Some(julie_vcs::OperationKind::Merge)),
         }
     }
 
@@ -1493,12 +1504,22 @@ mod tests {
     }
 
     #[test]
-    fn their_branch_is_read_from_the_merge_message() {
-        assert_eq!(
-            their_name("Merge branch 'juliestorm-essai/eux' into juliestorm-essai/nous\n"),
-            Some("juliestorm-essai/eux".to_owned())
+    fn during_a_rebase_your_commit_is_on_the_left() {
+        use julie_vcs::{ConflictLabels, OperationKind as Op};
+        let mut v = versions(
+            ConflictKind::BothModified,
+            blob(b"amont\n"),
+            blob(b"vous\n"),
         );
-        assert_eq!(their_name("Merge commit"), None);
+        v.operation = Some(Op::Rebase);
+        v.labels = ConflictLabels::for_operation(Some(Op::Rebase));
+        assert!(swapped(&v));
+        let inputs = inputs(&v).unwrap();
+        assert_eq!(inputs.ours, "vous\n", "gauche = votre commit");
+        assert_eq!(inputs.theirs, "amont\n", "droite = l'amont");
+        let merge = versions(ConflictKind::BothModified, blob(b"a\n"), blob(b"b\n"));
+        assert!(!swapped(&merge));
+        assert_eq!(super::inputs(&merge).unwrap().ours, "a\n");
     }
 
     #[test]
@@ -1530,15 +1551,7 @@ mod tests {
             blob(b"a\nB\nc\nd\ne\n"),
             blob(b"a\nb\nc\nD\ne\n"),
         );
-        let mut dialog = MergeDialog::new(
-            &v,
-            session,
-            std::path::Path::new("C:/p"),
-            None,
-            None,
-            &waker,
-            true,
-        );
+        let mut dialog = MergeDialog::new(&v, session, std::path::Path::new("C:/p"), &waker, true);
         assert_eq!(dialog.session.counts().changes, 2);
         dialog.apply(ApplyScope::All);
         assert_eq!(dialog.center.text(), "a\nB\nc\nD\ne\n");

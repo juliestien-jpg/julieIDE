@@ -180,6 +180,20 @@ pub enum OperationKind {
     Revert,
 }
 
+impl OperationKind {
+    /// Nom court pour les journaux et les messages d'erreur (« fusion »,
+    /// « rebase », « cherry-pick », « revert ») ; l'interface prend les siens
+    /// dans le catalogue de textes.
+    pub fn label(self) -> &'static str {
+        match self {
+            OperationKind::Merge => "fusion",
+            OperationKind::Rebase => "rebase",
+            OperationKind::CherryPick => "cherry-pick",
+            OperationKind::Revert => "revert",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operation {
     pub kind: OperationKind,

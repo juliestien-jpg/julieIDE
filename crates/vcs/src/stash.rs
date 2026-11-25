@@ -17,10 +17,17 @@ use julie_core::CancelToken;
 use crate::conflict::unmerged_paths;
 use crate::error::{OverwriteConflict, Result, VcsError};
 use crate::git::{args, Access, Git};
-use crate::repo::Repository;
+use crate::repo::{OperationKind, Repository};
 
 /// Début du message de toute mise de côté faite par l'IDE.
 pub const AUTO_STASH_PREFIX: &str = "JulieStorm : ";
+
+/// Fichier, **dans le dossier Git** (jamais dans l'arbre de travail : il
+/// n'apparaît pas dans `git status`), qui lie une mise de côté à l'opération
+/// arrêtée sur un conflit. Trois lignes : commit de l'entrée, opération
+/// (`merge`, `rebase`, `cherry-pick`, `revert`), message. Relu au redémarrage
+/// de l'IDE ; supprimé une fois la mise de côté remise (ou tentée).
+pub const PENDING_STASH_FILE: &str = "JULIESTORM_PENDING_STASH";
 
 /// Que faire des changements locaux avant une opération qui touche l'arbre de
 /// travail.
@@ -71,6 +78,61 @@ impl StashReason {
         };
         format!("{AUTO_STASH_PREFIX}{what} — {}", utc_minutes(now))
     }
+
+    /// Relit un message écrit par [`StashReason::message`] (avec ou sans le
+    /// « On main: » de `git stash list`). `None` si ce n'est pas une mise de
+    /// côté de l'IDE ou si la forme est inconnue. Fonction pure.
+    pub fn parse(message: &str) -> Option<StashReason> {
+        let text = if message.starts_with(AUTO_STASH_PREFIX) {
+            message
+        } else {
+            stash_text(message)
+        };
+        let text = text.strip_prefix(AUTO_STASH_PREFIX)?;
+        let what = text.rsplit_once(" — ").map_or(text, |(what, _)| what);
+        let what = what.strip_prefix("avant ")?;
+        // Les noms de branche n'ont pas d'espace : on peut couper sur les mots.
+        if let Some(rest) = what.strip_prefix("bascule de ") {
+            let (from, to) = rest.split_once(" vers ")?;
+            return Some(StashReason::Switch {
+                from: from.to_owned(),
+                to: to.to_owned(),
+            });
+        }
+        if let Some(branch) = what.strip_prefix("mise à jour de ") {
+            return Some(StashReason::Update {
+                branch: branch.to_owned(),
+            });
+        }
+        if let Some(rest) = what.strip_prefix("rebase de ") {
+            let (branch, onto) = rest.split_once(" sur ")?;
+            return Some(StashReason::Rebase {
+                branch: branch.to_owned(),
+                onto: onto.to_owned(),
+            });
+        }
+        if let Some(rest) = what.strip_prefix("fusion de ") {
+            let (revision, branch) = rest.rsplit_once(" dans ")?;
+            return Some(StashReason::Merge {
+                branch: branch.to_owned(),
+                revision: revision.to_owned(),
+            });
+        }
+        if let Some(branch) = what.strip_prefix("cherry-pick sur ") {
+            return Some(StashReason::CherryPick {
+                branch: branch.to_owned(),
+            });
+        }
+        if let Some(branch) = what.strip_prefix("revert sur ") {
+            return Some(StashReason::Revert {
+                branch: branch.to_owned(),
+            });
+        }
+        what.strip_prefix("réinitialisation de ")
+            .map(|branch| StashReason::Reset {
+                branch: branch.to_owned(),
+            })
+    }
 }
 
 /// Ce qu'il est advenu d'une mise de côté automatique.
@@ -82,6 +144,13 @@ pub struct AutoStash {
     /// ([`restore_auto_stash`]), même si d'autres entrées ont été ajoutées.
     pub commit: String,
     pub restore: StashRestore,
+    /// Fichiers **non suivis** rangés dans l'entrée que la remise n'a pas pu
+    /// rendre : leur chemin est maintenant occupé par un autre contenu (le
+    /// plus souvent un fichier suivi arrivé avec la bascule ou la mise à
+    /// jour). Votre version reste dans l'entrée (`git show <commit>^3:<chemin>`,
+    /// ou [`crate::Revision::Commit`] de `"<commit>^3"`) ; l'entrée est alors
+    /// gardée. À signaler (recette v1, m13).
+    pub untracked_not_restored: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +161,11 @@ pub enum StashRestore {
     /// **gardée** ; ouvrir la liste des conflits.
     Conflicts(Vec<PathBuf>),
     /// L'opération s'est arrêtée (conflit de fusion, de rebase…) : rien n'est
-    /// encore restauré, l'entrée est gardée. À restaurer une fois l'opération
-    /// conclue, par [`restore_auto_stash`].
+    /// encore restauré, l'entrée est gardée et **liée à l'opération** (fichier
+    /// [`PENDING_STASH_FILE`] du dossier Git). Elle est remise d'elle-même par
+    /// [`crate::continue_operation`] / [`crate::skip_operation`] quand
+    /// l'opération se termine, et par [`crate::abort_operation`] ; si
+    /// l'opération est conclue ailleurs, par [`restore_pending_stash`].
     Pending,
     /// Laissée de côté exprès (réinitialisation « tout jeter » précédée d'une
     /// mise de côté) : à restaurer quand l'utilisatrice le voudra.
@@ -195,7 +267,7 @@ pub(crate) fn stash_restore(
     repo: &Repository,
     commit: &str,
     cancel: &CancelToken,
-) -> Result<StashRestore> {
+) -> Result<(StashRestore, Vec<PathBuf>)> {
     // Sans `--index` : avec, Git peut restaurer les non suivis puis refuser
     // (« Conflicts in index »), et un second essai bute sur eux. Le contenu
     // revient entier ; ce qui était indexé redevient non indexé (les fichiers
@@ -209,15 +281,278 @@ pub(crate) fn stash_restore(
         cancel,
     )?;
     let output_text = format!("{}{}", output.stdout_text(), output.stderr_text());
+    let not_restored = untracked_not_restored(git, repo, commit, cancel)?;
     if output.status.success() {
+        if !not_restored.is_empty() {
+            // Git dit « fait » mais un non suivi n'est pas revenu : on garde.
+            return Ok((StashRestore::Failed(output_text), not_restored));
+        }
         drop_stash_commit(git, repo, commit, cancel)?;
-        return Ok(StashRestore::Restored);
+        return Ok((StashRestore::Restored, not_restored));
     }
     let conflicts = unmerged_paths(git, repo, cancel)?;
     if !conflicts.is_empty() {
-        return Ok(StashRestore::Conflicts(conflicts));
+        return Ok((StashRestore::Conflicts(conflicts), not_restored));
     }
-    Ok(StashRestore::Failed(output_text))
+    Ok((StashRestore::Failed(output_text), not_restored))
+}
+
+/// Les non suivis de l'entrée (`<commit>^3`) dont le fichier sur le disque
+/// n'a pas le contenu rangé (absent ou différent). Aucun : liste vide.
+fn untracked_not_restored(
+    git: &Git,
+    repo: &Repository,
+    commit: &str,
+    cancel: &CancelToken,
+) -> Result<Vec<PathBuf>> {
+    let third = format!("{commit}^3");
+    if git
+        .resolve_commit(repo.work_tree(), &third, cancel)?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    let listing = git.read(
+        repo.work_tree(),
+        &args(["ls-tree", "-r", "-z", "--full-tree", third.as_str()]),
+        cancel,
+    )?;
+    // « <mode> blob <oid>\t<chemin> »
+    let stashed: Vec<(String, String)> = listing
+        .split('\0')
+        .filter_map(|record| {
+            let (meta, path) = record.split_once('\t')?;
+            let oid = meta.split_whitespace().nth(2)?;
+            Some((path.to_owned(), oid.to_owned()))
+        })
+        .collect();
+    if stashed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut missing = Vec::new();
+    let mut present = Vec::new();
+    for (path, oid) in &stashed {
+        let absolute = repo.to_absolute(path);
+        if absolute.is_file() {
+            present.push((path, oid, absolute));
+        } else {
+            missing.push(absolute);
+        }
+    }
+    if !present.is_empty() {
+        // Même calcul que `git stash push` (filtres de nettoyage compris).
+        let mut command = args(["hash-object", "--"]);
+        command.extend(
+            present
+                .iter()
+                .map(|(path, _, _)| OsString::from(path.as_str())),
+        );
+        let hashes = git.read(repo.work_tree(), &command, cancel)?;
+        for ((_, oid, absolute), hash) in present.into_iter().zip(hashes.lines()) {
+            if hash.trim() != oid.as_str() {
+                missing.push(absolute);
+            }
+        }
+    }
+    Ok(missing)
+}
+
+/// Le lien « mise de côté ↔ opération arrêtée » écrit dans le dossier Git.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingMarker {
+    pub commit: String,
+    pub kind: OperationKind,
+    pub message: String,
+}
+
+fn kind_word(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Merge => "merge",
+        OperationKind::Rebase => "rebase",
+        OperationKind::CherryPick => "cherry-pick",
+        OperationKind::Revert => "revert",
+    }
+}
+
+pub(crate) fn read_marker(repo: &Repository) -> Option<PendingMarker> {
+    let text = std::fs::read_to_string(repo.git_dir().join(PENDING_STASH_FILE)).ok()?;
+    let mut lines = text.lines();
+    let commit = lines.next()?.trim().to_owned();
+    let kind = match lines.next()?.trim() {
+        "merge" => OperationKind::Merge,
+        "rebase" => OperationKind::Rebase,
+        "cherry-pick" => OperationKind::CherryPick,
+        "revert" => OperationKind::Revert,
+        _ => return None,
+    };
+    let message = lines.next().unwrap_or_default().to_owned();
+    (!commit.is_empty()).then_some(PendingMarker {
+        commit,
+        kind,
+        message,
+    })
+}
+
+fn write_marker(repo: &Repository, marker: &PendingMarker) -> Result<()> {
+    let text = format!(
+        "{}\n{}\n{}\n",
+        marker.commit,
+        kind_word(marker.kind),
+        marker.message
+    );
+    julie_core::file::write_atomic(repo.git_dir().join(PENDING_STASH_FILE), text.as_bytes())?;
+    Ok(())
+}
+
+fn remove_marker(repo: &Repository) {
+    let _ = std::fs::remove_file(repo.git_dir().join(PENDING_STASH_FILE));
+}
+
+/// Où en est une mise de côté de l'IDE encore présente dans `git stash list`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PendingStashState {
+    /// Liée à l'opération en cours, arrêtée sur un conflit : elle sera
+    /// **remise d'elle-même** par `continue_operation` (quand l'opération se
+    /// termine), `skip_operation` (idem) ou `abort_operation`.
+    AwaitingOperation(OperationKind),
+    /// Liée à une opération qui s'est terminée ailleurs (terminal, autre
+    /// outil) : rien ne la remettra seule ; proposer « Remettre mes
+    /// changements » ([`crate::restore_pending_stash`]).
+    OperationOver,
+    /// Gardée (remise en conflit, refusée, « tout jeter » précédé d'une mise de
+    /// côté, ou plus ancienne) : à remettre sur demande
+    /// ([`restore_auto_stash`] avec son commit).
+    Kept,
+}
+
+/// Une mise de côté de l'IDE en attente (bandeau « Vos changements sont mis
+/// de côté »).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingStash {
+    pub entry: StashEntry,
+    /// Le message sans « On main: » (« JulieStorm : avant mise à jour de main —
+    /// … UTC »).
+    pub message: String,
+    /// Pourquoi elle a été faite ; `None` : message d'une forme inconnue.
+    pub reason: Option<StashReason>,
+    pub state: PendingStashState,
+}
+
+/// Les mises de côté de l'IDE encore dans `git stash list`, la plus récente
+/// d'abord. Lit aussi le lien avec l'opération en cours (fichier
+/// [`PENDING_STASH_FILE`]) : marche après un redémarrage de l'IDE. N'écrit
+/// rien. **Bloquant.**
+pub fn pending_auto_stashes(
+    git: &Git,
+    repo: &Repository,
+    cancel: &CancelToken,
+) -> Result<Vec<PendingStash>> {
+    if !may_have_stashes(repo) {
+        // Aucune référence `refs/stash` : pas de `git` à lancer (cette liste
+        // est relue après chaque écriture).
+        return Ok(Vec::new());
+    }
+    let marker = read_marker(repo);
+    let operation = repo.operation().map(|operation| operation.kind);
+    Ok(list_stashes(git, repo, cancel)?
+        .into_iter()
+        .filter(|entry| entry.automatic)
+        .map(|entry| {
+            let state = match &marker {
+                Some(marker) if marker.commit == entry.commit => match operation {
+                    Some(kind) => PendingStashState::AwaitingOperation(kind),
+                    None => PendingStashState::OperationOver,
+                },
+                _ => PendingStashState::Kept,
+            };
+            let message = stash_text(&entry.message).to_owned();
+            PendingStash {
+                reason: StashReason::parse(&message),
+                message,
+                entry,
+                state,
+            }
+        })
+        .collect())
+}
+
+/// `refs/stash` peut-il exister ? Lecture du disque seulement, prudente : dans
+/// le doute (format `reftable`, fichier illisible), oui.
+fn may_have_stashes(repo: &Repository) -> bool {
+    let git_dir = repo.git_dir();
+    // Arbre lié : les références sont dans le dossier commun.
+    let common = std::fs::read_to_string(git_dir.join("commondir"))
+        .ok()
+        .map(|text| git_dir.join(text.trim()))
+        .unwrap_or_else(|| git_dir.to_path_buf());
+    if common.join("reftable").exists() {
+        return true;
+    }
+    if common.join("refs").join("stash").exists()
+        || common.join("logs").join("refs").join("stash").exists()
+    {
+        return true;
+    }
+    match std::fs::read_to_string(common.join("packed-refs")) {
+        Ok(text) => text.lines().any(|line| line.ends_with(" refs/stash")),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// Remet la mise de côté liée à une opération qui n'est plus en cours (état
+/// [`PendingStashState::OperationOver`], ou appel juste après la conclusion).
+/// `Ok(None)` s'il n'y en a pas ; [`VcsError::OperationInProgress`] si
+/// l'opération n'est pas terminée (rien n'est fait). Le lien est retiré
+/// après la tentative ; une remise en conflit garde l'entrée
+/// (`StashRestore::Conflicts`). **Bloquant.**
+pub fn restore_pending_stash(
+    git: &Git,
+    repo: &Repository,
+    cancel: &CancelToken,
+) -> Result<Option<AutoStash>> {
+    if let Some(operation) = repo.operation() {
+        return Err(VcsError::OperationInProgress(operation.kind));
+    }
+    let Some(marker) = read_marker(repo) else {
+        return Ok(None);
+    };
+    let present = list_stashes(git, repo, cancel)?
+        .into_iter()
+        .any(|entry| entry.commit == marker.commit);
+    if !present {
+        // Remise ou supprimée ailleurs : le lien ne sert plus.
+        remove_marker(repo);
+        return Ok(None);
+    }
+    let result = stash_restore(git, repo, &marker.commit, cancel);
+    remove_marker(repo);
+    let (restore, untracked_not_restored) = result?;
+    Ok(Some(AutoStash {
+        message: marker.message,
+        commit: marker.commit,
+        restore,
+        untracked_not_restored,
+    }))
+}
+
+/// Après `continue` / `skip` / `abort` : si l'opération est finie, remet la
+/// mise de côté liée. Ne dépend pas d'une annulation demandée entre-temps.
+/// L'opération elle-même a réussi : un échec de la remise n'en fait pas un
+/// échec, il est rendu en [`StashRestore::Failed`] (l'entrée reste).
+pub(crate) fn after_operation(git: &Git, repo: &Repository) -> Result<Option<AutoStash>> {
+    if repo.operation().is_some() {
+        return Ok(None);
+    }
+    let marker = read_marker(repo);
+    match restore_pending_stash(git, repo, &CancelToken::new()) {
+        Ok(stash) => Ok(stash),
+        Err(error) => Ok(marker.map(|marker| AutoStash {
+            message: marker.message,
+            commit: marker.commit,
+            restore: StashRestore::Failed(error.to_string()),
+            untracked_not_restored: Vec::new(),
+        })),
+    }
 }
 
 /// Supprime l'entrée dont le commit est `commit` (cherchée par son commit,
@@ -259,11 +594,15 @@ pub fn restore_auto_stash(
         .into_iter()
         .find(|entry| entry.commit == commit)
         .ok_or_else(|| VcsError::InvalidRevision(commit.to_owned()))?;
-    let restore = stash_restore(git, repo, commit, cancel)?;
+    let (restore, untracked_not_restored) = stash_restore(git, repo, commit, cancel)?;
+    if repo.operation().is_none() && read_marker(repo).is_some_and(|m| m.commit == commit) {
+        remove_marker(repo);
+    }
     Ok(AutoStash {
         message: stash_text(&entry.message).to_owned(),
         commit: commit.to_owned(),
         restore,
+        untracked_not_restored,
     })
 }
 
@@ -316,10 +655,23 @@ pub(crate) fn with_local_changes<T>(
     let fresh = CancelToken::new();
     match result {
         Ok((value, finished)) => {
-            let restore = if finished {
-                stash_restore(git, repo, &commit, &fresh)?
-            } else {
-                StashRestore::Pending
+            let stopped = if finished { None } else { repo.operation() };
+            let (restore, untracked_not_restored) = match stopped {
+                Some(operation) => {
+                    // L'opération attend : on note le lien sur le disque, pour
+                    // que `continue` / `abort` remettent l'entrée, même après un
+                    // redémarrage de l'IDE.
+                    write_marker(
+                        repo,
+                        &PendingMarker {
+                            commit: commit.clone(),
+                            kind: operation.kind,
+                            message: message.clone(),
+                        },
+                    )?;
+                    (StashRestore::Pending, Vec::new())
+                }
+                None => stash_restore(git, repo, &commit, &fresh)?,
             };
             Ok((
                 value,
@@ -327,6 +679,7 @@ pub(crate) fn with_local_changes<T>(
                     message,
                     commit,
                     restore,
+                    untracked_not_restored,
                 }),
             ))
         }

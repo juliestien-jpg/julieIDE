@@ -525,38 +525,6 @@ pub fn confirm_abort_title(kind: OperationKind) -> String {
     )
 }
 
-pub fn confirm_keep_title(side: ConflictSide, names: &[String]) -> String {
-    let what = match side {
-        ConflictSide::Ours => "Garder la nôtre",
-        ConflictSide::Theirs => "Prendre la leur",
-    };
-    if names.len() == 1 {
-        format!("{what} pour {} ?", names[0])
-    } else {
-        format!("{what} pour {} fichiers ?", names.len())
-    }
-}
-
-pub fn confirm_keep_detail(side: ConflictSide, deleted: &[String]) -> String {
-    let mut text = match side {
-        ConflictSide::Ours => {
-            "La copie de travail est remplacée par notre version, marqueurs de conflit compris."
-                .to_owned()
-        }
-        ConflictSide::Theirs => {
-            "La copie de travail est remplacée par leur version, marqueurs de conflit compris."
-                .to_owned()
-        }
-    };
-    if !deleted.is_empty() {
-        text.push_str(&format!(
-            "\nCe choix SUPPRIME du disque et de l'index : {}.",
-            deleted.join(", ")
-        ));
-    }
-    text
-}
-
 pub fn relative_age(seconds: u64) -> String {
     match seconds {
         0..=59 => "à l'instant".to_owned(),
@@ -572,9 +540,7 @@ pub const MERGE_DISABLED_DELETION: &str =
     "Un côté a supprimé ce fichier : choisissez de le garder ou de le supprimer.";
 pub const MERGE_DISABLED_ONE_SIDE: &str =
     "Le fichier n'existe que d'un côté : choisissez de le garder ou de ne pas le prendre.";
-pub const MERGE_TITLE_OURS: &str = "Notre version";
 pub const MERGE_TITLE_RESULT: &str = "Résultat";
-pub const MERGE_TITLE_THEIRS: &str = "Leur version";
 pub const MERGE_SUBTITLE: &str = "Fusion à trois volets";
 pub const MERGE_CLOSE: &str = "Fermer (Échap)";
 pub const MERGE_ALL_DONE: &str = "Tout est traité";
@@ -598,8 +564,6 @@ pub const MERGE_CANCEL: &str = "Annuler";
 pub const MERGE_CANCEL_TIP: &str = "Fermer sans rien écrire (Échap)";
 pub const MERGE_FOOTER_HINT: &str =
     "F7 / Maj+F7 : bloc suivant / précédent    Alt+Gauche / Droite : accepter    Alt+Maj+Gauche / Droite : ignorer";
-pub const MERGE_REBASE_HELP: &str =
-    "Pendant un rebase, un cherry-pick ou un revert, Git appelle « nôtre » la branche sur laquelle on rejoue, et « leur » le commit rejoué.";
 pub const MERGE_ASK_PENDING_TITLE: &str = "Il reste des blocs à traiter";
 pub const MERGE_SAVE_ANYWAY: &str = "Enregistrer quand même";
 pub const MERGE_BACK: &str = "Revenir";
@@ -615,13 +579,6 @@ pub const MERGE_OVERWRITE: &str = "Écraser";
 
 pub fn merge_title(name: &str) -> String {
     format!("Fusion de {name}")
-}
-
-pub fn merge_pane_title(base: &str, branch: Option<&str>) -> String {
-    match branch {
-        Some(branch) => format!("{base} — {branch}"),
-        None => base.to_owned(),
-    }
 }
 
 pub fn merge_counts(changes: usize, conflicts: usize) -> String {
@@ -1075,9 +1032,6 @@ pub const DLG_PUSH_REJECTED: &str = "Le distant a des commits que vous n'avez pa
 pub fn dlg_rename(old: &str) -> String {
     format!("Renommer la branche {old}")
 }
-pub fn dlg_switch_overwrite(target: &str) -> String {
-    format!("Des changements locaux gênent la bascule vers {target}")
-}
 pub fn dlg_push(branch: &str) -> String {
     format!("Pousser {branch}")
 }
@@ -1212,10 +1166,8 @@ pub fn push_outgoing_title(n: usize) -> String {
 pub fn push_force_text(remote_only: u32) -> String {
     match remote_only {
         0 => "Aucun commit connu du distant ne sera remplacé.".to_owned(),
-        n => format!(
-            "{} du distant seront remplacés par votre branche.",
-            plural(n as usize, "commit", "commits")
-        ),
+        1 => "1 commit du distant sera remplacé par votre branche.".to_owned(),
+        n => format!("{n} commits du distant seront remplacés par votre branche."),
     }
 }
 pub fn push_rejected_text(known_behind: u32) -> String {
@@ -1235,10 +1187,11 @@ pub fn check_delete_remote_too(upstream: &str) -> String {
     format!("Supprimer aussi {upstream} sur le distant")
 }
 pub fn delete_unmerged_text(n: u32) -> String {
-    format!(
-        "{} ne seront plus sur aucune branche :",
-        plural(n as usize, "commit", "commits")
-    )
+    if n == 1 {
+        "1 commit ne sera plus sur aucune branche :".to_owned()
+    } else {
+        format!("{n} commits ne seront plus sur aucune branche :")
+    }
 }
 pub fn delete_unmerged_restore(tip: &str) -> String {
     let short: String = tip.chars().take(7).collect();
@@ -1386,7 +1339,9 @@ pub const NO_UPSTREAM_TITLE: &str = "Pas d'amont";
 pub const UPSTREAM_GONE_TITLE: &str = "L'amont n'existe plus";
 
 pub fn no_upstream_text(branch: &str) -> String {
-    format!("{branch} n'a pas d'amont. Aucune fusion ni rebase n'a été lancé.")
+    format!(
+        "{branch} n'a pas de branche distante associée : il n'y a rien à fusionner ni à rebaser. Aucune fusion ni rebase n'a été lancé."
+    )
 }
 pub fn upstream_gone_text(branch: &str, upstream: &str) -> String {
     format!("La branche distante {upstream} n'existe plus (supprimée sur le distant). {branch} reste intacte.")
@@ -1422,18 +1377,6 @@ pub fn remote_branch_deleted(remote: &str, branch: &str) -> String {
 }
 pub fn fast_forwarded(branch: &str) -> String {
     format!("{branch} avancée sur son amont.")
-}
-pub fn switched(name: &str, created: bool, followed: bool) -> String {
-    let base = if created {
-        format!("Branche locale {name} créée et basculée")
-    } else {
-        format!("Basculé sur {name}")
-    };
-    if followed {
-        format!("{base} ; vos changements locaux ont suivi.")
-    } else {
-        format!("{base}.")
-    }
 }
 pub fn switched_behind(name: &str, behind: u32) -> String {
     format!(
@@ -1805,10 +1748,60 @@ pub const PROBE_IS_DIR: &str = "C'est un dossier, pas un fichier";
 pub const PROBE_NO_ANSWER: &str = "Pas de réponse en 5 s";
 
 pub fn settings_unreadable(file: &str, line: Option<u32>, message: &str) -> String {
+    let message = settings_cause_fr(message);
     match line {
         Some(line) => format!("Réglages illisibles : {file}, ligne {line} : {message}"),
         None => format!("Réglages illisibles : {file} : {message}"),
     }
+}
+
+/// La cause d'un fichier de réglages illisible, en français (l'analyseur TOML parle anglais).
+/// Une cause inconnue garde le texte d'origine entre parenthèses.
+pub fn settings_cause_fr(message: &str) -> String {
+    let first = message.lines().next().unwrap_or(message).trim();
+    for (english, french) in [
+        ("unclosed table", "table non fermée (« ] » attendu)"),
+        ("unclosed array", "liste non fermée (« ] » attendu)"),
+        (
+            "unclosed inline table",
+            "table en ligne non fermée (« } » attendu)",
+        ),
+        ("duplicate key", "clé en double"),
+        ("duplicate table", "table en double"),
+        ("invalid key", "clé invalide"),
+        (
+            "invalid basic string",
+            "chaîne invalide (guillemet non fermé ou séquence inconnue)",
+        ),
+        (
+            "invalid literal string",
+            "chaîne littérale invalide (apostrophe non fermée)",
+        ),
+        ("invalid string", "chaîne invalide (guillemet non fermé)"),
+        ("invalid integer", "nombre entier invalide"),
+        ("invalid number", "nombre invalide"),
+        ("invalid datetime", "date invalide"),
+        ("invalid escape", "séquence d'échappement invalide"),
+        ("expected an equals", "« = » attendu après la clé"),
+        ("expected `=`", "« = » attendu après la clé"),
+        ("expected newline", "fin de ligne attendue"),
+        ("unexpected eof", "fin de fichier inattendue"),
+        ("unexpected end of input", "fin de fichier inattendue"),
+        ("expected a value", "valeur attendue"),
+        ("expected a table key", "nom de clé attendu"),
+    ] {
+        if first.to_ascii_lowercase().contains(english) {
+            return french.to_owned();
+        }
+    }
+    format!("syntaxe invalide ({first})")
+}
+
+/// Git n'est pas trouvé : on nomme le réglage à corriger.
+pub fn git_not_found(program: &str) -> String {
+    format!(
+        "Git est introuvable : « {program} ». Vérifiez le réglage « Exécutable Git » (Réglages, page Git)."
+    )
 }
 pub fn settings_refused(file: &str) -> String {
     format!("Le fichier {file} est illisible : rien n'a été écrit. Corrigez-le d'abord.")
@@ -2089,9 +2082,548 @@ pub fn usages_unreadable(n: usize) -> String {
     )
 }
 
+// ===== Corrections de la recette v1 (M1 à M5 et mineurs) ===================================
+
+// ----- M1 : changements mis de côté liés à une opération ------------------------------------
+pub const BTN_RESTORE_STASH: &str = "Remettre mes changements";
+pub const BTN_RESTORE_STASH_SHORT: &str = "Remettre";
+pub const TIP_RESTORE_STASH_OVER: &str =
+    "L'opération est terminée (ailleurs que dans JulieStorm) : remet vos changements mis de côté.";
+
+fn operation_end(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Merge => "la fin de la fusion",
+        OperationKind::Rebase => "la fin du rebase",
+        OperationKind::CherryPick => "la fin du cherry-pick",
+        OperationKind::Revert => "la fin du revert",
+    }
+}
+
+/// Texte court d'une mise de côté pour les bandeaux : le message sans préfixe de l'IDE.
+pub fn stash_short(message: &str) -> &str {
+    let text = message.strip_prefix("JulieStorm : ").unwrap_or(message);
+    // « … — 2026-11-25 15:45 UTC » : la date est dans `git stash list`, pas dans un bandeau.
+    match text.rsplit_once(" — ") {
+        Some((head, tail)) if tail.ends_with("UTC") => head,
+        _ => text,
+    }
+}
+
+/// Bandeau : la mise de côté attend la fin de l'opération en cours.
+pub fn banner_stash_waiting(kind: OperationKind, message: &str, more: usize) -> String {
+    let extra = if more > 0 {
+        format!(" (+ {} autres)", more)
+    } else {
+        String::new()
+    };
+    format!(
+        "Vos changements locaux sont mis de côté (« {} ») ; ils reviendront à {}{extra}.",
+        stash_short(message),
+        operation_end(kind)
+    )
+}
+
+/// Bandeau : l'opération est finie, la mise de côté n'a pas été remise.
+pub fn banner_stash_over(message: &str, more: usize) -> String {
+    let extra = if more > 0 {
+        format!(" (+ {} autres)", more)
+    } else {
+        String::new()
+    };
+    format!(
+        "Vos changements locaux sont toujours mis de côté (« {} »){extra} : l'opération est terminée.",
+        stash_short(message)
+    )
+}
+
+/// Bandeau : une mise de côté gardée (remise en conflit, « tout jeter » précédé d'une mise de côté…).
+pub fn banner_stash_kept(message: &str, more: usize) -> String {
+    let extra = if more > 0 {
+        format!(" (+ {} autres)", more)
+    } else {
+        String::new()
+    };
+    format!(
+        "Mise de côté gardée : « {} »{extra}. Elle n'est pas remise dans vos fichiers.",
+        stash_short(message)
+    )
+}
+
+pub fn operation_stopped_with_stash(kind: OperationKind, conflicts: usize) -> String {
+    format!(
+        "{} Vos changements locaux, mis de côté, reviendront à {}.",
+        operation_stopped(kind, conflicts),
+        operation_end(kind)
+    )
+}
+
+pub fn stash_restored(done: Option<&str>) -> String {
+    match done {
+        Some(done) => format!(
+            "{} ; vos changements locaux ont été remis.",
+            done.trim_end_matches('.')
+        ),
+        None => "Vos changements locaux ont été remis.".to_owned(),
+    }
+}
+
+pub fn stash_restored_conflicts(message: &str) -> String {
+    format!(
+        "Remise de vos changements en conflit : « {} » reste mise de côté ; résolvez les conflits.",
+        stash_short(message)
+    )
+}
+
+pub fn stash_restore_failed(message: &str) -> String {
+    format!(
+        "Vos changements n'ont pas pu être remis : « {} » reste mise de côté.",
+        stash_short(message)
+    )
+}
+
+pub const STASH_RESTORE_FAILED_TITLE: &str = "Vos changements n'ont pas été remis";
+
+/// Fichiers non suivis dont le chemin est pris : leur version reste dans la mise de côté.
+pub fn untracked_not_restored(names: &[String], message: &str) -> String {
+    format!(
+        "Non remis : {} (le chemin est pris par un autre fichier). Votre version est gardée dans la mise de côté « {} ».",
+        names.join(", "),
+        stash_short(message)
+    )
+}
+
+// ----- M2 : ce qui a été jeté -----------------------------------------------------------------
+pub const BTN_REVERT_COPY: &str = "Rétablir";
+
+fn name_list(names: &[String]) -> String {
+    const SHOWN: usize = 4;
+    if names.len() <= SHOWN {
+        names.join(", ")
+    } else {
+        format!(
+            "{} et {} autres",
+            names[..SHOWN].join(", "),
+            names.len() - SHOWN
+        )
+    }
+}
+
+/// Bascule forcée : ce qui a été jeté, la copie, et seulement s'il en reste ce qui a suivi.
+pub fn switched_forced(name: &str, discarded: &[String], followed: &[String]) -> String {
+    let mut text = format!(
+        "Basculé sur {name}. Jetés : {} (copie gardée, « Rétablir » les remet).",
+        name_list(discarded)
+    );
+    if !followed.is_empty() {
+        text.push_str(&format!(" Ont suivi : {}.", name_list(followed)));
+    }
+    text
+}
+
+/// Réinitialisation « tout jeter » sans mise de côté.
+pub fn reset_done_discarded(head: &str, discarded: &[String]) -> String {
+    let short: String = head.chars().take(7).collect();
+    format!(
+        "Branche réinitialisée sur {short}. Jetés : {} (copie gardée, « Rétablir » les remet).",
+        name_list(discarded)
+    )
+}
+
+/// Bascule ordinaire : ce qui a suivi, dit seulement s'il en reste.
+pub fn switched_followed(name: &str, created: bool, followed: &[String]) -> String {
+    let base = if created {
+        format!("Branche locale {name} créée et basculée")
+    } else {
+        format!("Basculé sur {name}")
+    };
+    if followed.is_empty() {
+        format!("{base}.")
+    } else {
+        format!("{base} ; vos changements locaux ont suivi.")
+    }
+}
+
+// ----- M3 : HEAD détachée ---------------------------------------------------------------------
+pub const BTN_CREATE_BRANCH_FIRST: &str = "Créer une branche d'abord";
+pub const BTN_SWITCH_ANYWAY: &str = "Basculer quand même";
+pub const BTN_CREATE_BRANCH_HERE: &str = "Créer une branche ici";
+pub const BTN_CREATE_BRANCH: &str = "Créer une branche";
+pub const DETACHED_LEFT_HELP: &str =
+    "Ils restent récupérables par le reflog de Git (90 jours), mais une branche les garde à coup sûr.";
+pub const DETACHED_LEFT_CREATE_HELP: &str =
+    "« Créer une branche d'abord » en crée une sur ce commit, puis la bascule reprend.";
+
+pub fn dlg_detached_left(n: u32) -> String {
+    if n == 1 {
+        "1 commit n'est sur aucune branche".to_owned()
+    } else {
+        format!("{n} commits ne sont sur aucune branche")
+    }
+}
+
+pub fn detached_left_intro(n: u32) -> String {
+    if n == 1 {
+        "En quittant ce commit, 1 commit ne sera plus sur aucune branche :".to_owned()
+    } else {
+        format!("En quittant ce commit, {n} commits ne seront plus sur aucune branche :")
+    }
+}
+
+pub fn banner_detached(n: u32) -> String {
+    format!(
+        "Vos commits ne sont sur aucune branche ({}).",
+        plural(n as usize, "commit", "commits")
+    )
+}
+
+/// Fin d'un message de bascule forcée : des commits sont restés sur aucune branche.
+pub fn left_detached_suffix(n: u32, short: &str) -> String {
+    format!(
+        "{} sur aucune branche (récupérable{} : « Créer une branche » sur {short}).",
+        plural(n as usize, "commit", "commits"),
+        if n > 1 { "s" } else { "" }
+    )
+}
+
+pub fn switched_left_detached(name: &str, n: u32, short: &str) -> String {
+    format!(
+        "Basculé sur {name}. {} laissé{} sur aucune branche, récupérable{} : « Créer une branche » sur {short}.",
+        plural(n as usize, "commit", "commits"),
+        if n > 1 { "s" } else { "" },
+        if n > 1 { "s" } else { "" },
+    )
+}
+
+// ----- M5 : qui est qui dans un conflit ------------------------------------------------------
+fn side_short(label: &julie_vcs::SideLabel) -> Option<String> {
+    label.name.clone().or_else(|| {
+        label
+            .commit
+            .as_ref()
+            .map(|c| c.chars().take(7).collect::<String>())
+    })
+}
+
+/// Bouton « Garder votre version » (le nom de la branche est dans l'infobulle).
+pub const KEEP_YOURS: &str = "Garder votre version";
+
+pub fn keep_yours_tip(label: &julie_vcs::SideLabel) -> String {
+    match side_short(label) {
+        Some(name) => {
+            format!("Garder votre travail ({name}) et jeter l'autre côté pour ce fichier.")
+        }
+        None => "Garder votre travail et jeter l'autre côté pour ce fichier.".to_owned(),
+    }
+}
+
+/// Bouton « Prendre <nom> » : le nom de ce que l'on intègre.
+pub fn keep_incoming(label: &julie_vcs::SideLabel) -> String {
+    use julie_vcs::SideRole::*;
+    match side_short(label) {
+        Some(name) => format!("Prendre {name}"),
+        None => match label.role {
+            Some(RebaseBase) => "Prendre l'amont".to_owned(),
+            Some(MergedRevision) => "Prendre la version fusionnée".to_owned(),
+            Some(PickedCommit) => "Prendre le commit repris".to_owned(),
+            Some(RevertedCommit) => "Prendre l'annulation".to_owned(),
+            Some(UpdatedBranch) => "Prendre la branche".to_owned(),
+            _ => "Prendre l'autre version".to_owned(),
+        },
+    }
+}
+
+pub fn keep_incoming_tip(label: &julie_vcs::SideLabel) -> String {
+    match side_short(label) {
+        Some(name) => format!("Prendre {name} et jeter votre version pour ce fichier."),
+        None => "Prendre l'autre version et jeter la vôtre pour ce fichier.".to_owned(),
+    }
+}
+
+/// Titre d'un volet du dialogue de fusion : le rôle, le nom, le sujet.
+pub fn merge_side_title(label: &julie_vcs::SideLabel) -> String {
+    use julie_vcs::SideRole::*;
+    let role = match label.role {
+        Some(CurrentBranch) => "Votre version",
+        Some(ReplayedCommit) => "Votre commit",
+        Some(StashedChanges) => "Vos changements mis de côté",
+        Some(MergedRevision) => "Ce que vous fusionnez",
+        Some(RebaseBase) => "Amont",
+        Some(PickedCommit) => "Commit repris",
+        Some(RevertedCommit) => "Annulation du commit",
+        Some(UpdatedBranch) => "Branche mise à jour",
+        None => "Version",
+    };
+    let mut text = role.to_owned();
+    if let Some(name) = side_short(label) {
+        text.push_str(&format!(" — {name}"));
+    }
+    if let Some(subject) = label.subject.as_deref().filter(|s| !s.is_empty()) {
+        text.push_str(&format!(" : {subject}"));
+    }
+    text
+}
+
+/// Aide du dialogue de fusion : seulement quand l'opération intervertit l'ordre habituel de Git.
+pub fn merge_side_help(yours: Option<julie_vcs::SideRole>) -> Option<&'static str> {
+    use julie_vcs::SideRole::*;
+    match yours {
+        Some(ReplayedCommit) => Some(
+            "Pendant un rebase, votre commit est rejoué sur l'amont : à gauche votre commit, à droite l'amont (Git les nomme à l'envers).",
+        ),
+        Some(StashedChanges) => Some(
+            "Remise de vos changements mis de côté : à gauche vos changements, à droite la branche telle qu'elle est maintenant.",
+        ),
+        _ => None,
+    }
+}
+
+pub fn confirm_keep_title_for(
+    yours: bool,
+    label: &julie_vcs::SideLabel,
+    names: &[String],
+) -> String {
+    let what = if yours {
+        KEEP_YOURS.to_owned()
+    } else {
+        keep_incoming(label)
+    };
+    if names.len() == 1 {
+        format!("{what} pour {} ?", names[0])
+    } else {
+        format!("{what} pour {} fichiers ?", names.len())
+    }
+}
+
+pub fn confirm_keep_detail_for(
+    yours: bool,
+    label: &julie_vcs::SideLabel,
+    deleted: &[String],
+) -> String {
+    let mut text = if yours {
+        "La copie de travail est remplacée par votre version, marqueurs de conflit compris."
+            .to_owned()
+    } else {
+        match side_short(label) {
+            Some(name) => format!(
+                "La copie de travail est remplacée par la version de {name} (votre version est jetée pour ces fichiers), marqueurs de conflit compris."
+            ),
+            None => "La copie de travail est remplacée par l'autre version (la vôtre est jetée pour ces fichiers), marqueurs de conflit compris.".to_owned(),
+        }
+    };
+    if !deleted.is_empty() {
+        text.push_str(&format!(
+            "\nCe choix SUPPRIME du disque et de l'index : {}.",
+            deleted.join(", ")
+        ));
+    }
+    text
+}
+
+/// Nature d'un conflit de suppression ou d'ajout, dite du point de vue de l'utilisatrice.
+pub fn conflict_kind_for(kind: ConflictKind, yours: ConflictSide) -> &'static str {
+    match (kind, yours) {
+        (ConflictKind::AddedByUs, ConflictSide::Ours) => "ajouté par vous",
+        (ConflictKind::AddedByUs, ConflictSide::Theirs) => "ajouté par l'autre côté",
+        (ConflictKind::AddedByThem, ConflictSide::Ours) => "ajouté par l'autre côté",
+        (ConflictKind::AddedByThem, ConflictSide::Theirs) => "ajouté par vous",
+        (ConflictKind::DeletedByUs, ConflictSide::Ours) => "supprimé par vous",
+        (ConflictKind::DeletedByUs, ConflictSide::Theirs) => "supprimé par l'autre côté",
+        (ConflictKind::DeletedByThem, ConflictSide::Ours) => "supprimé par l'autre côté",
+        (ConflictKind::DeletedByThem, ConflictSide::Theirs) => "supprimé par vous",
+        (kind, _) => conflict_kind(kind),
+    }
+}
+
+// ----- m1 : opérations refusées parce que des changements locaux seraient écrasés ----------------
+pub fn dlg_overwrite_for(what: &str) -> String {
+    format!("Des changements locaux gênent {what}")
+}
+pub const OVERWRITE_INTRO_OPERATION: &str =
+    "Ces fichiers ont des changements locaux que l'opération écraserait :";
+
+pub fn overwrite_stash_note(what_verb: &str) -> String {
+    format!(
+        "« Mettre de côté et {what_verb} » met vos changements de côté (git stash), lance l'opération, puis les remet. Si la remise entre en conflit, ils restent mis de côté (git stash list)."
+    )
+}
+
+pub fn stash_and(verb: &str) -> String {
+    format!("Mettre de côté et {verb}")
+}
+
+// ----- m2 : cherry-pick d'un commit déjà présent --------------------------------------------------
+pub const REASON_ALREADY_APPLIED: &str =
+    "Déjà sur la branche courante (ce commit ou le même changement).";
+
+pub fn empty_skipped(n: usize) -> String {
+    format!(
+        "{} passé{} : {} déjà dans la branche.",
+        plural(n, "commit", "commits"),
+        if n > 1 { "s" } else { "" },
+        if n > 1 {
+            "leurs changements étaient"
+        } else {
+            "son changement était"
+        }
+    )
+}
+
+pub fn already_applied(commits: &[String]) -> String {
+    let short: Vec<String> = commits
+        .iter()
+        .map(|c| c.chars().take(7).collect())
+        .collect();
+    format!(
+        "Rien n'a été lancé : {} déjà sur la branche courante.",
+        short.join(", ")
+    )
+}
+
+// ----- Amont : choisir, retirer ------------------------------------------------------------------------
+pub const ACTION_BRANCH_SET_UPSTREAM: &str = "Choisir l'amont…";
+pub const ACTION_BRANCH_UNSET_UPSTREAM: &str = "Retirer l'amont";
+pub const ACTION_BRANCH_DIFF_WORKTREE: &str = "Voir le diff avec l'arbre de travail";
+pub const ACTION_BRANCHES_ALT: &str = "Branches (raccourci sans accent grave)";
+pub const BTN_CHOOSE_UPSTREAM: &str = "Choisir l'amont…";
+pub const BTN_REMOVE_UPSTREAM: &str = "Retirer l'amont";
+pub const BTN_SET_UPSTREAM: &str = "Choisir";
+pub const REASON_HAS_NO_UPSTREAM_TO_REMOVE: &str = "Cette branche n'a pas d'amont à retirer.";
+pub const REASON_NO_REMOTE_BRANCH: &str =
+    "Aucune branche distante à choisir : récupérez d'abord (fetch).";
+pub const UPSTREAM_PICK_HELP: &str = "Choisissez la branche distante que cette branche suivra :";
+pub const UPSTREAM_PICK_NONE: &str = "Aucune branche distante connue.";
+
+pub fn dlg_set_upstream(branch: &str) -> String {
+    format!("Choisir l'amont de {branch}")
+}
+pub fn upstream_changed(branch: &str, upstream: Option<&str>) -> String {
+    match upstream {
+        Some(up) => format!("{branch} suit maintenant {up}."),
+        None => format!("{branch} n'a plus d'amont."),
+    }
+}
+
+// ----- Voir le diff avec l'arbre de travail --------------------------------------------------------------
+pub fn dlg_diff_worktree(branch: &str) -> String {
+    format!("Fichiers qui diffèrent entre {branch} et le disque")
+}
+pub const DIFF_WORKTREE_LOADING: &str = "Lecture des différences…";
+pub const DIFF_WORKTREE_NONE: &str = "Aucune différence : le disque est identique à cette branche.";
+pub const DIFF_WORKTREE_HELP: &str = "Double-clic ou Entrée : ouvre le diff du fichier.";
+pub const BTN_OPEN_DIFF: &str = "Ouvrir le diff";
+
+// ----- m12 : messages d'état périmés -----------------------------------------------------------------------
+pub fn operation_aborted(kind: OperationKind) -> String {
+    format!(
+        "{} abandonné{}.",
+        operation_name_noun(kind),
+        if kind == OperationKind::Merge {
+            "e"
+        } else {
+            ""
+        }
+    )
+}
+
+fn operation_name_noun(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Merge => "Fusion",
+        OperationKind::Rebase => "Rebase",
+        OperationKind::CherryPick => "Cherry-pick",
+        OperationKind::Revert => "Revert",
+    }
+}
+
+// ----- m11 : JavaScript d'un <script> dans un fichier PHP ---------------------------------------------------
+pub const NAV_JS_IN_PHP: &str =
+    "Le JavaScript d'un <script> écrit dans un fichier PHP n'est pas encore indexé : pas de déclaration à trouver.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebase_sides_are_named_by_what_they_are() {
+        use julie_vcs::{ConflictLabels, SideRole};
+        let mut labels = ConflictLabels::for_operation(Some(OperationKind::Rebase));
+        labels.ours.name = Some("origin/main".into());
+        labels.theirs.name = Some("feature/x".into());
+        labels.theirs.subject = Some("Mon commit".into());
+        assert_eq!(labels.yours(), ConflictSide::Theirs);
+        assert_eq!(
+            labels.side(labels.yours()).role,
+            Some(SideRole::ReplayedCommit)
+        );
+        assert_eq!(
+            merge_side_title(labels.side(labels.yours())),
+            "Votre commit — feature/x : Mon commit"
+        );
+        assert_eq!(
+            merge_side_title(labels.side(labels.incoming())),
+            "Amont — origin/main"
+        );
+        assert_eq!(
+            keep_incoming(labels.side(labels.incoming())),
+            "Prendre origin/main"
+        );
+        // Sans nom : le rôle parle.
+        let bare = ConflictLabels::for_operation(Some(OperationKind::Rebase));
+        assert_eq!(keep_incoming(bare.side(bare.incoming())), "Prendre l'amont");
+        assert!(merge_side_help(Some(SideRole::ReplayedCommit)).is_some());
+        assert!(merge_side_help(Some(SideRole::CurrentBranch)).is_none());
+        // Un conflit de suppression est dit du point de vue de l'utilisatrice.
+        assert_eq!(
+            conflict_kind_for(ConflictKind::DeletedByThem, ConflictSide::Theirs),
+            "supprimé par vous"
+        );
+        assert_eq!(
+            conflict_kind_for(ConflictKind::DeletedByThem, ConflictSide::Ours),
+            "supprimé par l'autre côté"
+        );
+    }
+
+    #[test]
+    fn follow_up_messages_name_what_happened() {
+        let names = vec!["a.txt".to_owned(), "login.txt".to_owned()];
+        let forced = switched_forced("feature/login", &names, &["n.txt".to_owned()]);
+        assert!(forced.contains("Jetés : a.txt, login.txt"));
+        assert!(forced.contains("Rétablir"));
+        assert!(forced.contains("Ont suivi : n.txt"));
+        // Rien n'a suivi : on ne le dit pas.
+        assert!(!switched_forced("x", &names, &[]).contains("suivi"));
+        assert_eq!(switched_followed("main", false, &[]), "Basculé sur main.");
+        assert!(switched_followed("main", false, &["a.txt".to_owned()]).contains("ont suivi"));
+        assert_eq!(
+            stash_restored(Some("Fusion terminée.")),
+            "Fusion terminée ; vos changements locaux ont été remis."
+        );
+        assert!(operation_stopped_with_stash(OperationKind::Merge, 1)
+            .contains("reviendront à la fin de la fusion"));
+        assert_eq!(
+            banner_stash_waiting(
+                OperationKind::Rebase,
+                "JulieStorm : avant mise à jour de main — 2026",
+                0
+            ),
+            "Vos changements locaux sont mis de côté (« avant mise à jour de main — 2026 ») ; ils reviendront à la fin du rebase."
+        );
+        assert_eq!(
+            stash_short("JulieStorm : avant mise à jour de main — 2026-11-25 15:45 UTC"),
+            "avant mise à jour de main"
+        );
+        assert!(push_force_text(1).contains("1 commit du distant sera remplacé"));
+        assert!(push_force_text(3).contains("3 commits du distant seront remplacés"));
+    }
+
+    #[test]
+    fn unreadable_settings_are_explained_in_french() {
+        assert_eq!(
+            settings_cause_fr("unclosed table, expected `]`"),
+            "table non fermée (« ] » attendu)"
+        );
+        assert!(settings_cause_fr("something new").starts_with("syntaxe invalide"));
+        assert!(git_not_found("C:/x/git.exe").contains("Exécutable Git"));
+    }
 
     #[test]
     fn summary_agrees_in_number() {

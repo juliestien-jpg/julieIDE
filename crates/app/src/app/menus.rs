@@ -212,6 +212,13 @@ impl JulieStormApp {
             Target::Terminal(_) => "terminal",
         };
         let description = target.describe();
+        if let Target::Commit(commit) = &target {
+            // « Cherry-pick » d'un commit déjà dans la branche : grisé dès que Git a répondu.
+            self.cherry_presence.remove(&commit.id);
+            if let Some((vcs, repo)) = self.vcs_pair() {
+                vcs.check_cherry_pick(&repo, vec![commit.id.clone()]);
+            }
+        }
         self.ctx_target = Some(target);
         self.ctx_menu = Some(ContextMenu::new(
             zone,
@@ -585,6 +592,7 @@ impl JulieStormApp {
                 Action(BranchCheckoutRebase),
                 Sep,
                 Action(BranchCompare),
+                Action(BranchDiffWorktree),
                 Action(BranchRebaseOnto),
                 Action(BranchMerge),
                 Sep,
@@ -592,6 +600,9 @@ impl JulieStormApp {
                 Action(BranchPullMerge),
                 Action(BranchPullRebase),
                 Action(BranchPush),
+                Sep,
+                Action(BranchSetUpstream),
+                Action(BranchUnsetUpstream),
                 Sep,
                 Action(BranchRename),
                 Action(BranchDelete),
@@ -683,9 +694,11 @@ impl JulieStormApp {
             Target::Branch(b) => {
                 let current = self.is_current_branch(b);
                 match id {
-                    BranchCheckout | BranchCheckoutRebase | BranchCompare | BranchRebaseOnto
-                    | BranchMerge => !current,
-                    BranchUpdate | BranchPush | BranchRename => !b.remote,
+                    // « Basculer et rebaser sur C » n'a de sens que pour une branche locale.
+                    BranchCheckoutRebase => !current && !b.remote,
+                    BranchCheckout | BranchCompare | BranchRebaseOnto | BranchMerge => !current,
+                    BranchUpdate | BranchPush | BranchRename | BranchSetUpstream
+                    | BranchUnsetUpstream => !b.remote,
                     BranchPullMerge | BranchPullRebase => b.remote,
                     _ => true,
                 }
@@ -852,6 +865,9 @@ impl JulieStormApp {
                 | BranchPush
                 | BranchRename
                 | BranchDelete
+                | BranchSetUpstream
+                | BranchUnsetUpstream
+                | BranchDiffWorktree
         );
         let status = self.git_status();
         if git_ids && status.is_none() {
@@ -977,6 +993,14 @@ impl JulieStormApp {
                 LogCherryPick | LogRevert if c.parents > 1 => {
                     Some(t::REASON_MERGE_COMMIT.to_owned())
                 }
+                LogCherryPick
+                    if self
+                        .cherry_presence
+                        .get(&c.id)
+                        .is_some_and(|p| p.is_present()) =>
+                {
+                    Some(t::REASON_ALREADY_APPLIED.to_owned())
+                }
                 LogCherryPick | LogRevert | LogCheckout if operation => {
                     Some(t::REASON_OPERATION.to_owned())
                 }
@@ -1012,6 +1036,19 @@ impl JulieStormApp {
                             None
                         }
                     }
+                    BranchSetUpstream
+                        if self.branches.as_ref().is_none_or(|l| l.remote.is_empty()) =>
+                    {
+                        Some(t::REASON_NO_REMOTE_BRANCH.to_owned())
+                    }
+                    BranchUnsetUpstream => {
+                        let has_upstream = self
+                            .branches
+                            .as_ref()
+                            .and_then(|l| l.find_local(&b.name))
+                            .is_some_and(|br| br.tracking.is_some());
+                        (!has_upstream).then(|| t::REASON_HAS_NO_UPSTREAM_TO_REMOVE.to_owned())
+                    }
                     BranchDelete if current => Some(t::REASON_CURRENT_BRANCH.to_owned()),
                     BranchDelete if b.remote => {
                         let short = b.name.split_once('/').map_or(b.name.as_str(), |(_, s)| s);
@@ -1028,7 +1065,9 @@ impl JulieStormApp {
     pub(super) fn v1_action_enabled(&self, id: ActionId) -> bool {
         use ActionId::*;
         match id {
-            UpdateProject | Push | NewBranch | BranchesPopup | Fetch => self.git_status().is_some(),
+            UpdateProject | Push | NewBranch | BranchesPopup | BranchesPopupAlt | Fetch => {
+                self.git_status().is_some()
+            }
             ContextMenuKey => true,
             SplitRight | SplitDown | MoveRight | MoveDown | MoveToOtherGroup | UnsplitAll
             | NextGroup | PrevGroup => self.split_reason(id).is_none(),
@@ -1058,7 +1097,7 @@ impl JulieStormApp {
                 let label = self.current_branch().unwrap_or_else(|| "HEAD".to_owned());
                 return self.open_new_branch(None, label);
             }
-            BranchesPopup => return self.toggle_branch_popup(),
+            BranchesPopup | BranchesPopupAlt => return self.toggle_branch_popup(),
             Fetch => {
                 if let Some((vcs, repo)) = self.vcs_pair() {
                     self.branch_popup = None;
@@ -1533,13 +1572,13 @@ impl JulieStormApp {
                 }));
             }
             LogCherryPick => {
-                if let Some((vcs, repo)) = pair {
-                    vcs.cherry_pick(&repo, vec![commit.id], LocalChanges::Keep);
+                if pair.is_some() {
+                    self.run_cherry_pick(vec![commit.id], LocalChanges::Keep);
                 }
             }
             LogRevert => {
-                if let Some((vcs, repo)) = pair {
-                    vcs.revert_commits(&repo, vec![commit.id], LocalChanges::Keep);
+                if pair.is_some() {
+                    self.run_revert(vec![commit.id], LocalChanges::Keep);
                 }
             }
             LogReset => self.open_reset(commit.id, commit.short, commit.subject),
@@ -1583,15 +1622,19 @@ impl JulieStormApp {
             }
             BranchNewFrom => self.open_new_branch(Some(branch.name.clone()), branch.name),
             BranchCheckoutRebase => {
+                if pair.is_some() {
+                    self.run_rebase(RebaseRequest {
+                        onto: current,
+                        branch: Some(branch.name),
+                        local_changes: LocalChanges::Stash,
+                    });
+                }
+            }
+            BranchDiffWorktree => self.open_diff_worktree(branch.name),
+            BranchSetUpstream => self.open_set_upstream(branch.name),
+            BranchUnsetUpstream => {
                 if let Some((vcs, repo)) = pair {
-                    vcs.rebase(
-                        &repo,
-                        RebaseRequest {
-                            onto: current,
-                            branch: Some(branch.name),
-                            local_changes: LocalChanges::Stash,
-                        },
-                    );
+                    vcs.set_upstream(&repo, branch.name, None);
                 }
             }
             BranchCompare => {
@@ -1601,26 +1644,20 @@ impl JulieStormApp {
                     .show_log_range(format!("{current}..{}", branch.name));
             }
             BranchRebaseOnto => {
-                if let Some((vcs, repo)) = pair {
-                    vcs.rebase(
-                        &repo,
-                        RebaseRequest {
-                            onto: branch.name,
-                            branch: None,
-                            local_changes: LocalChanges::Stash,
-                        },
-                    );
+                if pair.is_some() {
+                    self.run_rebase(RebaseRequest {
+                        onto: branch.name,
+                        branch: None,
+                        local_changes: LocalChanges::Stash,
+                    });
                 }
             }
             BranchMerge => {
-                if let Some((vcs, repo)) = pair {
-                    vcs.merge(
-                        &repo,
-                        MergeRequest {
-                            revision: branch.name,
-                            ..MergeRequest::default()
-                        },
-                    );
+                if pair.is_some() {
+                    self.run_merge(MergeRequest {
+                        revision: branch.name,
+                        ..MergeRequest::default()
+                    });
                 }
             }
             BranchUpdate => {

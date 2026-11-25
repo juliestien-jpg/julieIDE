@@ -9,7 +9,7 @@ wait-idle
 wait 1000
 state @OUT@/b06-conflit.json
 screenshot @OUT@/b06-conflit.png
-ui git.keep ours a.txt
+ui git.keep yours a.txt
 wait 300
 ui confirm
 wait-idle

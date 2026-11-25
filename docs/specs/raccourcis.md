@@ -68,6 +68,7 @@ Que les réflexes PhpStorm de la personne qui dirige le projet marchent tels que
 | Partout | Ctrl+T | Mettre à jour le projet (Git) | oui (supposé) |
 | Partout | Ctrl+Maj+K | Pousser… | oui (supposé) |
 | Partout | Ctrl+Maj+` | Fenêtre surgissante des branches | oui (supposé ; voir la note clavier AZERTY) |
+| Partout | Ctrl+Maj+B | Fenêtre surgissante des branches (remplacement sans accent grave, décision n°2) | non |
 | Partout | Alt+` | Liste rapide des opérations Git | oui (supposé) |
 | Éditeur | Ctrl+clic, Ctrl+B | Aller à la déclaration (sur une déclaration : liste des usages) | oui (supposé) |
 | Éditeur | Alt+F7 | Trouver les usages (fenêtre Usages) | oui (supposé) |

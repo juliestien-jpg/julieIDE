@@ -1,0 +1,58 @@
+# Écrans des corrections (b) : bandeau de la HEAD détachée, dialogue « n commits ne sont sur aucune
+# branche », notification avec bouton ; 1280x720 et plein écran, 100 % et 150 %, thème clair.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> detachee
+project @A@
+resize 1280 720
+wait-idle
+ui git.tab log
+wait-idle
+wait 500
+ui menu.open log 3
+ui menu.choose log.checkout
+wait 400
+ui dialog.choose checkout
+wait-idle
+wait 800
+ui git.tab changes
+wait 300
+ui git.check orphelin.txt
+ui git.message Commit orphelin
+ui git.commit
+wait-idle
+wait 800
+screenshot @OUT@/ecrans-b-banniere-1280-100.png
+ui branches.open
+wait-idle
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 600
+screenshot @OUT@/ecrans-b-dialogue-1280-100.png
+scale 1.5
+wait 600
+screenshot @OUT@/ecrans-b-dialogue-1280-150.png
+scale 1.0
+fullscreen on
+wait 800
+screenshot @OUT@/ecrans-b-dialogue-plein-100.png
+scale 1.5
+wait 600
+screenshot @OUT@/ecrans-b-dialogue-plein-150.png
+scale 1.0
+ui dialog.choose cancel
+screenshot @OUT@/ecrans-b-banniere-plein-100.png
+fullscreen off
+resize 1280 720
+theme light
+wait 600
+screenshot @OUT@/ecrans-b-banniere-clair.png
+ui branches.open
+wait-idle
+ui branches.select main
+ui branches.menu
+ui menu.choose branch.checkout
+wait-idle
+wait 600
+screenshot @OUT@/ecrans-b-dialogue-clair.png
+quit

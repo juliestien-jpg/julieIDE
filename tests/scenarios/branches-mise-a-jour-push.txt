@@ -19,7 +19,9 @@ wait-idle
 wait 400
 state target/essais/branches/10-deuxieme-maj.json
 key Ctrl+Maj+K
-wait 600
+wait 300
+wait-idle
+wait 300
 screenshot target/essais/branches/11-push.png
 state target/essais/branches/11-push.json
 ui dialog.choose push

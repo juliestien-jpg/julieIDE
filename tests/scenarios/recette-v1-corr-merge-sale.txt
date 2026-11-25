@@ -1,0 +1,21 @@
+# Corrections m1 : fusionner une branche alors que des changements locaux seraient écrasés.
+# Décor : tests/fixtures/recette-v1-corrections.sh <dossier> merge-sale
+# Avant : « Git : des changements locaux seraient écrasés : OverwriteConflict { … » (Debug de Rust).
+# Maintenant : le dialogue « Mettre de côté et fusionner », comme pour la bascule.
+project @A@
+resize 1280 720
+wait-idle
+ui branches.open
+ui branches.select feature/login
+ui branches.menu
+ui menu.choose branch.merge
+wait-idle
+wait 500
+state @OUT@/merge-sale-dialogue.json
+screenshot @OUT@/merge-sale-dialogue.png
+ui dialog.choose stash
+wait-idle
+wait 1000
+state @OUT@/merge-sale-apres.json
+screenshot @OUT@/merge-sale-apres.png
+quit

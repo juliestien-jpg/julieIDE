@@ -4,7 +4,11 @@ project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-ui-branches/A
 resize 1280 720
 wait-idle
 key Ctrl+Maj+K
-wait 600
+# L'aperçu des commits sortants prend de 0,3 à 1,6 s (une dizaine d'appels git) : on attend la fin
+# de la tâche (wait-idle) plutôt qu'un délai fixe ; le bouton « Pousser » est alors actif.
+wait 300
+wait-idle
+wait 300
 ui dialog.choose push
 wait-idle
 wait 500
