@@ -1,14 +1,17 @@
 //! Réglages de la section `[index]`.
 
+use julie_core::project::ALWAYS_EXCLUDED;
 use serde::Deserialize;
 
 /// Section `[index]` des réglages (`settings.section::<IndexSettings>("index")`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct IndexSettings {
-    /// Dossiers et fichiers jamais indexés, en plus de `.gitignore`. Un nom seul
-    /// (`.git`) s'applique à toute profondeur ; un nom précédé de `/` (`/target`)
-    /// seulement à la racine du projet. Défaut : `.git`, `.juliestorm`, `/target`.
+    /// Dossiers et fichiers jamais indexés, en plus de `.gitignore` et de
+    /// `julie_core::project::ALWAYS_EXCLUDED` (`.git`, `.juliestorm`, exclus
+    /// **toujours**, quoi que dise cette liste). Un nom seul (`build`)
+    /// s'applique à toute profondeur ; un nom précédé de `/` (`/target`)
+    /// seulement à la racine du projet. Défaut : `/target`.
     pub excluded: Vec<String>,
     /// Noms de dossiers dont le contenu est marqué « bibliothèque » (indexé, mais
     /// classé après les fichiers du projet). Défaut : `vendor`, `node_modules`.
@@ -24,7 +27,7 @@ pub struct IndexSettings {
 impl Default for IndexSettings {
     fn default() -> Self {
         Self {
-            excluded: vec![".git".into(), ".juliestorm".into(), "/target".into()],
+            excluded: vec!["/target".into()],
             libraries: vec!["vendor".into(), "node_modules".into()],
             max_file_size: 10 * 1024 * 1024,
             threads: 4,
@@ -37,9 +40,13 @@ impl IndexSettings {
         self.threads.clamp(1, 32)
     }
 
-    /// Le chemin relatif (séparateurs `/`) est-il exclu ?
+    /// Le chemin relatif (séparateurs `/`) est-il exclu ? `ALWAYS_EXCLUDED`
+    /// compris.
     pub(crate) fn is_excluded(&self, relative: &str) -> bool {
         let name = relative.rsplit('/').next().unwrap_or(relative);
+        if ALWAYS_EXCLUDED.contains(&name) {
+            return true;
+        }
         self.excluded
             .iter()
             .any(|rule| match rule.strip_prefix('/') {
@@ -68,6 +75,23 @@ mod tests {
         assert!(settings.is_excluded("target"));
         assert!(!settings.is_excluded("src/target"));
         assert!(!settings.is_excluded("src/git"));
+        assert!(settings.is_excluded("a/b/.juliestorm"));
+    }
+
+    #[test]
+    fn always_excluded_whatever_the_settings_say() {
+        let settings = IndexSettings {
+            excluded: Vec::new(),
+            ..IndexSettings::default()
+        };
+        assert!(settings.is_excluded(".git"));
+        assert!(settings.is_excluded("sub/.git"));
+        assert!(settings.is_excluded(".juliestorm"));
+        assert!(!settings.is_excluded("target"));
+        assert_eq!(
+            IndexSettings::default().excluded,
+            vec!["/target".to_string()]
+        );
     }
 
     #[test]

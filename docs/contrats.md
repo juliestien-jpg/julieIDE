@@ -1139,17 +1139,22 @@ Détail en tête de `crates/text/src/lib.rs` et de `crates/app/src/editor/mod.rs
   (onglets : à l'hôte), plus Ctrl+D, Ctrl+/, Alt+Maj+Haut/Bas. Ctrl+S est à
   l'hôte.
 
-## 11. `julie-index` (dev-indexation-recherche, lot 3 de la v0)
+## 11. `julie-index` (dev-indexation-recherche, lot 3 de la v0 ; symboles et navigation : v1, 25/11/2026)
 
 Détail et exemple en tête de `crates/index/src/lib.rs`. Ne dépend que de
-`julie-core` (plus `ignore`, `globset`, `regex`, `memchr`). Spécification :
-`docs/specs/recherche.md`. Rien n'est écrit sur le disque (pas de cache en v0).
+`julie-core` (plus `ignore`, `globset`, `regex`, `memchr`, et `tree-sitter` avec
+les grammaires PHP, JavaScript, TypeScript de `[workspace.dependencies]`, les
+mêmes que `julie-text` ; pas de dépendance vers `julie-text` : chaque crate
+analyse elle-même). Spécifications : `docs/specs/recherche.md`,
+`docs/specs/navigation.md`. Seule écriture disque : le cache des symboles,
+`<projet>/.juliestorm/index/symbols.bin` (jamais hors du projet ouvert).
 
 ### Service (fil de l'interface)
 
 `IndexService::new(tasks, project, settings)` (`settings: IndexSettings` =
-section `[index]` : `excluded` (défaut `.git`, `.juliestorm`, `/target` ; un nom
-seul vaut à toute profondeur, `/nom` à la racine seulement), `libraries` (défaut
+section `[index]` : `excluded` (défaut `/target` ; un nom seul vaut à toute
+profondeur, `/nom` à la racine seulement ; `project::ALWAYS_EXCLUDED` = `.git`,
+`.juliestorm` s'applique **toujours** en plus, même avec une liste vide), `libraries` (défaut
 `vendor`, `node_modules`), `max_file_size` (10 Mio), `threads` (4)). Chaque
 méthode lance une tâche `Domain::Index` et rend la main ; résultats en
 `IndexEvent` (`event.get::<julie_index::IndexEvent>()`, ou `take` pour les gros
@@ -1163,6 +1168,14 @@ paquets).
 | `search_text(TextQuery, UnsavedFiles) -> Result<TaskHandle>` | `index.search_text` | `TextMatches(Vec<FileTextMatches>)` en flux (premier paquet dès la première occurrence, puis toutes les 50 ms au plus), puis `TextSearchFinished(TextSearchSummary)`. Annule la recherche précédente ; attend la fin d'un `scan`. |
 | `cancel_search()` | — | annule la recherche en cours (fenêtre fermée). |
 | `preview(chemin, ligne, contexte, Option<TextQuery>, Option<Arc<str>>) -> Result<TaskHandle>` | `index.preview` | `Preview(Preview)`. Annule l'aperçu précédent. |
+| `set_settings(IndexSettings) -> Option<TaskHandle>` | `index.scan` | Nouveaux réglages (`Event::SettingsChanged` qui `concerns("index")`) : si différents, relance tout (fichiers puis symboles) et rend la tâche ; sinon `None`. Le service n'est pas reconstruit. |
+| (fin de `scan`) / `build_symbols()` | `index.symbols` | progression `Progress { done, total }` (fichiers PHP/JS/TS), puis `SymbolsReady(SymbolBuildSummary { files, parsed, from_cache, skipped_too_large, skipped_binary, unreadable, declarations, cache_loaded, cache_written, elapsed })`. Lancée d'office à la fin de chaque `scan`. |
+| `update(chemins)` (suite) | `index.update` | après `Updated` : `SymbolsUpdated { files }` si des fichiers de code ont été réindexés. |
+| `set_unsaved(chemin, Option<Arc<str>>)` | `index.unsaved` | `SymbolsUpdated { files: 1 }`. `Some` : contenu d'un onglet modifié (après une pause de frappe) ; `None` : enregistré, fermé, annulé (retour au disque). Sert à l'index, à la navigation et aux usages. |
+| `navigate(NavigationRequest { path, text, position })` | `index.navigate` | `Navigation(NavigationResult)`, un seul. Annule la demande précédente. |
+| `find_usages(UsagesQuery { symbol, include_libraries })` | `index.usages` | `Usages(Vec<Usage>)` en flux (premier fichier trouvé tout de suite, puis toutes les 50 ms au plus), puis `UsagesFinished(UsagesSummary)`. Annule la recherche précédente ; annulée : pas de `UsagesFinished`. |
+| `cancel_usages()` | — | onglet Usages ou liste surgissante fermés. |
+| `save_symbol_cache()` | `index.symbols_cache` | aucun ; à la fermeture du projet (la construction l'écrit déjà). |
 
 - `is_ready()` : l'indexation initiale est finie (sinon afficher « Indexation… »).
   `with_index(|index| …)` peut bloquer quelques millisecondes : tests et tâches.
@@ -1250,20 +1263,115 @@ paquets).
   racine, tout le projet (`full_rescan`). `.git/info/exclude` ou l'exclusion
   globale changés : relancer `scan()`.
 
-### Mesures (24/11/2026, `lab`, lecture seule, compilation `--release`)
+### Navigation (v1) — pour dev-editeur et dev-interface
 
-`cargo run -p julie-index --release --example mesure -- <projet>` : indexation
-de 23 389 fichiers en 170–185 ms ; « aller au fichier » 1–5 ms (médiane) sur
-`lab`, 10–24 ms sur 70 000 chemins ; recherche d'un texte absent sur 18 736
-fichiers 0,7–0,9 s à chaud (`git grep` : 1,1–1,4 s), premier paquet en 20–30 ms.
+**Nouvelles variantes de `IndexEvent`** : `SymbolsReady`, `SymbolsUpdated`,
+`Navigation`, `Usages`, `UsagesFinished`. Le `match` exhaustif de
+`crates/app/src/app.rs` (`on_index`) doit gagner ces branches.
 
-### Prévu, pas livré (v1)
+- `symbols_progress() -> Option<u8>` : `None` = index des symboles prêt, sinon
+  pourcentage (« Indexation des symboles… n % » ; « Indexation en cours (n %),
+  réessayez dans un instant » quand rien n'est trouvé).
+- `NavigationRequest { path (absolu), text: Arc<str> (texte de l'éditeur),
+  position: TextPosition (colonne en caractères) }`. Le même appel sert au
+  Ctrl+clic, à Ctrl+B et au survol avec Ctrl : l'analyse du fichier est gardée
+  tant que le texte ne change pas (survol répété : quelques ms, voir mesures).
+- `NavigationResult { path, position, word: Option<TextRange>, navigation,
+  indexing: Option<u8> }`. `word` : le mot navigable à souligner (`None` : pas de
+  soulignement, pas de main).
+- `Navigation` :
+  - `Targets(Targets { targets, guess, constructor })` : `targets` jamais vide,
+    dans l'ordre de la spec (fichier courant, même espace de noms / même dossier,
+    projet, bibliothèques ; puis nom qualifié). Une cible et `guess == None` :
+    saut direct ; sinon liste surgissante. `guess: Some(Guess::UnknownReceiver
+    { receiver: "$other", member, kind })` → titre « Type de $other inconnu :
+    méthodes nommées getName » ; `Guess::GlobalName { name }` (JS sans modules).
+    `constructor` : sur `new X(…)`, le constructeur (propre ou hérité), à
+    proposer **en plus** (décision n° 9) ; il ne change pas le saut direct.
+  - `Declaration(Declaration)` : le curseur est sur une déclaration → lancer
+    `find_usages(UsagesQuery::new(d))` (liste surgissante des usages ; un seul
+    usage : saut direct).
+  - `OpenFile(chemin)` : chaîne d'un `import`/`require`.
+  - `Nothing(NoTarget)` : `NotASymbol` (rien : commentaire, chaîne, espace),
+    `NotInProject { name }` (« Aucune déclaration dans le projet »),
+    `NotFound { name }` (« Aucune déclaration trouvée »), `DynamicName`
+    (« Nom calculé à l'exécution » ; pas encore émis : sur `$obj->$nom()` le
+    Ctrl+clic vise la variable `$nom`), `ExternalModule { specifier }` (« Module
+    externe : non résolu »). Le curseur ne bouge pas.
+- `Declaration { kind: SymbolKind, language, name, qualified_name
+  ("App\Model\User::getName", "Api.get"), container, path, relative, range
+  (nom déclaré : y placer le curseur), line_text (sans indentation, 300 car.),
+  library }`. `SymbolKind` : `Namespace`, `Class`, `Interface`, `Trait`,
+  `Enum`, `EnumCase`, `Function`, `Method`, `Property`, `ClassConstant`,
+  `Constant`, `Variable`, `Parameter`, `Import`, `TypeAlias`.
+- `Usage { certainty: Sure | Possible, path, relative, range (colonnes de la
+  ligne entière, à sélectionner telles quelles), line_text, line_text_start
+  (colonne où commence l'extrait), library, unsaved }`.
+- `UsagesSummary { symbol, sure, possible, files_with_sure,
+  files_with_possible, files_searched, library_files_skipped, unreadable,
+  dynamic_not_searched (membres : ligne d'aide du pied), index_complete,
+  elapsed }`. Titre : « 5 usages de User::getName, 1 appel possible » ; le compte
+  des appels possibles toujours affiché ; jamais « tous ».
+- Synchrone (tests, mesures) : `SymbolIndex::build(&FileIndex, Option<&Path>
+  cache, &UnsavedFiles, &CancelToken)`, `update`, `set_text`, `save_cache`,
+  `navigate(&SymbolIndex, &NavigationRequest, &UnsavedFiles)`,
+  `find_usages(&SymbolIndex, &UsagesQuery, &UnsavedFiles, &IndexSettings,
+  index_complete, &CancelToken, &mut sink)`.
+- Mesures et essais sur un projet où l'on n'écrit rien :
+  `IndexService::with_symbol_cache(None | Some(dossier temporaire))`.
 
-Index des symboles (attend la décision sur `tree-sitter` dans
-`[workspace.dependencies]`, section 10), recherche partout à onglets,
-remplacement, aller à la définition, usages, cache disque dans
-`.juliestorm/index/`, proximité du fichier courant dans le classement.
+**Ce qui est résolu** (détail dans `navigation.md`) — PHP : noms de classes,
+fonctions et constantes par l'espace de noms et les `use` (alias, groupés,
+`use function`/`use const`, repli global) ; `self`, `static`, `parent`,
+`X::class` ; membres par le type du receveur : `$this` (fermetures comprises),
+`X::`, paramètres typés (unions), propriétés typées et promues, `new` dans la
+même fonction (toutes les affectations du même type), `@var`/`@param`/`@return`,
+types de retour déclarés (`self`, `static`) sur une chaîne de 4 maillons ; membre
+le plus proche : classe, traits, parents, interfaces ; héritage cyclique arrêté.
+JS/TS : portées (bloc, fonction, module), imports nommés/défaut/espace de noms,
+réexports (`export {…} from`, `export * from`, 5 niveaux), chemins relatifs
+(`x`, `.js .ts .tsx .jsx .mjs .cjs`, `x/index.*`), `this.m()`, `x.m()` si
+`x = new C()`, `ns.a`, JSX `<Composant />`, globales de scripts sans modules
+(devinées).
 
+**Ce qui reste « par le nom » (deviné ou absent)** : toute valeur de type
+inconnu (retour non typé, tableau, `$obj->$nom`, variable réaffectée de types
+différents, exception attrapée `catch (E $e)`, variable d'un `foreach`),
+propriétés et méthodes JS sur autre chose que `this`/`new`/imports,
+`__call`/`__get` (rien), `define()` à nom calculé, JS des `<script>` d'un HTML
+ou d'un PHP (non indexé), alias de `tsconfig`, modules de `node_modules`.
+Usages : seuls les fichiers qui **mentionnent** le nom (filtre par empreintes
+dans l'index) sont lus ; les appels dynamiques, chaînes et commentaires (hors
+types de documentation PHP) ne sont pas cherchés.
+
+**Limites connues** : fichiers de plus de 1 Mio (`SYMBOL_MAX_FILE_SIZE` : tables
+générées, polices) et `*.min.js` hors de l'index des symboles (la recherche de
+texte les lit) ; une analyse neuve d'un fichier de 25 000 lignes coûte ~0,4 s
+(la première demande sur ce fichier) ; pendant une recherche d'usages,
+l'écriture de l'index est différée (la navigation résout alors avec l'index tel
+qu'il est). Lignes séparées par `\n` seulement (un fichier à `\r` seuls aurait
+des positions fausses).
+
+### Mesures (24-25/11/2026, `lab`, lecture seule, compilation `--release`)
+
+`cargo run -p julie-index --release --example mesure` (fichiers, texte) et
+`--example mesure_symboles -- <projet>` (cache dans `%TEMP%`, effacé) :
+indexation de 23 389 fichiers en 160–250 ms ; « aller au fichier » 1–5 ms
+(médiane) ; recherche d'un texte absent 0,7–0,9 s à chaud, premier paquet
+20–30 ms. Symboles : 15 469 fichiers, 120 858 déclarations, **26,6–35 s** sans
+cache selon la charge de la machine partagée (cible 30 s : tenue une fois sur
+trois ; l'analyse tree-sitter seule coûte 44 s de processeur), **0,4–1,5 s**
+avec cache (une mesure à 9,9 s, disque chargé) ; mémoire estimée 33 Mio, cache
+13 Mio. Aller à la déclaration par le service, analyse gardée : 3,8 ms
+(médiane), 4,3 ms (max) sur 20 essais. Usages : classe instanciée 168 fois →
+171 usages dans 17 fichiers, premier lot 5 ms, fin 30 ms ; `save` → 1 sûr, 24
+possibles, premier lot 30–40 ms, fin 0,2 s.
+
+### Prévu, pas livré
+
+Recherche partout à onglets (classes, symboles), remplacement, proximité du
+fichier courant dans le classement d'« aller au fichier », AngularJS, CSS et
+HTML dans l'index des symboles, JS des `<script>`.
 ## 12. `julie-phpunit` (dev-phpunit, lot 4 de la v0 ; réglages, sondes et parties de la suite : v1, 25/11/2026)
 
 Détail et exemple d'assemblage en tête de `crates/phpunit/src/lib.rs`. Ne dépend que

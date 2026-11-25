@@ -241,6 +241,12 @@ impl FileIndex {
         self.generation += 1;
     }
 
+    /// Vide l'index et change ses réglages (nouvelle indexation à suivre).
+    pub(crate) fn reset(&mut self, settings: IndexSettings) {
+        self.clear();
+        self.settings = settings;
+    }
+
     pub(crate) fn insert_walked(&mut self, batch: Vec<Walked>) {
         for item in batch {
             match item {
