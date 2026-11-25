@@ -58,13 +58,26 @@
 //! # Détection ([`detect()`])
 //!
 //! PHP : réglage `php_path`, sinon `php` du `PATH`, sinon [`DEFAULT_PHP_PATH`].
-//! PHPUnit : réglage `phpunit_path`, sinon `vendor/bin/phpunit`, le script du paquet,
-//! un phar. Configuration : réglage `configuration`, sinon `phpunit.xml`,
-//! `phpunit.xml.dist`. [`Detection`] garde chaque résultat séparément
+//! PHPUnit : réglage `phpunit_path`, sinon, dans l'ordre, [`PHPUNIT_CANDIDATES`]
+//! (`vendor/bin/phpunit`, le script du paquet, les phars, `tools/phpunit/phpunit.phar`,
+//! `tools/phpunit`) : des **fichiers** aux noms exacts (jamais un dossier, un
+//! `.rar`, un `.bat`). Configuration : réglage `configuration`, sinon
+//! `phpunit.xml`, `phpunit.xml.dist`. [`Detection`] garde chaque résultat séparément
 //! (`Result<_, Problem>`) pour montrer ce qui va et ce qui manque ;
 //! [`Detection::plan`] donne un [`LaunchPlan`] ou le premier problème. Les
 //! versions (`php --version`, `phpunit --version`) ne sont sondées que sur
-//! demande (deux processus) : `PhpUnit::detect()` le fait, l'exécution non.
+//! demande (deux processus) : `PhpUnit::detect()` le fait, l'exécution non ;
+//! [`detect_files`] ne fait que des accès disque.
+//!
+//! # Réglages, sondes, parties de la suite
+//!
+//! - [`PhpUnitSettings`] : `extra_args` et `[phpunit.env]` s'ajoutent à chaque
+//!   exécution ; [`preview_command`] rend la commande exacte (sans rien lancer) ;
+//!   [`PhpUnitSettings::issues`] les avertissements.
+//! - [`probe`] : sondes de validation pour la fenêtre de réglages (tâche de fond).
+//! - [`select`] : lancer un fichier, un dossier, une classe, une méthode, un jeu de
+//!   données, un nœud de l'arbre ([`RunRequest::for_node`]) ou les échecs
+//!   ([`RunRequest::rerun_failures`]).
 //!
 //! # Arbre de résultats ([`ResultTree`])
 //!
@@ -105,13 +118,9 @@
 //! `||`, `|[`, `|]`, `|0xXXXX`. La sortie non reconnue (avertissements PHP, `echo`,
 //! messages inconnus ou tronqués) devient `TestEvent::Output`, jamais perdue.
 //!
-//! # Prévu pour la v1, pas livré
+//! # Prévu, pas livré
 //!
-//! Découverte des tests (icônes de gouttière), configurations nommées, relance des
-//! échecs ou d'un nœud, historique. La place est faite : [`RunScope`] et
-//! [`RunRequest`] (`extra_args`, `env`, `working_dir`) savent déjà lancer une suite
-//! ou un filtre ; relancer un nœud, c'est un `RunScope::Filter` construit depuis
-//! `TestNode::source`.
+//! Découverte des tests (icônes de gouttière), configurations nommées, historique.
 //!
 //! # Ce qui est vérifié contre quoi
 //!
@@ -124,17 +133,19 @@ pub mod detect;
 pub mod error;
 pub mod event;
 pub mod model;
+pub mod probe;
 pub mod refine;
 pub mod run;
+pub mod select;
 pub mod service;
 pub mod settings;
 pub mod teamcity;
 pub mod trace;
 
 pub use detect::{
-    detect, locate_configuration, locate_php, locate_phpunit, parse_php_version,
+    detect, detect_files, locate_configuration, locate_php, locate_phpunit, parse_php_version,
     parse_phpunit_version, Detection, PhpInfo, PhpSource, PhpUnitInfo, PhpUnitKind, PhpUnitSource,
-    PhpUnitVersion, DEFAULT_PHP_PATH,
+    PhpUnitVersion, DEFAULT_PHP_PATH, PHPUNIT_CANDIDATES,
 };
 pub use error::{PhpUnitError, Problem};
 pub use event::{AbortReason, Comparison, ReportedSummary, TestEvent};
@@ -142,11 +153,23 @@ pub use model::{
     parse_location_hint, ConsoleLine, Counts, Diagnostic, DiagnosticCause, NodeId, NodeKind,
     ResultTree, TestNode, TestSource, TestState,
 };
+pub use probe::{
+    probe, probe_configuration, probe_php, probe_phpunit, ProbeEvent, ProbeFailure, ProbeKind,
+    ProbeRequest, ProbeResult, ProbeSuccess, PROBE_TIMEOUT,
+};
 pub use refine::{refine, SourceLines};
 pub use run::{
-    arguments, command, command_line, LaunchPlan, RunOutcome, RunRequest, RunScope, RunSummary,
+    arguments, command, command_line, preview_command, preview_with, Base, CommandPreview,
+    LaunchPlan, RunOutcome, RunRequest, RunScope, RunSummary, Selection,
+};
+pub use select::{
+    class_pattern, data_set_pattern, delimit, method_pattern, quote_regex, DataSetKey,
+    MAX_FILTER_LEN,
 };
 pub use service::{execute, PhpUnit, PhpUnitEvent, RunStart};
-pub use settings::PhpUnitSettings;
+pub use settings::{
+    is_reserved_argument, is_valid_env_name, join_arguments, split_arguments, PhpUnitSettings,
+    SettingsIssue, RESERVED_ARGUMENTS,
+};
 pub use teamcity::{classify_failure, TeamCityParser};
 pub use trace::{find_links, parse_trace, unexport, TextLink, TraceEntry};

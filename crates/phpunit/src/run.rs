@@ -2,10 +2,14 @@
 //! résumé de fin.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use julie_core::process::Command;
+
+use crate::detect::{detect_files, Detection};
+use crate::error::Problem;
+use crate::settings::{is_valid_env_name, PhpUnitSettings};
 
 use crate::event::ReportedSummary;
 use crate::model::Counts;
@@ -21,8 +25,7 @@ pub struct LaunchPlan {
     pub configuration: PathBuf,
 }
 
-/// Ce qu'on exécute. En v0 l'interface n'utilise que `All` ; les autres portées
-/// servent aux essais et préparent « lancer ceci » de la v1.
+/// Ce qu'on exécute.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum RunScope {
     /// La suite par défaut de la configuration.
@@ -30,9 +33,33 @@ pub enum RunScope {
     All,
     /// Une suite de `phpunit.xml` (`--testsuite`).
     TestSuite(String),
-    /// Un filtre de PHPUnit (`--filter`, expression régulière) : une classe, une
-    /// méthode ou un jeu de données.
+    /// Un motif de `--filter` donné tel quel (expression régulière de PHPUnit).
     Filter(String),
+    /// Une partie de la suite : fichier, dossier, classe, méthode, jeu de données,
+    /// ou les tests en échec (voir [`crate::select`]).
+    Selection(Selection),
+}
+
+/// Où PHPUnit va chercher les tests d'une [`Selection`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Base {
+    /// La suite par défaut de la configuration.
+    #[default]
+    Default,
+    /// Une suite de `phpunit.xml`.
+    TestSuite(String),
+    /// Un fichier ou un dossier, passé en dernier argument à PHPUnit (il remplace
+    /// les suites de la configuration).
+    Path(PathBuf),
+}
+
+/// Une partie de la suite : une base, éventuellement restreinte par un filtre.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub base: Base,
+    /// Expression régulière **déjà délimitée** (`/^…$/s`), telle que la donne
+    /// [`crate::select`]. Absente : tout ce que la base contient.
+    pub filter: Option<String>,
 }
 
 /// Une demande d'exécution. `RunRequest::default()` lance toute la suite avec la
@@ -40,9 +67,11 @@ pub enum RunScope {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunRequest {
     pub scope: RunScope,
-    /// Options PHPUnit supplémentaires, ajoutées telles quelles à la fin.
+    /// Options PHPUnit supplémentaires de cette demande, ajoutées après celles du
+    /// réglage `extra_args`.
     pub extra_args: Vec<String>,
-    /// Variables d'environnement en plus de celles de l'IDE.
+    /// Variables d'environnement en plus de celles de l'IDE et du réglage
+    /// `[phpunit.env]` (elles l'emportent sur lui).
     pub env: Vec<(String, String)>,
     /// Dossier de travail ; par défaut la racine du projet.
     pub working_dir: Option<PathBuf>,
@@ -69,10 +98,44 @@ impl RunRequest {
             ..Self::default()
         }
     }
+
+    /// La demande telle qu'elle sera lancée : les options et variables du réglage
+    /// d'abord, celles de la demande ensuite (qui l'emportent sur les variables du
+    /// réglage de même nom). Les noms de variables invalides sont écartés.
+    /// [`crate::execute`] et [`crate::preview_command`] l'appliquent ; ne pas
+    /// l'appliquer deux fois.
+    pub fn with_settings(&self, settings: &PhpUnitSettings) -> RunRequest {
+        let mut request = self.clone();
+        request.extra_args = settings
+            .extra_args
+            .iter()
+            .chain(&self.extra_args)
+            .cloned()
+            .collect();
+        let mut env: Vec<(String, String)> = Vec::new();
+        let from_settings = settings.env.iter().map(|(k, v)| (k.clone(), v.clone()));
+        for (key, value) in from_settings.chain(self.env.iter().cloned()) {
+            if !is_valid_env_name(&key) {
+                continue;
+            }
+            let same = |other: &str| {
+                if cfg!(windows) {
+                    other.eq_ignore_ascii_case(&key)
+                } else {
+                    other == key
+                }
+            };
+            env.retain(|(existing, _)| !same(existing));
+            env.push((key, value));
+        }
+        request.env = env;
+        request
+    }
 }
 
-/// Arguments donnés à PHP : `<phpunit> --configuration <xml> --teamcity [portée]
-/// [options]`.
+/// Arguments donnés à PHP : `<phpunit> --configuration <xml> --teamcity [--testsuite
+/// <suite>] [--filter <motif>] [options] [chemin]`. Le chemin vient en dernier :
+/// PHPUnit cesse de lire les options au premier argument qui n'en est pas une.
 pub fn arguments(plan: &LaunchPlan, request: &RunRequest) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         plan.phpunit.clone().into_os_string(),
@@ -80,6 +143,7 @@ pub fn arguments(plan: &LaunchPlan, request: &RunRequest) -> Vec<OsString> {
         plan.configuration.clone().into_os_string(),
         "--teamcity".into(),
     ];
+    let mut path: Option<&PathBuf> = None;
     match &request.scope {
         RunScope::All => {}
         RunScope::TestSuite(name) => {
@@ -90,8 +154,25 @@ pub fn arguments(plan: &LaunchPlan, request: &RunRequest) -> Vec<OsString> {
             args.push("--filter".into());
             args.push(pattern.into());
         }
+        RunScope::Selection(selection) => {
+            match &selection.base {
+                Base::Default => {}
+                Base::TestSuite(name) => {
+                    args.push("--testsuite".into());
+                    args.push(name.into());
+                }
+                Base::Path(target) => path = Some(target),
+            }
+            if let Some(pattern) = &selection.filter {
+                args.push("--filter".into());
+                args.push(pattern.into());
+            }
+        }
     }
     args.extend(request.extra_args.iter().map(OsString::from));
+    if let Some(path) = path {
+        args.push(path.clone().into_os_string());
+    }
     args
 }
 
@@ -119,11 +200,66 @@ pub fn command_line(plan: &LaunchPlan, request: &RunRequest) -> String {
 }
 
 fn quote(arg: &str) -> String {
-    if arg.is_empty() || arg.contains([' ', '\t', '"']) {
-        format!("\"{}\"", arg.replace('"', "\\\""))
+    if arg.is_empty() || arg.contains([' ', '\t', '"', '\n', '\r']) {
+        format!(
+            "\"{}\"",
+            arg.replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+        )
     } else {
         arg.to_owned()
     }
+}
+
+/// La commande exacte d'une exécution, prête à afficher (fenêtre de réglages) ou à
+/// comparer à ce que l'on voit en tête de la console.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPreview {
+    pub plan: LaunchPlan,
+    /// Écrite comme en tête de la console : `"C:\…\php.exe" "…\phpunit.phar"
+    /// --configuration "…\phpunit.xml" --teamcity …`.
+    pub command_line: String,
+    /// Les arguments donnés à PHP, un par élément (le premier est le script).
+    pub args: Vec<String>,
+    pub working_dir: PathBuf,
+    /// Variables ajoutées à l'environnement de l'IDE (réglage puis demande).
+    pub env: Vec<(String, String)>,
+}
+
+/// La commande qui serait lancée pour `request` avec ces réglages, **sans rien
+/// lancer** : seulement des accès disque (`is_file`), pas de processus.
+/// `Err` : le premier [`Problem`] de la détection (PHP, PHPUnit, configuration).
+pub fn preview_command(
+    root: &Path,
+    settings: &PhpUnitSettings,
+    request: &RunRequest,
+) -> Result<CommandPreview, Problem> {
+    let detection = detect_files(root, settings);
+    preview_with(&detection, settings, request)
+}
+
+/// Comme [`preview_command`], à partir d'une détection déjà faite.
+pub fn preview_with(
+    detection: &Detection,
+    settings: &PhpUnitSettings,
+    request: &RunRequest,
+) -> Result<CommandPreview, Problem> {
+    let plan = detection.plan()?;
+    let effective = request.with_settings(settings);
+    Ok(CommandPreview {
+        command_line: command_line(&plan, &effective),
+        args: arguments(&plan, &effective)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect(),
+        working_dir: effective
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| plan.root.clone()),
+        env: effective.env,
+        plan,
+    })
 }
 
 /// Comment l'exécution s'est terminée.
@@ -205,5 +341,114 @@ mod tests {
         assert!(line.ends_with("--teamcity --filter CalculatorTest::testAdd --stop-on-failure"));
         let line = command_line(&plan(), &RunRequest::test_suite("crash"));
         assert!(line.ends_with("--teamcity --testsuite crash"));
+    }
+
+    #[test]
+    fn settings_options_come_first_and_the_path_comes_last() {
+        let settings = PhpUnitSettings {
+            extra_args: vec!["--stop-on-failure".into()],
+            ..Default::default()
+        };
+        let mut request = RunRequest::path(r"C:\Mes projets\p\tests\FooTest.php");
+        request.extra_args = vec!["--no-coverage".into()];
+        let line = command_line(&plan(), &request.with_settings(&settings));
+        assert!(
+            line.ends_with(
+                r#"--teamcity --stop-on-failure --no-coverage "C:\Mes projets\p\tests\FooTest.php""#
+            ),
+            "{line}"
+        );
+        // Filtre et chemin ensemble : le filtre avant les options, le chemin après.
+        let request = RunRequest::method(r"C:\p\FooTest.php", r"A\FooTest", "testX");
+        let line = command_line(&plan(), &request);
+        assert!(
+            line.contains(r#"--filter "/^A\\FooTest::testX(?: with data set .*)?$/s""#),
+            "{line}"
+        );
+        assert!(line.ends_with(r"C:\p\FooTest.php"));
+    }
+
+    #[test]
+    fn a_filter_with_spaces_or_newlines_is_shown_quoted() {
+        let request = RunRequest::filter("a b\nc\"d");
+        let line = command_line(&plan(), &request);
+        assert!(line.ends_with(r#"--filter "a b\nc\"d""#), "{line}");
+    }
+
+    #[test]
+    fn request_env_wins_over_settings_env_and_bad_names_are_dropped() {
+        let mut settings = PhpUnitSettings::default();
+        settings.env.insert("A".into(), "réglage".into());
+        settings.env.insert("B".into(), "réglage".into());
+        settings.env.insert("MAUVAIS=NOM".into(), "x".into());
+        let mut request = RunRequest::all();
+        request.env = vec![("B".into(), "demande".into()), (String::new(), "y".into())];
+        let effective = request.with_settings(&settings);
+        assert_eq!(
+            effective.env,
+            [
+                ("A".to_owned(), "réglage".to_owned()),
+                ("B".to_owned(), "demande".to_owned())
+            ]
+        );
+        if cfg!(windows) {
+            request.env = vec![("a".into(), "minuscule".into())];
+            let effective = request.with_settings(&settings);
+            assert_eq!(
+                effective
+                    .env
+                    .iter()
+                    .filter(|(k, _)| k.eq_ignore_ascii_case("a"))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn the_preview_applies_the_settings_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("tools/phpunit")).unwrap();
+        std::fs::write(root.join("tools/phpunit/phpunit.phar"), "x").unwrap();
+        std::fs::write(root.join("phpunit.xml"), "<phpunit/>").unwrap();
+        let php = root.join("php.exe");
+        std::fs::write(&php, "x").unwrap();
+        let mut settings = PhpUnitSettings {
+            php_path: Some(php.clone()),
+            extra_args: vec!["--stop-on-failure".into()],
+            ..Default::default()
+        };
+        settings.env.insert("APP_ENV".into(), "test".into());
+        let preview = preview_command(root, &settings, &RunRequest::all()).unwrap();
+        assert_eq!(
+            preview.plan.phpunit,
+            root.join("tools/phpunit/phpunit.phar")
+        );
+        assert_eq!(
+            preview.args.last().map(String::as_str),
+            Some("--stop-on-failure")
+        );
+        assert_eq!(
+            preview
+                .args
+                .iter()
+                .filter(|a| *a == "--stop-on-failure")
+                .count(),
+            1
+        );
+        assert_eq!(preview.env, [("APP_ENV".to_owned(), "test".to_owned())]);
+        assert_eq!(preview.working_dir, root);
+        assert!(preview.command_line.contains("--configuration"));
+        assert!(preview
+            .command_line
+            .ends_with("--teamcity --stop-on-failure"));
+
+        // Rien à lancer : le premier problème, comme la détection.
+        std::fs::remove_file(root.join("phpunit.xml")).unwrap();
+        assert!(matches!(
+            preview_command(root, &settings, &RunRequest::all()),
+            Err(Problem::NoConfiguration { .. })
+        ));
     }
 }

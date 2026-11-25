@@ -1013,7 +1013,7 @@ Index des symboles (attend la décision sur `tree-sitter` dans
 remplacement, aller à la définition, usages, cache disque dans
 `.juliestorm/index/`, proximité du fichier courant dans le classement.
 
-## 12. `julie-phpunit` (dev-phpunit, lot 4 de la v0)
+## 12. `julie-phpunit` (dev-phpunit, lot 4 de la v0 ; réglages, sondes et parties de la suite : v1, 25/11/2026)
 
 Détail et exemple d'assemblage en tête de `crates/phpunit/src/lib.rs`. Ne dépend que
 de `julie-core` (plus `serde`, `thiserror`). Spécification : `docs/specs/phpunit.md`.
@@ -1021,8 +1021,8 @@ de `julie-core` (plus `serde`, `thiserror`). Spécification : `docs/specs/phpuni
 ### Service (fil de l'interface)
 
 `PhpUnit::new(tasks, project, settings)` (`settings: PhpUnitSettings` = section
-`[phpunit]` : `php_path`, `phpunit_path`, `configuration`, `timeout_seconds`, tous
-facultatifs ; `PhpUnitSettings::from_settings(&Settings)`). Chaque méthode rend un
+`[phpunit]` : `php_path`, `phpunit_path`, `configuration`, `extra_args`, `env`,
+`timeout_seconds`, tous facultatifs ; `PhpUnitSettings::from_settings(&Settings)`). Chaque méthode rend un
 `TaskHandle` tout de suite ; le résultat arrive en `PhpUnitEvent`
 (`event.get::<julie_phpunit::PhpUnitEvent>()`, domaine `Domain::PhpUnit`, `event.task`
 = identifiant de la tâche lancée).
@@ -1032,9 +1032,11 @@ facultatifs ; `PhpUnitSettings::from_settings(&Settings)`). Chaque méthode rend
 | `detect()` | `phpunit.detect` | `Detected(Box<Detection>)` (versions sondées : deux processus) |
 | `run(RunRequest)` | `phpunit.run` | `RunStarted(Box<RunStart>)`, des `Events(Vec<TestEvent>)`, `RunFinished(Box<RunSummary>)` ; ou `LaunchFailed(Problem)` seul |
 | `stop(TaskId)` | | PHP et ses descendants tués ; `RunFinished` (`Stopped`) puis tâche `Cancelled` |
+| `probe(ProbeRequest)` (v1) | `phpunit.probe` | `ProbeEvent { request, result }` (autre type que `PhpUnitEvent`, même domaine) ; rien si annulée |
 
-- `RunRequest::all()` (v0). Déjà prêts pour la v1 : `RunRequest::test_suite(nom)`,
-  `RunRequest::filter(regex)`, `extra_args`, `env`, `working_dir`, `timeout`.
+- `RunRequest::all()`, `test_suite(nom)`, `filter(motif brut)`, `extra_args`, `env`,
+  `working_dir`, `timeout` ; fichier, classe, méthode, jeu de données, nœud, échecs :
+  voir « Lancer une partie de la suite (v1) » plus bas.
 - Commande : `php <phpunit> --configuration <xml> --teamcity [--testsuite|--filter ..]
   [extra_args]`, dossier de travail = racine du projet. `RunStart::command_line` la
   donne telle qu'elle s'écrit en tête de la console (aussi dans le premier lot, en
@@ -1111,10 +1113,129 @@ PhpUnitEvent::Detected(d)       => self.detection = d,
 `julie_phpunit::detect(root, &settings, probe_versions, &cancel)` -> `Detection {
 php, phpunit, configuration }`, chacun un `Result<_, Problem>` : PHP = réglage, sinon
 `php` du `PATH`, sinon `C:\Program Files (x86)\AgileBio\LabCollector\php\php.exe`
-(un réglage invalide n'est jamais contourné) ; PHPUnit = réglage, `vendor/bin/phpunit`,
-`vendor/phpunit/phpunit/phpunit`, phar ; on lance toujours `php <script>`, jamais le
-`.bat` ; configuration = réglage, `phpunit.xml`, `phpunit.xml.dist`.
-`Detection::plan()` -> `LaunchPlan` ou le premier `Problem`.
+(un réglage invalide n'est jamais contourné) ; configuration = réglage, `phpunit.xml`,
+`phpunit.xml.dist`, `phpunit.dist.xml`. `Detection::plan()` -> `LaunchPlan` ou le
+premier `Problem`. `detect_files(root, &settings)` : la même détection **sans
+processus** (accès disque seulement, versions `None`) : sûre sur le fil de l'interface
+pour un projet local.
+
+**PHPUnit** (v1, 25/11/2026, `reglages.md`) = réglage `phpunit_path`, sinon, dans
+l'ordre (`julie_phpunit::PHPUNIT_CANDIDATES`) : `vendor/bin/phpunit`,
+`vendor/phpunit/phpunit/phpunit`, `vendor/bin/phpunit.phar`, `phpunit.phar`,
+`tools/phpunit.phar`, `tools/phpunit/phpunit.phar` (source `ToolsPhar` : cas de
+`backoffice`), `tools/phpunit` quand c'est un fichier (source `ToolsFile`, supposé :
+Phive). Règles : chaque candidat doit être un **fichier** (un dossier du même nom est
+sauté : `backoffice` a un dossier `tools/phpunit/`) ; **nom exact**, jamais approchant
+(`vendor/bin/phpunit.rar` n'est pas pris) ; on lance toujours `php <script>`, jamais un
+`.bat` (un `.bat` réglé à la main est remplacé par le script du même nom sans
+extension, `PhpUnitPathInvalid` s'il n'existe pas) ; un dossier réglé à la main est
+`PhpUnitPathInvalid`. Échec : `Problem::PhpUnitNotFound { searched }` liste **tous** les
+emplacements essayés, dans l'ordre. Les chemins trouvés ont des séparateurs homogènes
+(`…\tools\phpunit\phpunit.phar`).
+
+### Réglages `[phpunit]` (v1)
+
+`PhpUnitSettings` : `php_path`, `phpunit_path`, `configuration`, `timeout_seconds`
+et, nouveaux :
+
+| Clé | Type | Rôle |
+|---|---|---|
+| `extra_args` | `Vec<String>` (tableau TOML) | options ajoutées à chaque exécution, **avant** celles de la demande, après `--teamcity` (et après `--testsuite`/`--filter`) |
+| `env` (`[phpunit.env]`) | `BTreeMap<String, String>` | variables ajoutées à l'environnement de l'IDE, elles l'emportent sur lui ; une demande (`RunRequest::env`) l'emporte sur elles. Valeurs TOML numériques ou booléennes acceptées |
+
+- `PhpUnitSettings::issues() -> Vec<SettingsIssue>` : `ReservedArgument(arg)`
+  (`--teamcity`, `--configuration[=…]`, `-c`, `--printer`, `--log-teamcity`,
+  `--no-configuration`), `EmptyArgument`, `InvalidEnvName(nom)` (vide, `=` ou NUL :
+  la variable est écartée au lancement). Avertissements : n'empêchent pas
+  d'enregistrer. Les arguments réservés **restent** dans la commande (c'est ce qu'on a
+  écrit qui est montré).
+- `split_arguments(&str) -> Vec<String>` / `join_arguments(&[String]) -> String` : la
+  ligne de la fenêtre (aux espaces, les guillemets doubles groupent, `\"` littéral).
+  Aller-retour garanti.
+- Fusion des couches (`julie-core`) : `extra_args` est **remplacé en bloc** par la
+  couche projet ; `[phpunit.env]` fusionne par nom de variable.
+- `RunRequest::with_settings(&settings)` rend la demande **effective** (options et
+  variables du réglage d'abord). `execute` et `preview_command` l'appliquent : ne
+  jamais la ré-appliquer.
+
+**La commande exacte, pour l'afficher** :
+
+```rust
+let preview = julie_phpunit::preview_command(project.root(), &draft_settings, &RunRequest::all())?;
+// preview.command_line : "C:\…\php.exe" "C:\…\tools\phpunit\phpunit.phar" --configuration "C:\…\phpunit.xml" --teamcity --stop-on-failure
+// preview.args, preview.env, preview.working_dir, preview.plan
+```
+
+`Err(Problem)` = le premier problème de la détection (rien à lancer). Aucun
+processus, aucun fichier écrit. `preview_with(&detection, …)` si l'on a déjà une
+détection. C'est la même chaîne que `RunStart::command_line` (testé).
+
+### Sondes de validation (`julie_phpunit::probe`)
+
+Pour la fenêtre de réglages, en tâche de fond, à chaque frappe :
+
+```rust
+let handle = phpunit.probe(ProbeRequest::Php(path));            // ou julie_phpunit::probe::spawn(&tasks, root, request) sans projet
+// ProbeRequest::{ Php(chemin), PhpUnit { php: Option<chemin>, script }, Configuration(chemin) }
+// -> bus Domain::PhpUnit : event.get::<julie_phpunit::ProbeEvent>() = ProbeEvent { request, result }
+```
+
+- Tâche `phpunit.probe`. Annuler la précédente avec `Tasks::cancel(id)` : une sonde
+  annulée ne publie **rien** et tue son processus. Écarter tout `ProbeEvent` dont
+  `event.task` n'est pas la dernière sonde lancée.
+- `result: Result<ProbeSuccess, ProbeFailure>` :
+  - `Php { path, version }` (« PHP 8.2.12 »), `PhpUnit { path, version: PhpUnitVersion }`
+    (« PHPUnit 9.6.39 »), `Configuration { path }` (fichier lisible, contient `<phpunit`) ;
+  - `NotFound(chemin)` (« Ce chemin n'existe pas »), `IsDirectory(chemin)`,
+    `TimedOut(5 s)` (« Pas de réponse en 5 s »), `NotThis { kind, first_line }`
+    (« Ce n'est pas PHP / PHPUnit / une configuration PHPUnit : <ligne> »),
+    `NotRunnable { path, reason }`, `Unreadable { path, reason }`,
+    `PhpUnavailable` (sonde de PHPUnit sans PHP utilisable).
+- Un nom nu (`php`) est cherché dans le `PATH` ; un chemin relatif se lit depuis la
+  racine ; un `.bat` donné comme script PHPUnit est remplacé par son script.
+- Versions synchrones (bloquantes, à ne pas appeler sur le fil de l'interface) :
+  `probe(root, &request, &cancel)`, `probe_php`, `probe_phpunit`,
+  `probe_configuration` (sans processus). La sonde ne lance que `php --version` et
+  `php <script> --version` : aucun test, aucune écriture.
+
+### Lancer une partie de la suite (v1)
+
+`RunScope` : `All`, `TestSuite(nom)`, `Filter(motif brut)` et, nouveau,
+`Selection(Selection { base: Base, filter: Option<String> })` où `Base` =
+`Default` | `TestSuite(nom)` | `Path(fichier ou dossier)`. Commande :
+`php <phpunit> --configuration <xml> --teamcity [--testsuite S] [--filter F] [options] [chemin]` —
+le chemin vient **en dernier** (PHPUnit cesse de lire les options au premier argument
+qui n'en est pas une) et remplace les suites de `phpunit.xml` : on peut donc lancer
+un test qui n'est pas dans `defaultTestSuite`.
+
+| Constructeur | Lance |
+|---|---|
+| `RunRequest::path(fichier_ou_dossier)` | ce fichier ou ce dossier |
+| `RunRequest::class(fichier, "Ns\\Classe")` | tous les tests de la classe |
+| `RunRequest::method(fichier, classe, méthode)` | la méthode et tous ses jeux de données |
+| `RunRequest::data_set(fichier, classe, méthode, &DataSetKey::Name(..) \| Index(n))` | un seul jeu |
+| `RunRequest::for_node(&tree, id, previous: Option<&RunRequest>) -> Option<RunRequest>` | un nœud de l'arbre : racine = relancer `previous` ; suite de premier niveau = `--testsuite` ; classe, méthode, jeu = filtre + fichier. `None` si le nœud n'a pas de source (entrée de menu grisée) |
+| `RunRequest::rerun_failures(&tree, previous) -> Option<RunRequest>` | les tests `Failed` et `Error` de l'arbre ; `None` s'il n'y en a aucun (entrée grisée) |
+
+`previous` (la demande de l'arbre affiché) fournit options, variables, dossier, délai
+et la base (suite ou chemin) quand il n'y a qu'un filtre. **L'interface garde donc la
+`RunRequest` de la dernière exécution à côté de son arbre.** Filtres produits :
+expressions régulières **délimitées et ancrées** (`/^Ns\\Classe::méthode(?: with data
+set .*)?$/s`), jamais réinterprétées par PHPUnit (qui lit autrement `#3` et `@nom`
+dans un motif non délimité) ; tout nom de test passe par `quote_regex` (`'`, `|`, `[`,
+`]`, `"`, `\`, `/`, `#`, retours à la ligne, NUL, accents). Détails dans `select.rs`.
+
+- Le chemin n'est passé que si le nom du fichier est celui de la classe (PHPUnit
+  retrouve la classe d'après le nom du fichier) ; sinon base de `previous`.
+- « Relancer les échecs » sur plusieurs fichiers : pas de chemin, base de `previous` ;
+  un seul fichier : ce fichier. Un échec sans source connue : on reprend la portée
+  précédente sans filtre (on relance plus, jamais moins). Filtre de plus de
+  `MAX_FILTER_LEN` (20 000) caractères : un motif par classe.
+- Jeu de données dont le nom n'est pas lisible : toute la méthode (plus, jamais moins).
+- Vérifié contre PHPUnit 9.6 sur `tests/fixtures/phpunit` (suites `tricky` et `env`
+  comprises : guillemets, `|`, `[]`, `/`, `\`, `#`, `@`, regex, retour à la ligne,
+  accents, japonais, `.*`). PHPUnit 10 à 12 non essayés (format de nom supposé
+  identique : `Classe::méthode with data set "x"` / `#3`).
 
 ### Limites connues (à lire avant de s'en servir)
 
@@ -1125,8 +1246,9 @@ php, phpunit, configuration }`, chacun un `Result<_, Problem>` : PHP = réglage,
   seulement ; en cas de doute un test est « échoué » ou « ignoré ».
 - PHPUnit 10, 11 et 12 n'ont pas été exécutés (absents de la machine) : l'analyseur
   est tolérant et testé sur des sorties écrites de mémoire, pas enregistrées.
-- Pas encore : découverte (gouttière), configurations nommées, relance des échecs
-  ou d'un nœud, historique. `RunScope::Filter` est la place de la relance d'un nœud.
+- Pas encore : découverte (gouttière), configurations nommées, historique des
+  exécutions. Commande libre (`composer test`, ParaTest, Pest) écartée
+  (`decisions-v1.md` n°7).
 
 ## 13. `julie-terminal` et le composant terminal (dev-terminal, lot 4 de la v0)
 

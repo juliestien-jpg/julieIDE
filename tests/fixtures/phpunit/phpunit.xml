@@ -5,6 +5,8 @@
     risqué, fournisseur de données, sortie, test de 1 s).
   - « crash » : un test appelle exit(1)  ; à lancer seule.
   - « slow » : un test qui dort 30 s, pour essayer l'arrêt.
+  - « tricky » : des jeux de données aux noms piégés, pour les filtres (à lancer seule).
+  - « env » : affiche les variables d'environnement reçues (à lancer seule).
 -->
 <phpunit colors="false" defaultTestSuite="main" cacheResult="false">
   <testsuites>
@@ -16,6 +18,12 @@
     </testsuite>
     <testsuite name="slow">
       <directory suffix="Test.php">tests/Slow</directory>
+    </testsuite>
+    <testsuite name="tricky">
+      <directory suffix="Test.php">tests/Tricky</directory>
+    </testsuite>
+    <testsuite name="env">
+      <directory suffix="Test.php">tests/Env</directory>
     </testsuite>
   </testsuites>
 </phpunit>

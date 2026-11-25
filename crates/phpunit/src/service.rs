@@ -112,6 +112,12 @@ impl PhpUnit {
             })
     }
 
+    /// Sonde un réglage (chemin de PHP, de PHPUnit, fichier de configuration) en
+    /// tâche de fond ; publie un [`crate::ProbeEvent`]. Voir [`crate::probe`].
+    pub fn probe(&self, request: crate::probe::ProbeRequest) -> TaskHandle {
+        crate::probe::spawn(&self.tasks, self.project.root().to_path_buf(), request)
+    }
+
     /// Arrête une exécution : PHP et ses descendants sont tués. Sans effet si la
     /// tâche est déjà finie.
     pub fn stop(&self, run: TaskId) {
@@ -136,6 +142,9 @@ pub fn execute(
     let root = project.root();
     let detection = detect(root, settings, false, cancel)?;
     let plan = detection.plan()?;
+    // Options et variables du réglage d'abord, celles de la demande ensuite.
+    let effective = request.with_settings(settings);
+    let request = &effective;
     let command = run::command(&plan, request);
     let command_line = run::command_line(&plan, request);
     let timeout = request.timeout.or_else(|| settings.timeout());

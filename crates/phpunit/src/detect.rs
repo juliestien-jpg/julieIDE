@@ -5,9 +5,13 @@
 //! - **PHP** : réglage `php_path`, sinon `php` dans le `PATH`, sinon
 //!   [`DEFAULT_PHP_PATH`]. Un réglage qui désigne un fichier absent est une erreur
 //!   ([`Problem::PhpPathInvalid`]), jamais un repli silencieux sur un autre PHP.
-//! - **PHPUnit** : réglage `phpunit_path`, sinon `vendor/bin/phpunit`,
-//!   `vendor/phpunit/phpunit/phpunit`, `vendor/bin/phpunit.phar`, `phpunit.phar`,
-//!   `tools/phpunit.phar`. On lance toujours `php <script>`, jamais le `.bat`.
+//! - **PHPUnit** : réglage `phpunit_path`, sinon, dans l'ordre (voir
+//!   [`PHPUNIT_CANDIDATES`]) `vendor/bin/phpunit`, `vendor/phpunit/phpunit/phpunit`,
+//!   `vendor/bin/phpunit.phar`, `phpunit.phar`, `tools/phpunit.phar`,
+//!   `tools/phpunit/phpunit.phar`, `tools/phpunit`. Chaque candidat doit être un
+//!   **fichier** (un dossier du même nom est sauté), au nom exact : jamais un nom
+//!   approchant (`phpunit.rar`), jamais un `.bat`. On lance toujours
+//!   `php <script>`. Un échec liste les emplacements essayés.
 //! - **Configuration** : réglage `configuration`, sinon `phpunit.xml`,
 //!   `phpunit.xml.dist`, `phpunit.dist.xml` à la racine du projet.
 
@@ -52,7 +56,12 @@ pub enum PhpUnitSource {
     Settings,
     VendorBin,
     VendorPackage,
+    /// `phpunit.phar` à la racine, dans `vendor/bin` ou dans `tools`.
     Phar,
+    /// `tools/phpunit/phpunit.phar` (organisation de `backoffice`).
+    ToolsPhar,
+    /// `tools/phpunit`, quand c'est un fichier (installé par Phive).
+    ToolsFile,
 }
 
 /// Un PHPUnit trouvé.
@@ -131,15 +140,12 @@ pub fn detect(
     cancel: &CancelToken,
 ) -> julie_core::Result<Detection> {
     cancel.check()?;
-    let path_var = std::env::var_os("PATH");
-    let mut php = locate_php(
-        settings,
-        root,
-        path_var.as_deref(),
-        Path::new(DEFAULT_PHP_PATH),
-    );
-    let mut phpunit = locate_phpunit(settings, root);
-    let configuration = locate_configuration(settings, root);
+    let Detection {
+        mut php,
+        mut phpunit,
+        configuration,
+        ..
+    } = detect_files(root, settings);
 
     if probe_versions {
         if let Ok(info) = &mut php {
@@ -171,6 +177,23 @@ pub fn detect(
         phpunit,
         configuration,
     })
+}
+
+/// La détection sans processus : seulement des accès disque (`is_file`), versions
+/// inconnues. Rapide, utilisable pour afficher la commande qui sera lancée.
+pub fn detect_files(root: &Path, settings: &PhpUnitSettings) -> Detection {
+    let path_var = std::env::var_os("PATH");
+    Detection {
+        root: root.to_path_buf(),
+        php: locate_php(
+            settings,
+            root,
+            path_var.as_deref(),
+            Path::new(DEFAULT_PHP_PATH),
+        ),
+        phpunit: locate_phpunit(settings, root),
+        configuration: locate_configuration(settings, root),
+    }
 }
 
 /// Cherche PHP. `path_var` est la valeur de la variable `PATH` (injectée pour les
@@ -241,31 +264,43 @@ pub fn locate_phpunit(settings: &PhpUnitSettings, root: &Path) -> Result<PhpUnit
             Err(Problem::PhpUnitPathInvalid(configured.clone()))
         };
     }
-    let candidates = [
-        ("vendor/bin/phpunit", PhpUnitSource::VendorBin),
-        (
-            "vendor/phpunit/phpunit/phpunit",
-            PhpUnitSource::VendorPackage,
-        ),
-        ("vendor/bin/phpunit.phar", PhpUnitSource::Phar),
-        ("phpunit.phar", PhpUnitSource::Phar),
-        ("tools/phpunit.phar", PhpUnitSource::Phar),
-    ];
     let mut searched = Vec::new();
-    for (relative, source) in candidates {
-        let path = root.join(relative);
+    for (relative, source) in PHPUNIT_CANDIDATES {
+        // Composant par composant : un chemin à séparateurs homogènes (`tools\phpunit\…`).
+        let path = relative.split('/').fold(root.to_path_buf(), |mut p, part| {
+            p.push(part);
+            p
+        });
         if path.is_file() {
+            let kind = match source {
+                PhpUnitSource::ToolsFile => PhpUnitKind::Phar,
+                _ => kind_of(&path),
+            };
             return Ok(PhpUnitInfo {
-                kind: kind_of(&path),
+                kind,
                 path,
                 version: None,
-                source,
+                source: *source,
             });
         }
         searched.push(path);
     }
     Err(Problem::PhpUnitNotFound { searched })
 }
+
+/// Les emplacements essayés sous la racine du projet, dans l'ordre. Noms exacts.
+pub const PHPUNIT_CANDIDATES: &[(&str, PhpUnitSource)] = &[
+    ("vendor/bin/phpunit", PhpUnitSource::VendorBin),
+    (
+        "vendor/phpunit/phpunit/phpunit",
+        PhpUnitSource::VendorPackage,
+    ),
+    ("vendor/bin/phpunit.phar", PhpUnitSource::Phar),
+    ("phpunit.phar", PhpUnitSource::Phar),
+    ("tools/phpunit.phar", PhpUnitSource::Phar),
+    ("tools/phpunit/phpunit.phar", PhpUnitSource::ToolsPhar),
+    ("tools/phpunit", PhpUnitSource::ToolsFile),
+];
 
 /// Cherche le fichier de configuration.
 pub fn locate_configuration(settings: &PhpUnitSettings, root: &Path) -> Result<PathBuf, Problem> {
@@ -335,7 +370,7 @@ fn search_path(name: &Path, path_var: Option<&OsStr>) -> Option<PathBuf> {
     None
 }
 
-enum Probe {
+pub(crate) enum Probe {
     Cancelled,
     Failed(String),
 }
@@ -360,7 +395,7 @@ fn probe_phpunit_version(
     Ok(output.lines().find_map(parse_phpunit_version))
 }
 
-fn run_probe(command: &Command, cancel: &CancelToken) -> Result<String, Probe> {
+pub(crate) fn run_probe(command: &Command, cancel: &CancelToken) -> Result<String, Probe> {
     match command.run(cancel) {
         Ok(output) if output.status.success() => Ok(output.stdout_text()),
         Ok(output) => Err(Probe::Failed(format!(
@@ -454,7 +489,7 @@ mod tests {
         let settings = PhpUnitSettings::default();
 
         let missing = locate_phpunit(&settings, root).unwrap_err();
-        assert!(matches!(&missing, Problem::PhpUnitNotFound { searched } if searched.len() == 5));
+        assert!(matches!(&missing, Problem::PhpUnitNotFound { searched } if searched.len() == 7));
 
         touch(&root.join("tools/phpunit.phar"));
         let found = locate_phpunit(&settings, root).unwrap();
@@ -468,6 +503,138 @@ mod tests {
         let found = locate_phpunit(&settings, root).unwrap();
         assert_eq!(found.source, PhpUnitSource::VendorBin);
         assert_eq!(found.kind, PhpUnitKind::Script);
+    }
+
+    #[test]
+    fn the_backoffice_layout_finds_tools_phpunit_phpunit_phar() {
+        // Organisation de `backoffice` : un dossier tools/phpunit/ qui contient le
+        // phar, un leurre vendor/bin/phpunit.rar, des lanceurs .bat, pas de
+        // vendor/bin/phpunit.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        touch(&root.join("vendor/bin/phpunit.rar"));
+        touch(&root.join("vendor/bin/phpunit.bat"));
+        touch(&root.join("vendor/bin/neuron"));
+        touch(&root.join("tools/phpunit/phpunit.phar"));
+        let found = locate_phpunit(&PhpUnitSettings::default(), root).unwrap();
+        assert_eq!(found.path, root.join("tools/phpunit/phpunit.phar"));
+        assert_eq!(found.kind, PhpUnitKind::Phar);
+        assert_eq!(found.source, PhpUnitSource::ToolsPhar);
+        if cfg!(windows) {
+            // Séparateurs homogènes : c'est ce qui s'affiche dans la commande.
+            assert!(
+                !found.path.to_string_lossy().contains('/'),
+                "{:?}",
+                found.path
+            );
+        }
+    }
+
+    #[test]
+    fn a_directory_is_never_taken_for_a_phpunit_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // `tools/phpunit` est un dossier vide : sauté, sans erreur.
+        fs::create_dir_all(root.join("tools/phpunit")).unwrap();
+        fs::create_dir_all(root.join("vendor/bin/phpunit")).unwrap();
+        fs::create_dir_all(root.join("phpunit.phar")).unwrap();
+        let error = locate_phpunit(&PhpUnitSettings::default(), root).unwrap_err();
+        assert!(matches!(&error, Problem::PhpUnitNotFound { searched }
+            if searched.len() == PHPUNIT_CANDIDATES.len()));
+
+        // Un fichier sans extension `tools/phpunit` (Phive) est pris, après le phar
+        // du dossier du même nom s'il existe.
+        fs::remove_dir_all(root.join("tools/phpunit")).unwrap();
+        touch(&root.join("tools/phpunit"));
+        let found = locate_phpunit(&PhpUnitSettings::default(), root).unwrap();
+        assert_eq!(found.source, PhpUnitSource::ToolsFile);
+        assert_eq!(found.kind, PhpUnitKind::Phar);
+    }
+
+    #[test]
+    fn near_names_and_launchers_are_never_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for name in [
+            "vendor/bin/phpunit.rar",
+            "vendor/bin/phpunit.bat",
+            "vendor/bin/phpunit.cmd",
+            "vendor/bin/phpunit.phar.bak",
+            "vendor/bin/phpunit9",
+            "tools/phpunit.phar.old",
+            "tools/phpunit/phpunit.bat",
+            "tools/phpunit/phpunit",
+            "phpunit.phar.zip",
+        ] {
+            touch(&root.join(name));
+        }
+        assert!(matches!(
+            locate_phpunit(&PhpUnitSettings::default(), root),
+            Err(Problem::PhpUnitNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn candidates_are_tried_in_the_documented_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // On crée tous les candidats, puis on retire le premier à chaque tour :
+        // chacun doit être pris à son tour.
+        for (relative, _) in PHPUNIT_CANDIDATES {
+            if *relative == "tools/phpunit" {
+                continue;
+            }
+            touch(&root.join(relative));
+        }
+        for (relative, source) in PHPUNIT_CANDIDATES {
+            if *relative == "tools/phpunit" {
+                continue;
+            }
+            let found = locate_phpunit(&PhpUnitSettings::default(), root).unwrap();
+            assert_eq!(found.path, root.join(relative));
+            assert_eq!(found.source, *source);
+            fs::remove_file(root.join(relative)).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_failed_detection_lists_every_place_tried() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = locate_phpunit(&PhpUnitSettings::default(), dir.path()).unwrap_err();
+        let Problem::PhpUnitNotFound { searched } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(
+            searched,
+            &PHPUNIT_CANDIDATES
+                .iter()
+                .map(|(relative, _)| dir.path().join(relative))
+                .collect::<Vec<_>>()
+        );
+        let text = error.to_string();
+        assert!(
+            text.contains("phpunit.phar") && text.contains("tools"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_configured_directory_or_missing_launcher_target_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("tools/phpunit")).unwrap();
+        // Un .bat dont le script sans extension n'existe pas n'est pas lancé tel quel.
+        touch(&root.join("bin/phpunit.bat"));
+        for configured in ["tools/phpunit", "bin/phpunit.bat"] {
+            let settings = PhpUnitSettings {
+                phpunit_path: Some(PathBuf::from(configured)),
+                ..Default::default()
+            };
+            assert_eq!(
+                locate_phpunit(&settings, root).unwrap_err(),
+                Problem::PhpUnitPathInvalid(PathBuf::from(configured))
+            );
+        }
     }
 
     #[test]
