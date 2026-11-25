@@ -16,7 +16,11 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, vec2, Frame, Id, Key, Margin, Modifiers, Sense};
 use julie_core::bus::Bus;
 use julie_core::file::LineEnding;
-use julie_core::{Domain, DomainEvent, Event, Settings, TaskId, Tasks, TextPosition};
+use julie_core::settings::{Scope, SettingValue, SettingsProblem};
+use julie_core::{
+    Domain, DomainEvent, Event, Settings, SettingsFiles, SettingsWatcher, TaskId, Tasks,
+    TextPosition,
+};
 use julie_diff::{ApplyScope, MergeSession, Side};
 use julie_index::{IndexEvent, IndexService, IndexSettings};
 use julie_phpunit::{PhpUnit, PhpUnitEvent, PhpUnitSettings, RunRequest};
@@ -32,6 +36,7 @@ use crate::actions::{ActionId, Menu, Registry};
 use crate::branchui::{self, BranchPopup};
 use crate::ctxmenu::ContextMenu;
 use crate::diffpane::{self, DiffPane};
+use crate::fsdialog::FsDialog;
 use crate::gitdialogs::Dialog as GitDialog;
 use crate::gitview::{DiffJob, DiffTarget, GitIntent, GitTab, GitView, MergeCheck, RepoState};
 use crate::icons::{self, Icon};
@@ -42,20 +47,22 @@ use crate::scenario::{self, Injection, Scenario, Step};
 use crate::search::find_in_files::{self, FindInFiles};
 use crate::search::goto_file::{self, GotoFile};
 use crate::search::palette::{self, ActionPalette};
+use crate::settingsui::{Page, SettingsDialog};
 use crate::status::{self, StatusModel, TaskTracker};
 use crate::tabs::{BannerIntent, Editors, Goto, TabIntent};
 use crate::target::Target;
 use crate::terminal::{TerminalIntent, TerminalPanel};
 use crate::testsview::{TestsIntent, TestsView};
 use crate::texts as t;
-use crate::texts_v1 as tv;
 use crate::theme::{self, Palette};
 use crate::tools::{self, BottomTool, ToolWindows};
 use crate::tree::ProjectTree;
 
+mod fsops;
 mod gitflow;
 mod menus;
 mod scenario_ui;
+mod settings;
 
 pub struct Options {
     pub scenario: Option<PathBuf>,
@@ -187,6 +194,30 @@ pub struct JulieStormApp {
     last_fetch: Option<Instant>,
     /// Dossier de la dernière copie de sécurité (« Restaurer »).
     last_copy: Option<String>,
+    // ----- v1 bis : réglages -----------------------------------------------------
+    /// Fichier des réglages « Tous mes projets » (`None` : pas de dossier de configuration).
+    user_settings_file: Option<PathBuf>,
+    /// Les réglages effectifs en vigueur (derniers valides).
+    settings: Settings,
+    settings_files: SettingsFiles,
+    settings_watcher: Option<SettingsWatcher>,
+    /// Bus du surveillant courant (un par projet ouvert).
+    settings_bus: Bus,
+    /// Le prochain événement du surveillant est le premier (réglages initiaux).
+    settings_first: bool,
+    settings_problems: Vec<SettingsProblem>,
+    settings_dialog: Option<SettingsDialog>,
+    /// Dernière page ouverte, retenue pour la session.
+    settings_page: Option<Page>,
+    // ----- v1 bis : arbre du projet ----------------------------------------------
+    fs_dialog: Option<FsDialog>,
+    /// Renommage envoyé à `git mv` : de quoi retomber sur un renommage simple (`NotTracked`).
+    pending_rename: Option<(PathBuf, PathBuf)>,
+    /// « Supprimer aussi les fichiers ajoutés » était cochée à l'annulation en cours.
+    discard_delete_added: bool,
+    /// Menu à ouvrir quelques images plus tard (le temps qu'un clic droit place le curseur).
+    deferred_menu: Option<(u8, Target)>,
+    deferred_click_pos: egui::Pos2,
 }
 
 impl JulieStormApp {
@@ -261,7 +292,22 @@ impl JulieStormApp {
             net_progress: None,
             last_fetch: None,
             last_copy: None,
+            user_settings_file: project::user_settings_file(options.scenario.is_some()),
+            settings: Settings::default(),
+            settings_files: SettingsFiles::new(None, None),
+            settings_watcher: None,
+            settings_bus: Bus::new(),
+            settings_first: true,
+            settings_problems: Vec::new(),
+            settings_dialog: None,
+            settings_page: None,
+            fs_dialog: None,
+            pending_rename: None,
+            discard_delete_added: false,
+            deferred_menu: None,
+            deferred_click_pos: egui::Pos2::ZERO,
         };
+        app.restart_settings_watcher(None);
 
         if let Some(file) = &options.scenario {
             app.load_scenario(file);
@@ -314,7 +360,7 @@ impl JulieStormApp {
     fn start_open(&mut self, path: PathBuf) {
         let path = std::path::absolute(&path).unwrap_or(path);
         self.opening += 1;
-        project::spawn_open(path, self.channel.clone());
+        project::spawn_open(path, self.user_settings_file.clone(), self.channel.clone());
     }
 
     fn pump_messages(&mut self) {
@@ -339,6 +385,53 @@ impl JulieStormApp {
                 Msg::DirListed { dir, entries } => self.tree.set_listing(dir, entries),
                 Msg::SafetyCopied { then, result } => self.on_safety_copied(then, result),
                 Msg::Notice { text, error } => self.say(text, error),
+                Msg::SettingsApplied { close, result } => self.on_settings_applied(close, result),
+                Msg::SettingsWritten { result } => self.on_settings_written(result),
+                Msg::SettingsProbe {
+                    field,
+                    token,
+                    state,
+                } => {
+                    if let Some(dialog) = &mut self.settings_dialog {
+                        dialog.probe_result(field, token, state);
+                    }
+                }
+                Msg::SettingsBrowsed { field, scope, path } => {
+                    let root = self.project_root();
+                    if let Some(dialog) = &mut self.settings_dialog {
+                        dialog.browsed(field, scope, &path, root.as_deref());
+                    }
+                }
+                Msg::OpenPath { path, line } => {
+                    let goto = line.map(|line| Goto {
+                        position: TextPosition::new(line.saturating_sub(1), 0),
+                        end: None,
+                    });
+                    self.open_file(path, goto);
+                }
+                Msg::Trashed { paths, result } => self.on_trashed(paths, result),
+                Msg::Moved { from, to } => self.after_move(&from, &to),
+                Msg::FilesChanged {
+                    text,
+                    error,
+                    refresh,
+                    reveal,
+                } => {
+                    if let Some(path) = reveal {
+                        self.tree.expand_path(&path);
+                    }
+                    if refresh {
+                        self.tree.refresh();
+                        if let Some(project) = &self.project {
+                            if let Some(repo) = &project.repo {
+                                project.vcs.refresh_status(repo);
+                            }
+                        }
+                    }
+                    if let Some(text) = text {
+                        self.say(text, error);
+                    }
+                }
             }
         }
     }
@@ -358,7 +451,21 @@ impl JulieStormApp {
                 Settings::default()
             }
         };
-        let index_settings: IndexSettings = settings.section("index").unwrap_or_default();
+        self.settings = settings.clone();
+        self.restart_settings_watcher(Some(&project));
+        let dark = settings
+            .get(&["app", "theme"])
+            .and_then(|v| v.as_str())
+            .is_none_or(|v| v != "clair");
+        if dark != self.dark {
+            self.set_dark(dark);
+        }
+        let mut index_settings: IndexSettings = settings.section("index").unwrap_or_default();
+        for always in julie_core::project::ALWAYS_EXCLUDED.iter().rev() {
+            if !index_settings.excluded.iter().any(|e| e == always) {
+                index_settings.excluded.insert(0, (*always).to_owned());
+            }
+        }
         let vcs_settings: VcsSettings = settings.section("vcs").unwrap_or_default();
         let terminal_settings: TerminalSettings = settings.section("terminal").unwrap_or_default();
         let phpunit_settings = PhpUnitSettings::from_settings(&settings).unwrap_or_default();
@@ -470,7 +577,9 @@ impl JulieStormApp {
                 }
             }
             Domain::PhpUnit => {
-                if let Some(event) = event.get::<PhpUnitEvent>() {
+                if let Some(probe) = event.get::<julie_phpunit::ProbeEvent>() {
+                    self.on_probe_event(task, probe);
+                } else if let Some(event) = event.get::<PhpUnitEvent>() {
                     self.tests.on_event(task, event);
                     // Fin d'exécution : notification si la fenêtre des tests est cachée.
                     if let PhpUnitEvent::RunFinished(summary) = event {
@@ -656,6 +765,8 @@ impl JulieStormApp {
             IndexEvent::TextMatches(batch) => self.find.on_matches(task, batch),
             IndexEvent::TextSearchFinished(summary) => self.find.on_finished(task, summary),
             IndexEvent::Preview(preview) => self.find.on_preview(task, preview),
+            // Index des symboles et navigation : consommés au lot de la navigation.
+            _ => {}
         }
     }
 
@@ -866,7 +977,7 @@ impl JulieStormApp {
     fn run_tests_intents(&mut self, intents: Vec<TestsIntent>) {
         for intent in intents {
             match intent {
-                TestsIntent::Run => self.run_tests(false),
+                TestsIntent::Run => self.start_run(RunRequest::all(), false),
                 TestsIntent::Restart => self.run_tests(true),
                 TestsIntent::Stop => self.stop_tests(),
                 TestsIntent::Open(location) => {
@@ -900,7 +1011,19 @@ impl JulieStormApp {
         }
     }
 
+    /// Relance après confirmation : la demande mise en attente, à défaut la suite entière.
     fn run_tests(&mut self, restart: bool) {
+        let request = self
+            .tests
+            .pending_run
+            .take()
+            .unwrap_or_else(RunRequest::all);
+        self.start_run(request, restart);
+    }
+
+    /// Lance ces tests (la suite, un fichier, un nœud, les échecs). Une exécution en cours
+    /// demande d'abord confirmation.
+    pub(super) fn start_run(&mut self, request: RunRequest, restart: bool) {
         let Some(service) = self.tests.service.clone() else {
             return;
         };
@@ -908,12 +1031,15 @@ impl JulieStormApp {
         self.tools.bottom_open = true;
         if self.tests.is_running() {
             if !restart {
+                self.tests.pending_run = Some(request);
                 self.tests.confirm_restart = true;
                 return;
             }
             self.stop_tests();
         }
-        let handle = service.run(RunRequest::all());
+        self.tests.pending_run = None;
+        self.tests.last_request = Some(request.clone());
+        let handle = service.run(request);
         self.tests.begin(handle.id());
     }
 
@@ -947,6 +1073,7 @@ impl JulieStormApp {
             | ActionId::ToggleSearch
             | ActionId::ToggleTerminal
             | ActionId::ToggleTheme
+            | ActionId::Settings
             | ActionId::BottomTall => true,
             other => self.v1_action_enabled(other),
         }
@@ -1042,7 +1169,17 @@ impl JulieStormApp {
             ActionId::ToggleTheme => {
                 let dark = !self.dark;
                 self.set_dark(dark);
+                // Le thème survit au redémarrage : réglage « Tous mes projets ».
+                if self.settings_files.path(Scope::User).is_some() {
+                    let value = if dark { "sombre" } else { "clair" };
+                    self.write_setting(
+                        Scope::User,
+                        &["app", "theme"],
+                        Some(SettingValue::Text(value.to_owned())),
+                    );
+                }
             }
+            ActionId::Settings => self.open_settings(None),
             ActionId::GitCommit => {
                 self.tools.bottom = BottomTool::Git;
                 self.tools.bottom_open = true;
@@ -1066,8 +1203,16 @@ impl JulieStormApp {
                 self.git.invalidate_diff();
                 self.run_git_intents(vec![GitIntent::Refresh]);
             }
-            ActionId::TestsRun => self.run_tests(false),
-            ActionId::TestsRerun => self.run_tests(false),
+            ActionId::TestsRun => self.start_run(RunRequest::all(), false),
+            // Ctrl+F5 : relancer la dernière exécution (même demande).
+            ActionId::TestsRerun => {
+                let request = self
+                    .tests
+                    .last_request
+                    .clone()
+                    .unwrap_or_else(RunRequest::all);
+                self.start_run(request, false);
+            }
             ActionId::TestsStop => self.stop_tests(),
             other => self.run_v1_action(other, None),
         }
@@ -1151,6 +1296,8 @@ impl JulieStormApp {
             || self.merge.is_some()
             || self.diff_window.is_some()
             || self.git_dialog.is_some()
+            || self.settings_dialog.is_some()
+            || self.fs_dialog.is_some()
         {
             return;
         }
@@ -1294,11 +1441,12 @@ impl JulieStormApp {
                 .net_progress
                 .clone()
                 .filter(|_| !self.tracker.running_of(status::cancellable).is_empty()),
-            message_action: self
-                .message
-                .as_ref()
-                .and_then(|m| m.action.as_ref())
-                .map(|_| tv::BTN_RESTORE.to_owned()),
+            message_action: self.message.as_ref().and_then(|m| m.action.as_ref()).map(
+                |a| match a {
+                    ToastAction::OpenFile(..) => t::SETTINGS_UNREADABLE_OPEN.to_owned(),
+                    _ => t::BTN_RESTORE.to_owned(),
+                },
+            ),
         };
         if let Some(project) = &self.project {
             if let GitInfo::Repository(status) = &project.git {
@@ -1728,7 +1876,7 @@ impl JulieStormApp {
         }
         let (title, detail) = match dialog {
             Dialog::CloseMany(paths) => (
-                tv::close_many_title(paths.len()),
+                t::close_many_title(paths.len()),
                 paths.iter().map(|p| file_name(p)).collect::<Vec<_>>().join(
                     "
 ",
@@ -1872,6 +2020,10 @@ impl JulieStormApp {
             && self.editors.is_loaded()
             && !self.tree.is_loading()
             && self.git.merge_loading.is_none()
+            && self
+                .settings_dialog
+                .as_ref()
+                .is_none_or(SettingsDialog::settled)
     }
 
     fn scenario_step(&mut self, ctx: &egui::Context) {
@@ -1984,14 +2136,19 @@ impl JulieStormApp {
             Step::Key(combo) => self.injected.push_back(Injection {
                 events: combo.events(),
             }),
-            Step::Click(x, y) => {
-                self.injected.extend(Injection::click(egui::pos2(x, y)));
+            Step::Click(x, y, mods) => {
+                self.injected.extend(Injection::click_with(
+                    egui::pos2(x, y),
+                    egui::PointerButton::Primary,
+                    mods,
+                ));
                 sc.settle = 5;
             }
-            Step::RClick(x, y) => {
+            Step::RClick(x, y, mods) => {
                 self.injected.extend(Injection::click_with(
                     egui::pos2(x, y),
                     egui::PointerButton::Secondary,
+                    mods,
                 ));
                 sc.settle = 5;
             }
@@ -2159,6 +2316,7 @@ impl JulieStormApp {
                 "query": p.query, "selected": p.selected,
                 "matches": p.matches(&self.registry).iter().map(|id| self.registry.get(*id).key).collect::<Vec<_>>(),
             })),
+            "fs_dialog": self.fs_dialog.as_ref().map(FsDialog::state),
             "dialog": self.dialog.as_ref().map(|d| match d {
                 Dialog::CloseTab(p) => format!("close_tab:{}", p.display()),
                 Dialog::Quit(p) => format!("quit:{}", p.len()),
@@ -2292,6 +2450,7 @@ impl eframe::App for JulieStormApp {
         let ctx = ui.ctx().clone();
         self.pump_messages();
         self.pump_bus();
+        self.pump_settings();
         self.scenario_step(&ctx);
         self.handle_close_request(&ctx);
         self.dispatch_shortcuts(&ctx);
@@ -2356,6 +2515,8 @@ impl eframe::App for JulieStormApp {
         self.draw_modals(&ctx, &p);
         self.draw_dialog(&ctx, &p);
         self.draw_git_dialog(&ctx, &p);
+        self.draw_settings(&ctx, &p);
+        self.draw_fs_dialog(&ctx, &p);
 
         for id in actions {
             self.run_action(id);

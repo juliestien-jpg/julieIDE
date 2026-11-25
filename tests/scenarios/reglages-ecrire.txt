@@ -1,0 +1,22 @@
+# Réglages : écrire en portée projet (arguments, variable), relire, revenir à l'héritage, thème.
+# Décor : bash tests/fixtures/backoffice-copie.sh ; JULIESTORM_STATE_DIR=<dossier jetable>.
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-backoffice
+ui settings.open phpunit
+ui settings.scope project
+ui settings.set phpunit.extra_args --stop-on-failure --group "très lent"
+ui settings.env APP_ENV=test
+wait 400
+screenshot target/essais/reglages/ecrire-avant.png
+ui settings.apply
+wait 1500
+state target/essais/reglages/ecrire-apres.json
+ui settings.set phpunit.extra_args --group "lent
+state target/essais/reglages/ecrire-erreur.json
+ui settings.unset phpunit.extra_args
+ui settings.page appearance
+ui settings.set app.theme clair
+ui settings.ok
+wait 1500
+screenshot target/essais/reglages/theme-clair.png
+state target/essais/reglages/theme-clair.json
+quit

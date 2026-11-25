@@ -38,9 +38,9 @@ pub enum Step {
     /// `key <Ctrl+Maj+N | Enter | Down | …>`
     Key(Combo),
     /// `click <x> <y>` en points de la fenêtre.
-    Click(f32, f32),
+    Click(f32, f32, Modifiers),
     /// `rclick <x> <y>` : clic droit (menus contextuels).
-    RClick(f32, f32),
+    RClick(f32, f32, Modifiers),
     /// `wait <ms>`
     Wait(u64),
     /// `wait-idle` : plus de tâche de fond, index prêt, résultats arrivés.
@@ -195,17 +195,27 @@ pub fn parse(text: &str) -> Result<Vec<(usize, Step)>, String> {
             "action" if !rest.is_empty() => Step::Action(rest.to_owned()),
             "type" => Step::Type(rest.to_owned()),
             "key" if !rest.is_empty() => Step::Key(parse_combo(rest).map_err(|e| fail(&e))?),
-            "click" => {
+            "click" | "rclick" => {
                 let mut parts = rest.split_whitespace();
                 let x = number_arg(parts.next().unwrap_or(""))?;
                 let y = number_arg(parts.next().unwrap_or(""))?;
-                Step::Click(x, y)
-            }
-            "rclick" => {
-                let mut parts = rest.split_whitespace();
-                let x = number_arg(parts.next().unwrap_or(""))?;
-                let y = number_arg(parts.next().unwrap_or(""))?;
-                Step::RClick(x, y)
+                // Modificateurs facultatifs : `ctrl`, `shift`.
+                let mut mods = Modifiers::NONE;
+                for m in parts {
+                    match m {
+                        "ctrl" => {
+                            mods.ctrl = true;
+                            mods.command = true;
+                        }
+                        "shift" | "maj" => mods.shift = true,
+                        _ => return Err(fail("modificateur : `ctrl` ou `shift`")),
+                    }
+                }
+                if word == "click" {
+                    Step::Click(x, y, mods)
+                } else {
+                    Step::RClick(x, y, mods)
+                }
             }
             "wait" => Step::Wait(
                 rest.parse::<u64>()
@@ -258,21 +268,21 @@ pub struct Injection {
 
 impl Injection {
     pub fn click(pos: Pos2) -> Vec<Injection> {
-        Self::click_with(pos, PointerButton::Primary)
+        Self::click_with(pos, PointerButton::Primary, Modifiers::NONE)
     }
 
-    pub fn click_with(pos: Pos2, which: PointerButton) -> Vec<Injection> {
+    pub fn click_with(pos: Pos2, which: PointerButton, modifiers: Modifiers) -> Vec<Injection> {
         let button = |pressed| Event::PointerButton {
             pos,
             button: which,
             pressed,
-            modifiers: Modifiers::NONE,
+            modifiers,
         };
         // Deux déplacements : egui ne sait ce qui est survolé qu'à l'image suivante, et le
         // premier clic d'une session tombait à côté sans ce délai.
         vec![
             Injection {
-                events: vec![Event::PointerMoved(pos)],
+                events: vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
             },
             Injection {
                 events: vec![Event::PointerMoved(pos)],
@@ -281,7 +291,7 @@ impl Injection {
                 events: vec![button(true)],
             },
             Injection {
-                events: vec![button(false)],
+                events: vec![button(false), Event::ModifiersChanged(Modifiers::NONE)],
             },
         ]
     }

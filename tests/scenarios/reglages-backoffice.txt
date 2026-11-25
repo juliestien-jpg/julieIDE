@@ -1,0 +1,13 @@
+# Réglages : détection de PHPUnit sur une copie de backoffice (sans rien écrire).
+# Décor : bash tests/fixtures/backoffice-copie.sh   (copie dans %TEMP%\jsessai-backoffice)
+# Lancer avec : JULIESTORM_STATE_DIR=%TEMP%\jsessai-etat-reglages (réglages utilisateur jetables).
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-backoffice
+key Ctrl+Alt+S
+wait 1500
+wait-idle
+screenshot target/essais/reglages/backoffice-phpunit.png
+state target/essais/reglages/backoffice-phpunit.json
+key Escape
+wait 300
+state target/essais/reglages/backoffice-ferme.json
+quit

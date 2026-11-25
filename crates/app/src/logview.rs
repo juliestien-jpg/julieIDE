@@ -25,7 +25,6 @@ use crate::icons::{self, Icon};
 use crate::kit;
 use crate::target::{CommitRef, MenuRequest, Target};
 use crate::texts as t;
-use crate::texts_v1 as tv;
 use crate::theme::Palette;
 
 const ROW: f32 = 22.0;
@@ -300,7 +299,7 @@ impl LogView {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let mut cleared = false;
                 if let Some(branch) = self.filters.branch.clone() {
-                    cleared |= chip(ui, p, &tv::filter_branch(&branch));
+                    cleared |= chip(ui, p, &t::filter_branch(&branch));
                     if cleared {
                         self.filters.branch = None;
                     }
@@ -310,32 +309,32 @@ impl LogView {
                         || path.display().to_string(),
                         |n| n.to_string_lossy().into_owned(),
                     );
-                    if chip(ui, p, &tv::filter_path(&name)) {
+                    if chip(ui, p, &t::filter_path(&name)) {
                         self.filters.path = None;
                     }
                 }
                 for (value, hint, width, salt) in [
                     (
                         &mut self.filters.text,
-                        tv::FILTER_TEXT_HINT,
+                        t::FILTER_TEXT_HINT,
                         140.0,
                         "jf-texte",
                     ),
                     (
                         &mut self.filters.author,
-                        tv::FILTER_AUTHOR_HINT,
+                        t::FILTER_AUTHOR_HINT,
                         110.0,
                         "jf-auteur",
                     ),
                     (
                         &mut self.filters.since,
-                        tv::FILTER_SINCE_HINT,
+                        t::FILTER_SINCE_HINT,
                         142.0,
                         "jf-depuis",
                     ),
                     (
                         &mut self.filters.until,
-                        tv::FILTER_UNTIL_HINT,
+                        t::FILTER_UNTIL_HINT,
                         158.0,
                         "jf-jusqua",
                     ),
@@ -362,7 +361,7 @@ impl LogView {
         let rows: Vec<Row> = match branches {
             Some(list) => branchui::build_rows(list, "", &self.collapsed)
                 .into_iter()
-                .skip_while(|r| !matches!(r, Row::Header(h) if h == tv::HDR_LOCAL))
+                .skip_while(|r| !matches!(r, Row::Header(h) if h == t::HDR_LOCAL))
                 .collect(),
             None => Vec::new(),
         };
@@ -379,7 +378,7 @@ impl LogView {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.set_width(rect.width() - 8.0);
                     for (label, active, key) in [
-                        (tv::TREE_ALL, self.filters.branch.is_none(), None),
+                        (t::TREE_ALL, self.filters.branch.is_none(), None),
                         (
                             "HEAD",
                             self.filters.branch.as_deref() == Some("HEAD"),
@@ -761,7 +760,7 @@ fn chip(ui: &mut Ui, p: &Palette, text: &str) -> bool {
         Icon::Close,
         p.text_dim,
     );
-    response.on_hover_text(tv::TIP_REMOVE_FILTER).clicked()
+    response.on_hover_text(t::TIP_REMOVE_FILTER).clicked()
 }
 
 struct RowEvent {

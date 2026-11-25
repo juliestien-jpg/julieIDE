@@ -1,0 +1,35 @@
+# Menus contextuels restants : éditeur, arbre (lancer les tests, supprimer vers la corbeille),
+# arbre des tests, terminal. Décor : bash tests/fixtures/phpunit-copy.sh, puis dans le dossier
+# créé : git init -b main, un commit, et un fichier non suivi nouveau.txt (voir docs/essais.md).
+# Lancer avec JULIESTORM_STATE_DIR=<dossier jetable>.
+project C:/Users/WEIDIAN/AppData/Local/Temp/jsessai-phpunit
+file tests/Main/CalculatorTest.php:5
+wait-idle
+ui menu.open editor
+screenshot target/essais/menus2/editeur.png
+state target/essais/menus2/editeur.json
+ui menu.close
+ui menu.open tree tests/Main/CalculatorTest.php
+screenshot target/essais/menus2/arbre-fichier.png
+ui menu.choose tests.run_here
+wait 6000
+wait-idle
+ui tests.select CalculatorTest
+ui menu.open test CalculatorTest
+screenshot target/essais/menus2/arbre-tests.png
+state target/essais/menus2/arbre-tests.json
+ui menu.close
+action view.terminal
+wait 2500
+ui menu.open terminal
+screenshot target/essais/menus2/terminal.png
+ui menu.close
+ui menu.open tree nouveau.txt
+ui menu.choose tree.delete
+wait 300
+screenshot target/essais/menus2/supprimer.png
+state target/essais/menus2/supprimer.json
+ui dialog.choose trash
+wait 2500
+state target/essais/menus2/apres-corbeille.json
+quit

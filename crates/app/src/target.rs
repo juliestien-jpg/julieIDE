@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use eframe::egui::Pos2;
 
 use crate::branchui::BranchRef;
+use julie_phpunit::{NodeId, NodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRef {
@@ -39,11 +40,51 @@ pub struct CommitRef {
     pub parents: usize,
 }
 
+/// Un nœud de l'arbre des résultats de tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestRef {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub label: String,
+}
+
+/// Une occurrence de la recherche dans les fichiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HitRef {
+    pub path: PathBuf,
+    /// Ligne, base zéro.
+    pub line: u32,
+    /// Le texte de la ligne.
+    pub text: String,
+}
+
+/// L'éditeur sous le clic : le fichier (s'il existe sur le disque) et l'état de la sélection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorRef {
+    pub path: Option<PathBuf>,
+    pub has_selection: bool,
+    pub read_only: bool,
+}
+
+/// Le terminal (ou l'un de ses onglets).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermRef {
+    pub has_selection: bool,
+    /// Numéro de l'onglet visé.
+    pub tab: usize,
+    /// Le clic était sur l'onglet (et non sur l'écran).
+    pub on_tab: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
     Files { zone: Zone, files: Vec<FileRef> },
     Commit(CommitRef),
     Branch(BranchRef),
+    Test(TestRef),
+    Hit(HitRef),
+    Editor(EditorRef),
+    Terminal(TermRef),
 }
 
 impl Target {
@@ -61,6 +102,15 @@ impl Target {
             ),
             Target::Commit(c) => format!("commit:{}", c.short),
             Target::Branch(b) => format!("branch:{}", b.name),
+            Target::Test(t) => format!("test:{}", t.label),
+            Target::Hit(h) => format!("hit:{}:{}", h.path.display(), h.line + 1),
+            Target::Editor(e) => format!(
+                "editor:{}",
+                e.path
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string())
+            ),
+            Target::Terminal(t) => format!("terminal:{}", t.tab + 1),
         }
     }
 }

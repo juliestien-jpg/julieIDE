@@ -291,7 +291,7 @@ fn task_widget(ui: &mut Ui, p: &Palette, task: &TaskInfo, progress_text: Option<
         egui::Id::unique(("annuler-tache", task.id)),
         Icon::Close,
         p,
-        crate::texts_v1::TIP_CANCEL_TASK,
+        crate::texts::TIP_CANCEL_TASK,
         true,
     )
 }

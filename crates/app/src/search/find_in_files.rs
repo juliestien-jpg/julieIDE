@@ -54,6 +54,10 @@ pub enum Outcome {
 }
 
 pub struct FindInFiles {
+    /// Menu contextuel demandé à cette image (clic droit sur une occurrence).
+    pub menu_request: Option<crate::target::MenuRequest>,
+    /// Un menu contextuel est ouvert sur la fenêtre : un clic dessus ne la ferme pas.
+    pub menu_open: bool,
     pub pattern: String,
     pub mask: String,
     pub case_sensitive: bool,
@@ -84,6 +88,8 @@ pub struct FindInFiles {
 impl FindInFiles {
     pub fn new() -> Self {
         Self {
+            menu_request: None,
+            menu_open: false,
             pattern: String::new(),
             mask: String::new(),
             case_sensitive: false,
@@ -140,6 +146,61 @@ impl FindInFiles {
     pub fn on_preview(&mut self, task: Option<TaskId>, preview: Preview) {
         if task.is_some() && task == self.preview_task {
             self.preview = Some(preview);
+        }
+    }
+
+    /// La n-ième occurrence affichée (base 0), pour le mode scénario.
+    pub fn hit_target(&mut self, n: usize) -> Option<crate::target::HitRef> {
+        let (f, l) = self
+            .rows
+            .iter()
+            .filter_map(|row| match *row {
+                Row::Line(f, l) => Some((f, l)),
+                _ => None,
+            })
+            .nth(n)?;
+        let hit = &self.files[f].lines[l];
+        let target = crate::target::HitRef {
+            path: self.files[f].path.clone(),
+            line: hit.line,
+            text: hit.snippet.clone(),
+        };
+        self.selected = Some((target.path.clone(), target.line));
+        Some(target)
+    }
+
+    /// « Exclure ce fichier des résultats » : pour cette recherche seulement.
+    pub fn exclude_file(&mut self, path: &std::path::Path) {
+        self.files.retain(|f| f.path != path);
+        if self.selected.as_ref().is_some_and(|(p, _)| p == path) {
+            self.selected = None;
+            self.preview = None;
+            self.preview_requested = None;
+        }
+        self.rebuild_rows();
+    }
+
+    fn hit_request(
+        &self,
+        path: &PathBuf,
+        line: u32,
+        pos: egui::Pos2,
+    ) -> crate::target::MenuRequest {
+        let text = self
+            .files
+            .iter()
+            .find(|f| &f.path == path)
+            .and_then(|f| f.lines.iter().find(|l| l.line == line))
+            .map(|l| l.snippet.clone())
+            .unwrap_or_default();
+        crate::target::MenuRequest {
+            target: crate::target::Target::Hit(crate::target::HitRef {
+                path: path.clone(),
+                line,
+                text,
+            }),
+            pos,
+            by_keyboard: false,
         }
     }
 
@@ -387,6 +448,8 @@ impl FindInFiles {
         let rows_len = self.rows.len();
         let mut clicked: Option<(PathBuf, u32)> = None;
         let mut opened = false;
+        let mut menu: Option<(PathBuf, u32, egui::Pos2)> = None;
+        let menu_open = self.menu_open;
         let rect = floating(ctx, "julie-find-in-files", width, p, |ui| {
             ui.label(egui::RichText::new(t::FIND_TITLE).small().color(p.text_dim));
             ui.horizontal(|ui| {
@@ -458,10 +521,14 @@ impl FindInFiles {
             }
             let output = area.show_rows(ui, ROW_HEIGHT, rows_len, |ui, range| {
                 for i in range {
-                    let hit = draw_row(ui, p, &self.files, self.rows[i], selected_row == Some(i));
-                    if let Some(((path, line), double)) = hit {
+                    let row = draw_row(ui, p, &self.files, self.rows[i], selected_row == Some(i));
+                    if let Some(((path, line), double)) = row.click {
                         clicked = Some((path, line));
                         opened |= double;
+                    }
+                    if let Some((path, line, pos)) = row.secondary {
+                        clicked = Some((path.clone(), line));
+                        menu = Some((path, line, pos));
                     }
                 }
             });
@@ -477,6 +544,9 @@ impl FindInFiles {
                 dark,
             );
         });
+        if let Some((path, line, pos)) = menu {
+            self.menu_request = Some(self.hit_request(&path, line, pos));
+        }
         if let Some(sel) = clicked {
             self.selected = Some(sel);
             if opened {
@@ -485,7 +555,7 @@ impl FindInFiles {
                 }
             }
         }
-        if matches!(outcome, Outcome::Pending) && clicked_outside(ctx, rect) {
+        if matches!(outcome, Outcome::Pending) && !menu_open && clicked_outside(ctx, rect) {
             return Outcome::Close;
         }
         outcome
@@ -536,21 +606,28 @@ impl FindInFiles {
         });
         let selected_row = self.selected_position();
         let mut result = None;
+        let mut menu: Option<(PathBuf, u32, egui::Pos2)> = None;
         egui::ScrollArea::vertical()
             .id_salt("find-results-tab")
             .auto_shrink([false, false])
             .show_rows(ui, ROW_HEIGHT, self.rows.len(), |ui, range| {
                 for i in range {
-                    if let Some(((path, line), double)) =
-                        draw_row(ui, p, &self.files, self.rows[i], selected_row == Some(i))
-                    {
+                    let row = draw_row(ui, p, &self.files, self.rows[i], selected_row == Some(i));
+                    if let Some(((path, line), double)) = row.click {
                         self.selected = Some((path, line));
                         if double {
                             result = self.open_selected();
                         }
                     }
+                    if let Some((path, line, pos)) = row.secondary {
+                        self.selected = Some((path.clone(), line));
+                        menu = Some((path, line, pos));
+                    }
                 }
             });
+        if let Some((path, line, pos)) = menu {
+            self.menu_request = Some(self.hit_request(&path, line, pos));
+        }
         result
     }
 
@@ -613,13 +690,20 @@ fn toggle(ui: &mut egui::Ui, p: &Palette, value: &mut bool, label: &str, tooltip
 }
 
 /// Dessine une ligne de résultats ; rend `((fichier, ligne), double-clic)` si cliquée.
+/// Ce qu'une ligne de résultats a vu : un clic (et si c'est un double-clic), un clic droit.
+#[derive(Default)]
+struct RowEvent {
+    click: Option<((PathBuf, u32), bool)>,
+    secondary: Option<(PathBuf, u32, egui::Pos2)>,
+}
+
 fn draw_row(
     ui: &mut egui::Ui,
     p: &Palette,
     files: &[FileTextMatches],
     row: Row,
     selected: bool,
-) -> Option<((PathBuf, u32), bool)> {
+) -> RowEvent {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     if selected {
@@ -656,12 +740,21 @@ fn draw_row(
                 FontId::proportional(12.5),
                 p.text_dim,
             );
-            response.clicked().then(|| {
-                (
-                    (file.path.clone(), file.lines.first().map_or(0, |l| l.line)),
-                    response.double_clicked(),
-                )
-            })
+            let line = file.lines.first().map_or(0, |l| l.line);
+            RowEvent {
+                click: response
+                    .clicked()
+                    .then(|| ((file.path.clone(), line), response.double_clicked())),
+                secondary: response.secondary_clicked().then(|| {
+                    (
+                        file.path.clone(),
+                        line,
+                        response
+                            .interact_pointer_pos()
+                            .unwrap_or(rect.left_bottom()),
+                    )
+                }),
+            }
         }
         Row::Line(f, l) => {
             let file = &files[f];
@@ -701,9 +794,20 @@ fn draw_row(
                 galley,
                 p.text,
             );
-            response
-                .clicked()
-                .then(|| ((file.path.clone(), hit.line), response.double_clicked()))
+            RowEvent {
+                click: response
+                    .clicked()
+                    .then(|| ((file.path.clone(), hit.line), response.double_clicked())),
+                secondary: response.secondary_clicked().then(|| {
+                    (
+                        file.path.clone(),
+                        hit.line,
+                        response
+                            .interact_pointer_pos()
+                            .unwrap_or(rect.left_bottom()),
+                    )
+                }),
+            }
         }
     }
 }

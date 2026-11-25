@@ -1,7 +1,7 @@
 //! Arbre du projet : dossiers listés à la demande (jamais sur le fil de
 //! l'interface), couleurs d'état Git, tout au clavier (flèches, Entrée).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,6 +9,7 @@ use eframe::egui::{self, vec2, Color32, EventFilter, Id, Key, Modifiers, Sense, 
 use julie_index::IndexService;
 use julie_vcs::{FileKind, Status};
 
+use crate::actions::ActionId;
 use crate::icons::{self, Icon};
 use crate::project::{self, Channel, TreeEntry};
 use crate::target::{FileRef, MenuRequest, Target, Zone};
@@ -39,6 +40,12 @@ pub struct ProjectTree {
     listings: HashMap<PathBuf, Listing>,
     expanded: HashSet<PathBuf>,
     pub selected: Option<PathBuf>,
+    /// Sélection multiple (Ctrl+clic, Maj+clic) : tout ce qui est choisi quand ils sont
+    /// plusieurs, `selected` compris. Vide : la sélection est `selected` seul.
+    multi: BTreeSet<PathBuf>,
+    anchor: Option<PathBuf>,
+    /// Touche propre à l'arbre (Suppr, Maj+F6, Alt+Inser) à exécuter par l'application.
+    pub key_action: Option<ActionId>,
     /// Menu contextuel demandé à cette image (clic droit).
     pub menu_request: Option<MenuRequest>,
     changes: HashMap<PathBuf, FileKind>,
@@ -58,6 +65,9 @@ impl ProjectTree {
             listings: HashMap::new(),
             expanded: HashSet::new(),
             selected: None,
+            multi: BTreeSet::new(),
+            anchor: None,
+            key_action: None,
             menu_request: None,
             changes: HashMap::new(),
             dirs_with_changes: HashSet::new(),
@@ -68,6 +78,13 @@ impl ProjectTree {
         }
     }
 
+    /// Le service d'index a été remplacé (réglages) : les prochains listages l'utilisent.
+    pub fn set_index(&mut self, index: Arc<IndexService>) {
+        if let Some((current, _)) = &mut self.lister {
+            *current = index;
+        }
+    }
+
     /// Nouveau projet : l'arbre repart de zéro, racine dépliée.
     pub fn reset(&mut self, root: PathBuf, index: Arc<IndexService>, channel: Channel) {
         self.listings.clear();
@@ -75,6 +92,8 @@ impl ProjectTree {
         self.changes.clear();
         self.dirs_with_changes.clear();
         self.selected = Some(root.clone());
+        self.multi.clear();
+        self.anchor = None;
         self.root = Some(root.clone());
         self.lister = Some((index, channel));
         self.expanded.insert(root.clone());
@@ -171,6 +190,38 @@ impl ProjectTree {
         self.scroll_to_selected = true;
     }
 
+    /// Clic avec Ctrl (bascule) ou Maj (plage depuis l'ancre) sur une ligne.
+    fn click_selection(&mut self, rows: &[Row], path: &PathBuf, ctrl: bool, shift: bool) {
+        if shift {
+            let anchor = self
+                .anchor
+                .clone()
+                .or_else(|| self.selected.clone())
+                .unwrap_or_else(|| path.clone());
+            let from = rows.iter().position(|r| r.path == anchor);
+            let to = rows.iter().position(|r| &r.path == path);
+            if let (Some(a), Some(b)) = (from, to) {
+                self.multi = rows[a.min(b)..=a.max(b)]
+                    .iter()
+                    .map(|r| r.path.clone())
+                    .collect();
+            }
+        } else if ctrl {
+            if self.multi.is_empty() {
+                if let Some(current) = &self.selected {
+                    self.multi.insert(current.clone());
+                }
+            }
+            if !self.multi.remove(path) {
+                self.multi.insert(path.clone());
+            }
+            self.anchor = Some(path.clone());
+        } else {
+            self.multi.clear();
+            self.anchor = Some(path.clone());
+        }
+    }
+
     fn toggle(&mut self, dir: &Path) {
         if self.expanded.contains(dir) {
             self.expanded.remove(dir);
@@ -233,6 +284,31 @@ impl ProjectTree {
         })
     }
 
+    /// Tout ce qui est choisi, dans l'ordre de l'arbre (un seul sans sélection multiple).
+    pub fn selection_refs(&self) -> Vec<FileRef> {
+        let rows = self.rows();
+        if self.multi.len() > 1 {
+            return rows
+                .iter()
+                .filter(|r| self.multi.contains(&r.path))
+                .map(|r| FileRef {
+                    path: r.path.clone(),
+                    is_dir: r.is_dir,
+                })
+                .collect();
+        }
+        self.selected_ref().into_iter().collect()
+    }
+
+    /// Sélection multiple depuis le mode scénario.
+    pub fn select_many(&mut self, paths: Vec<PathBuf>) {
+        if let Some(first) = paths.first() {
+            self.selected = Some(first.clone());
+            self.anchor = Some(first.clone());
+        }
+        self.multi = paths.into_iter().collect();
+    }
+
     /// Noms (avec indentation) des lignes visibles : pour l'état du mode scénario.
     pub fn visible_names(&self) -> Vec<String> {
         self.rows()
@@ -293,6 +369,10 @@ impl ProjectTree {
         let mut toggle: Option<PathBuf> = None;
         let mut select: Option<PathBuf> = None;
         let mut menu: Option<MenuRequest> = None;
+        // Sélection multiple : un clic avec Ctrl / Maj, une extension au clavier.
+        let mut modified_click: Option<(PathBuf, bool, bool)> = None;
+        let mut extend = false;
+        let mut clear_multi = false;
 
         if self.focus_requested {
             self.focus_requested = false;
@@ -320,11 +400,35 @@ impl ProjectTree {
                     i.consume_key(Modifiers::NONE, Key::Enter),
                 )
             });
+            let (delete, rename, new_item, shift_up, shift_down) = ui.input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, Key::Delete),
+                    i.consume_key(Modifiers::SHIFT, Key::F6),
+                    i.consume_key(Modifiers::ALT, Key::Insert),
+                    i.consume_key(Modifiers::SHIFT, Key::ArrowUp),
+                    i.consume_key(Modifiers::SHIFT, Key::ArrowDown),
+                )
+            });
+            if delete {
+                self.key_action = Some(ActionId::TreeDelete);
+            } else if rename {
+                self.key_action = Some(ActionId::TreeRename);
+            } else if new_item {
+                self.key_action = Some(ActionId::TreeNewFile);
+            }
             let index = self
                 .selected
                 .as_ref()
                 .and_then(|s| rows.iter().position(|r| &r.path == s))
                 .unwrap_or(0);
+            if shift_up && index > 0 {
+                select = Some(rows[index - 1].path.clone());
+                extend = true;
+            }
+            if shift_down && index + 1 < rows.len() {
+                select = Some(rows[index + 1].path.clone());
+                extend = true;
+            }
             if let Some(row) = rows.get(index) {
                 if up && index > 0 {
                     select = Some(rows[index - 1].path.clone());
@@ -392,7 +496,8 @@ impl ProjectTree {
                     vec2(ui.available_width().max(120.0), ROW_HEIGHT),
                     Sense::click(),
                 );
-                let is_selected = self.selected.as_ref() == Some(&row.path);
+                let is_selected =
+                    self.selected.as_ref() == Some(&row.path) || self.multi.contains(&row.path);
                 let painter = ui.painter();
                 if is_selected {
                     let fill = if focused { p.accent_soft } else { p.bg_alt };
@@ -442,6 +547,8 @@ impl ProjectTree {
 
                 if response.clicked() {
                     select = Some(row.path.clone());
+                    let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+                    modified_click = Some((row.path.clone(), ctrl, shift));
                     ui.memory_mut(|m| m.request_focus(self.id));
                     let on_chevron = response
                         .interact_pointer_pos()
@@ -451,15 +558,29 @@ impl ProjectTree {
                     }
                 }
                 if response.secondary_clicked() {
-                    select = Some(row.path.clone());
                     ui.memory_mut(|m| m.request_focus(self.id));
+                    // Dans la sélection : le menu agit sur toute la sélection ; ailleurs, la
+                    // sélection devient cette ligne.
+                    let files = if self.multi.len() > 1 && self.multi.contains(&row.path) {
+                        rows.iter()
+                            .filter(|r| self.multi.contains(&r.path))
+                            .map(|r| FileRef {
+                                path: r.path.clone(),
+                                is_dir: r.is_dir,
+                            })
+                            .collect()
+                    } else {
+                        select = Some(row.path.clone());
+                        clear_multi = true;
+                        vec![FileRef {
+                            path: row.path.clone(),
+                            is_dir: row.is_dir,
+                        }]
+                    };
                     menu = Some(MenuRequest {
                         target: Target::Files {
                             zone: Zone::Tree,
-                            files: vec![FileRef {
-                                path: row.path.clone(),
-                                is_dir: row.is_dir,
-                            }],
+                            files,
                         },
                         pos: response
                             .interact_pointer_pos()
@@ -490,6 +611,23 @@ impl ProjectTree {
 
         if menu.is_some() {
             self.menu_request = menu;
+        }
+        if clear_multi {
+            self.multi.clear();
+            self.anchor = select.clone();
+        } else if let Some((path, ctrl, shift)) = modified_click {
+            self.click_selection(&rows, &path, ctrl, shift);
+        } else if extend {
+            if let Some(path) = select.clone() {
+                if self.anchor.is_none() {
+                    self.anchor = self.selected.clone();
+                }
+                self.click_selection(&rows, &path, false, true);
+            }
+        } else if select.is_some() {
+            // Une flèche ou un clic simple : retour à une sélection simple.
+            self.multi.clear();
+            self.anchor = select.clone();
         }
         if let Some(path) = select {
             self.selected = Some(path);

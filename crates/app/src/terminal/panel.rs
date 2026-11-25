@@ -12,6 +12,7 @@ use julie_terminal::{
 };
 
 use super::view::{TerminalIntent, TerminalView};
+use crate::target::{MenuRequest, Target, TermRef};
 
 const NEW_TAB: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::T);
@@ -132,6 +133,8 @@ pub struct TerminalPanel {
     exit_confirmed: bool,
     renaming: Option<(SessionId, String)>,
     clipboard: Option<String>,
+    /// Menu contextuel demandé à cette image (clic droit sur l'écran ou sur un onglet).
+    pub menu_request: Option<MenuRequest>,
 }
 
 impl TerminalPanel {
@@ -152,7 +155,100 @@ impl TerminalPanel {
             exit_confirmed: false,
             renaming: None,
             clipboard: None,
+            menu_request: None,
         }
+    }
+
+    // ----- Ce que le menu contextuel demande ---------------------------------------
+
+    pub fn has_tabs(&self) -> bool {
+        !self.tabs.is_empty()
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.session.has_selection())
+    }
+
+    pub fn selection_text(&self) -> Option<String> {
+        self.tabs.get(self.active)?.session.selection_text()
+    }
+
+    /// Le texte arrive en `Event::Paste` au terminal qui a le focus.
+    pub fn paste(&mut self, ctx: &egui::Context) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.view.request_focus();
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+    }
+
+    pub fn select_all(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.view.select_all(&tab.session);
+        }
+    }
+
+    pub fn clear_history(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.session.clear_history();
+        }
+    }
+
+    pub fn begin_rename(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get(index) {
+            self.active = index;
+            self.renaming = Some((tab.session.id(), tab.label()));
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.request_close(index);
+        }
+    }
+
+    /// Ouvre un onglet de ce type d'interpréteur (s'il est installé).
+    pub fn open_kind(&mut self, kind: ProfileKind) {
+        let profile = self
+            .profiles
+            .as_ref()
+            .and_then(|profiles| profiles.get(kind))
+            .filter(|p| p.available)
+            .cloned();
+        if let Some(profile) = profile {
+            self.open(profile);
+        }
+    }
+
+    /// Pourquoi cet interpréteur ne peut pas être ouvert (infobulle de l'entrée grisée).
+    pub fn profile_problem(&self, kind: ProfileKind) -> Option<String> {
+        let profiles = self.profiles.as_ref()?;
+        let profile = profiles.get(kind)?;
+        (!profile.available).then(|| texts::shell_missing(kind, &profile.program))
+    }
+
+    pub fn tab_names(&self) -> Vec<String> {
+        self.tabs.iter().map(Tab::label).collect()
+    }
+
+    /// De nouveaux réglages `[terminal]` : les **prochains** onglets les suivent ;
+    /// les sessions ouvertes ne changent pas.
+    pub fn apply_settings(&mut self, tasks: &Tasks, settings: TerminalSettings) {
+        tasks.spawn(
+            julie_core::Domain::Terminal,
+            "terminal.profiles",
+            move |ctx| {
+                ctx.publish(TerminalEvent::Profiles(julie_terminal::detect_profiles(
+                    &settings,
+                )));
+                Ok(())
+            },
+        );
     }
 
     /// Le terminal actif a le focus clavier (la coquille lui laisse alors
@@ -430,6 +526,17 @@ impl TerminalPanel {
             None => {}
         }
         let output = tab.view.show(ui, &tab.session);
+        if let Some(pos) = tab.view.take_menu_pos() {
+            self.menu_request = Some(MenuRequest {
+                target: Target::Terminal(TermRef {
+                    has_selection: tab.session.has_selection(),
+                    tab: self.active,
+                    on_tab: false,
+                }),
+                pos,
+                by_keyboard: false,
+            });
+        }
         if relaunch {
             self.relaunch(self.active);
         }
@@ -441,6 +548,7 @@ impl TerminalPanel {
         let mut close = None;
         let mut open = None;
         let mut new_default = false;
+        let mut menu: Option<(usize, egui::Pos2)> = None;
         ui.horizontal(|ui| {
             for (index, tab) in self.tabs.iter().enumerate() {
                 let id = tab.session.id();
@@ -468,6 +576,15 @@ impl TerminalPanel {
                     self.renaming = Some((id, tab.label()));
                 } else if label.clicked() {
                     select = Some((index, None));
+                }
+                if label.secondary_clicked() {
+                    select = Some((index, None));
+                    menu = Some((
+                        index,
+                        label
+                            .interact_pointer_pos()
+                            .unwrap_or(label.rect.left_bottom()),
+                    ));
                 }
                 if ui
                     .small_button("×")
@@ -514,6 +631,17 @@ impl TerminalPanel {
             .on_hover_text(texts::CHOOSE_SHELL_TOOLTIP);
         });
 
+        if let Some((index, pos)) = menu {
+            self.menu_request = Some(MenuRequest {
+                target: Target::Terminal(TermRef {
+                    has_selection: self.tabs[index].session.has_selection(),
+                    tab: index,
+                    on_tab: true,
+                }),
+                pos,
+                by_keyboard: false,
+            });
+        }
         if let Some((index, rename)) = select {
             if let Some(name) = rename {
                 self.tabs[index].custom_name = Some(name);

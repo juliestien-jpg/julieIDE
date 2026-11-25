@@ -73,11 +73,47 @@ pub struct Editors {
     pub recent: Vec<PathBuf>,
     /// Menu contextuel demandé à cette image (clic droit sur un onglet).
     pub menu_request: Option<MenuRequest>,
+    /// Clic droit dans le texte de l'éditeur actif (le menu est ouvert par l'application).
+    pub editor_click: Option<EditorClick>,
+}
+
+/// Un clic droit dans l'éditeur : où, et s'il est tombé dans la sélection (qu'on garde).
+#[derive(Debug, Clone, Copy)]
+pub struct EditorClick {
+    pub pos: egui::Pos2,
+    pub inside_selection: bool,
 }
 
 impl Editors {
     pub fn index_of(&self, path: &Path) -> Option<usize> {
         self.items.iter().position(|e| e.path() == Some(path))
+    }
+
+    /// Un fichier ou un dossier a changé de chemin : les onglets le suivent, contenu non
+    /// enregistré compris (l'onglet modifié ne réclame pas « changé sur le disque »).
+    pub fn rename_path(&mut self, from: &Path, to: &Path) {
+        for editor in &mut self.items {
+            let Some(current) = editor.path().map(Path::to_path_buf) else {
+                continue;
+            };
+            let new = if current == from {
+                Some(to.to_path_buf())
+            } else {
+                current.strip_prefix(from).ok().map(|rest| to.join(rest))
+            };
+            if let Some(new) = new {
+                editor.document.set_path(new);
+                if editor.document.is_modified() {
+                    editor.keep_mine = true;
+                }
+            }
+        }
+        for path in self.recent.iter_mut().chain(self.previous.iter_mut()) {
+            if let Ok(rest) = path.strip_prefix(from) {
+                *path = to.join(rest);
+            }
+        }
+        self.reveal_active = true;
     }
 
     pub fn active_editor(&self) -> Option<&OpenEditor> {
@@ -538,7 +574,25 @@ impl Editors {
                 });
         }
         let decorations = Decorations::default();
-        editor.view.show(ui, &mut editor.document, &decorations);
+        let output = editor.view.show(ui, &mut editor.document, &decorations);
+        if output.response.secondary_clicked() {
+            if let Some(pos) = output.response.interact_pointer_pos() {
+                // Dans la sélection : on la garde ; ailleurs, le curseur ira au point cliqué.
+                let selection = editor.document.selections().primary();
+                let inside_selection = !selection.is_empty()
+                    && output.layout.line_at(pos.y).is_some_and(|line| {
+                        let buffer = editor.document.buffer();
+                        let range = selection.range();
+                        let first = buffer.line_of(range.start) as u32;
+                        let last = buffer.line_of(range.end) as u32;
+                        (first..=last).contains(&line)
+                    });
+                self.editor_click = Some(EditorClick {
+                    pos,
+                    inside_selection,
+                });
+            }
+        }
         intent
     }
 }

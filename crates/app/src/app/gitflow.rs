@@ -18,7 +18,7 @@ use crate::branchui::{BranchPopup, PopupOut, WidgetInfo, WidgetKind};
 use crate::gitdialogs::{self as gd, Dialog as GitDialog, ResetUiMode};
 use crate::safety::AfterCopy;
 use crate::target::Target;
-use crate::texts_v1 as tv;
+use crate::texts as t;
 
 /// Ce qu'il faut rejouer si la bascule est refusée puis autorisée avec mise de côté.
 pub(super) enum Pending {
@@ -29,8 +29,13 @@ pub(super) enum Pending {
 /// Le bouton de la notification de la barre d'état.
 #[derive(Clone)]
 pub(super) enum ToastAction {
-    RestoreBranch { name: String, tip: String },
+    RestoreBranch {
+        name: String,
+        tip: String,
+    },
     RestoreCopy(String),
+    /// Ouvrir un fichier de réglages illisible, à la ligne de l'erreur.
+    OpenFile(PathBuf, Option<u32>),
 }
 
 /// Les actions Git qui écrivent : un échec de Git y est montré tel quel dans une fenêtre.
@@ -171,7 +176,7 @@ impl JulieStormApp {
         Some(match &project.git {
             GitInfo::Unknown => return None,
             GitInfo::NoRepository => WidgetInfo {
-                text: tv::WIDGET_NO_REPO.to_owned(),
+                text: t::WIDGET_NO_REPO.to_owned(),
                 ahead: 0,
                 behind: 0,
                 kind: WidgetKind::NoRepository,
@@ -184,11 +189,11 @@ impl JulieStormApp {
                     .unwrap_or((0, 0));
                 let (text, kind) = match (&status.operation, &status.head) {
                     (Some(operation), _) => (
-                        tv::widget_operation(operation.kind, operation.step),
+                        t::widget_operation(operation.kind, operation.step),
                         WidgetKind::Operation,
                     ),
                     (None, julie_vcs::Head::Detached { commit }) => (
-                        tv::widget_detached(&commit.chars().take(7).collect::<String>()),
+                        t::widget_detached(&commit.chars().take(7).collect::<String>()),
                         WidgetKind::Detached,
                     ),
                     (None, julie_vcs::Head::Branch { name, commit }) => (
@@ -218,11 +223,11 @@ impl JulieStormApp {
         let branch = match &status.head {
             julie_vcs::Head::Branch { name, .. } => name.clone(),
             julie_vcs::Head::Detached { commit } => {
-                tv::widget_detached(&commit.chars().take(7).collect::<String>())
+                t::widget_detached(&commit.chars().take(7).collect::<String>())
             }
         };
         let upstream = status.upstream.as_ref();
-        tv::widget_tooltip(
+        t::widget_tooltip(
             &branch,
             upstream.map(|u| u.name.as_str()),
             upstream.and_then(|u| u.ahead_behind),
@@ -299,7 +304,7 @@ impl JulieStormApp {
             VcsEvent::BranchCreated(outcome) => {
                 self.pending_switch = None;
                 self.toast(
-                    tv::branch_created(&outcome.name, outcome.switched.is_some()),
+                    t::branch_created(&outcome.name, outcome.switched.is_some()),
                     false,
                     None,
                 );
@@ -308,11 +313,11 @@ impl JulieStormApp {
                 }
             }
             VcsEvent::BranchRenamed(outcome) => {
-                self.toast(tv::branch_renamed(&outcome.old, &outcome.new), false, None);
+                self.toast(t::branch_renamed(&outcome.old, &outcome.new), false, None);
             }
             VcsEvent::BranchDeleted(outcome) => {
                 self.toast(
-                    tv::branch_deleted(&outcome.name),
+                    t::branch_deleted(&outcome.name),
                     false,
                     Some(ToastAction::RestoreBranch {
                         name: outcome.name.clone(),
@@ -325,11 +330,11 @@ impl JulieStormApp {
                 }
             }
             VcsEvent::BranchRestored { name, .. } => {
-                self.toast(tv::branch_restored(name), false, None);
+                self.toast(t::branch_restored(name), false, None);
             }
             VcsEvent::RemoteBranchDeleted(outcome) => {
                 self.toast(
-                    tv::remote_branch_deleted(&outcome.remote, &outcome.branch),
+                    t::remote_branch_deleted(&outcome.remote, &outcome.branch),
                     false,
                     None,
                 );
@@ -342,20 +347,20 @@ impl JulieStormApp {
                 self.net_progress = None;
                 self.last_fetch = Some(Instant::now());
                 self.toast(
-                    tv::fetched(outcome.updated(), outcome.pruned(), outcome.is_empty()),
+                    t::fetched(outcome.updated(), outcome.pruned(), outcome.is_empty()),
                     false,
                     None,
                 );
             }
             VcsEvent::BranchFastForwarded { branch, .. } => {
-                self.toast(tv::fast_forwarded(branch), false, None);
+                self.toast(t::fast_forwarded(branch), false, None);
             }
             VcsEvent::Updated(outcome) => self.after_integration(outcome, true),
             VcsEvent::Pulled(outcome) | VcsEvent::OperationRan(outcome) => {
                 self.after_integration(outcome, false);
             }
             VcsEvent::OperationSkipped(outcome) => {
-                self.toast(tv::skipped(outcome.finished), false, None);
+                self.toast(t::skipped(outcome.finished), false, None);
             }
             VcsEvent::PushPreview(preview) => {
                 if let Some(GitDialog::Push(d)) = &mut self.git_dialog {
@@ -372,7 +377,7 @@ impl JulieStormApp {
             VcsEvent::Pushed(outcome) => {
                 self.net_progress = None;
                 self.toast(
-                    tv::pushed(
+                    t::pushed(
                         outcome.pushed,
                         &outcome.target.remote,
                         &outcome.target.remote_branch,
@@ -383,7 +388,7 @@ impl JulieStormApp {
                 );
             }
             VcsEvent::Progress(progress) => {
-                self.net_progress = Some(tv::progress_text(progress));
+                self.net_progress = Some(t::progress_text(progress));
             }
             VcsEvent::ResetPreview(preview) => {
                 if let Some(GitDialog::Reset(d)) = &mut self.git_dialog {
@@ -395,14 +400,19 @@ impl JulieStormApp {
             VcsEvent::ResetDone(outcome) => {
                 self.git.invalidate_diff();
                 self.toast(
-                    tv::reset_done(&outcome.head, outcome.stash.is_some()),
+                    t::reset_done(&outcome.head, outcome.stash.is_some()),
                     false,
                     None,
                 );
             }
-            VcsEvent::Staged { paths } => self.toast(tv::staged(paths.len()), false, None),
-            VcsEvent::Unstaged { paths } => self.toast(tv::unstaged(paths.len()), false, None),
+            VcsEvent::Staged { paths } => self.toast(t::staged(paths.len()), false, None),
+            VcsEvent::Unstaged { paths } => self.toast(t::unstaged(paths.len()), false, None),
+            VcsEvent::Moved { from, to } => self.after_move(from, to),
             VcsEvent::Discarded(outcome) => {
+                if std::mem::take(&mut self.discard_delete_added) {
+                    // Case « Supprimer aussi les fichiers ajoutés » : vers la corbeille.
+                    self.trash_added(outcome.unstaged_added.clone());
+                }
                 for path in &outcome.restored {
                     if self.editors.index_of(path).is_some() {
                         julie_text::spawn_load(&self.tasks, path.clone());
@@ -411,7 +421,7 @@ impl JulieStormApp {
                 self.git.invalidate_diff();
                 let copy = self.last_copy.take();
                 self.toast(
-                    tv::discarded(outcome.restored.len(), outcome.unstaged_added.len()),
+                    t::discarded(outcome.restored.len(), outcome.unstaged_added.len()),
                     false,
                     copy.map(ToastAction::RestoreCopy),
                 );
@@ -419,12 +429,12 @@ impl JulieStormApp {
             VcsEvent::IgnoreAdded(outcome) => {
                 self.tree.refresh();
                 self.toast(
-                    tv::ignore_added(&outcome.line, outcome.already_present),
+                    t::ignore_added(&outcome.line, outcome.already_present),
                     false,
                     None,
                 );
             }
-            VcsEvent::Waiting { .. } => self.toast(tv::WAITING_FOR_GIT, false, None),
+            VcsEvent::Waiting { .. } => self.toast(t::WAITING_FOR_GIT, false, None),
             _ => {}
         }
     }
@@ -442,7 +452,7 @@ impl JulieStormApp {
                 StashRestore::Restored => followed = true,
                 StashRestore::Conflicts(_) | StashRestore::Pending | StashRestore::Failed(_) => {
                     self.show_git_changes();
-                    self.toast(tv::stash_kept(&stash.message), true, None);
+                    self.toast(t::stash_kept(&stash.message), true, None);
                     return;
                 }
                 StashRestore::Kept => {}
@@ -450,16 +460,16 @@ impl JulieStormApp {
         }
         if let Some(output) = &outcome.hook_output {
             self.open_message(
-                tv::HOOK_FAILED_TITLE.to_owned(),
+                t::HOOK_FAILED_TITLE.to_owned(),
                 output.clone(),
                 true,
                 Vec::new(),
             );
         }
         if let Some(behind) = outcome.behind_upstream.filter(|n| *n > 0) {
-            self.toast(tv::switched_behind(&name, behind), false, None);
+            self.toast(t::switched_behind(&name, behind), false, None);
         } else if announce {
-            self.toast(tv::switched(&name, outcome.created, followed), false, None);
+            self.toast(t::switched(&name, outcome.created, followed), false, None);
         }
     }
 
@@ -471,7 +481,7 @@ impl JulieStormApp {
             self.after_update_push = None;
             self.show_git_changes();
             self.toast(
-                tv::operation_stopped(outcome.kind, outcome.conflicts.len()),
+                t::operation_stopped(outcome.kind, outcome.conflicts.len()),
                 true,
                 None,
             );
@@ -484,7 +494,7 @@ impl JulieStormApp {
             ) {
                 self.after_update_push = None;
                 self.show_git_changes();
-                self.toast(tv::stash_kept(&stash.message), true, None);
+                self.toast(t::stash_kept(&stash.message), true, None);
                 return;
             }
         }
@@ -497,9 +507,9 @@ impl JulieStormApp {
             }
         }
         let text = if outcome.up_to_date {
-            tv::UP_TO_DATE.to_owned()
+            t::UP_TO_DATE.to_owned()
         } else {
-            tv::integrated(
+            t::integrated(
                 outcome.kind,
                 outcome.received,
                 outcome.changed_files,
@@ -539,33 +549,33 @@ impl JulieStormApp {
             (_, VcsError::AuthenticationFailed { stderr }) => {
                 self.after_update_push = None;
                 self.open_message(
-                    tv::AUTH_TITLE.to_owned(),
-                    format!("{}\n\n{}", tv::AUTH_TEXT, stderr.trim()),
+                    t::AUTH_TITLE.to_owned(),
+                    format!("{}\n\n{}", t::AUTH_TEXT, stderr.trim()),
                     true,
-                    vec![("terminal", tv::BTN_OPEN_TERMINAL.to_owned())],
+                    vec![("terminal", t::BTN_OPEN_TERMINAL.to_owned())],
                 );
                 true
             }
             (_, VcsError::NoUpstream { branch }) => {
                 self.open_message(
-                    tv::NO_UPSTREAM_TITLE.to_owned(),
-                    tv::no_upstream_text(branch),
+                    t::NO_UPSTREAM_TITLE.to_owned(),
+                    t::no_upstream_text(branch),
                     false,
-                    vec![("push_new", tv::BTN_PUSH_TO_CREATE.to_owned())],
+                    vec![("push_new", t::BTN_PUSH_TO_CREATE.to_owned())],
                 );
                 true
             }
             (_, VcsError::UpstreamGone { branch, upstream }) => {
                 self.open_message(
-                    tv::UPSTREAM_GONE_TITLE.to_owned(),
-                    tv::upstream_gone_text(branch, upstream),
+                    t::UPSTREAM_GONE_TITLE.to_owned(),
+                    t::upstream_gone_text(branch, upstream),
                     false,
-                    vec![("push_new", tv::BTN_PUSH_TO_RECREATE.to_owned())],
+                    vec![("push_new", t::BTN_PUSH_TO_RECREATE.to_owned())],
                 );
                 true
             }
             (_, VcsError::DetachedHead) => {
-                self.toast(tv::DETACHED_NOT_POSSIBLE, true, None);
+                self.toast(t::DETACHED_NOT_POSSIBLE, true, None);
                 true
             }
             (VcsAction::Push, VcsError::PushRejected { rejection, output }) => {
@@ -580,15 +590,15 @@ impl JulieStormApp {
                     }
                     PushRejection::StaleLease => {
                         self.open_message(
-                            tv::PUSH_STALE_TITLE.to_owned(),
-                            format!("{}\n\n{}", tv::PUSH_STALE_TEXT, output.trim()),
+                            t::PUSH_STALE_TITLE.to_owned(),
+                            format!("{}\n\n{}", t::PUSH_STALE_TEXT, output.trim()),
                             true,
                             Vec::new(),
                         );
                     }
                     PushRejection::RemoteRejected { .. } | PushRejection::Other { .. } => {
                         self.open_message(
-                            tv::PUSH_REFUSED_TITLE.to_owned(),
+                            t::PUSH_REFUSED_TITLE.to_owned(),
                             output.clone(),
                             true,
                             Vec::new(),
@@ -598,29 +608,41 @@ impl JulieStormApp {
                 true
             }
             (_, VcsError::ProtectedBranch(branch)) => {
-                self.toast(tv::protected_refused(branch), true, None);
+                self.toast(t::protected_refused(branch), true, None);
+                true
+            }
+            (VcsAction::Move, VcsError::NotTracked(_)) => {
+                // Non suivi par Git : renommage simple.
+                if let Some((from, to)) = self.pending_rename.take() {
+                    self.plain_rename(from, to);
+                }
+                true
+            }
+            (VcsAction::Move, VcsError::DestinationExists(_)) => {
+                self.pending_rename = None;
+                self.toast(t::NAME_EXISTS, true, None);
                 true
             }
             (_, VcsError::IgnoredPaths(_)) => {
-                self.toast(tv::IGNORED_PATHS, true, None);
+                self.toast(t::IGNORED_PATHS, true, None);
                 true
             }
             (_, VcsError::AlreadyTracked(path)) => {
-                self.toast(tv::already_tracked(&path.display().to_string()), true, None);
+                self.toast(t::already_tracked(&path.display().to_string()), true, None);
                 true
             }
             (_, VcsError::Conflicted(_)) => {
-                self.toast(tv::DISCARD_CONFLICTED, true, None);
+                self.toast(t::DISCARD_CONFLICTED, true, None);
                 true
             }
             (_, VcsError::OperationInProgress(_)) => {
-                self.toast(tv::OPERATION_IN_PROGRESS, true, None);
+                self.toast(t::OPERATION_IN_PROGRESS, true, None);
                 true
             }
             (action, error @ VcsError::GitFailed { .. }) if shows_output(*action) => {
                 self.after_update_push = None;
                 self.open_message(
-                    tv::GIT_FAILED_TITLE.to_owned(),
+                    t::GIT_FAILED_TITLE.to_owned(),
                     crate::gitview::failure_text(error),
                     true,
                     Vec::new(),
@@ -655,7 +677,7 @@ impl JulieStormApp {
         };
         if let (SwitchTarget::Branch(name), Some(current)) = (&target, self.current_branch()) {
             if *name == current {
-                self.toast(tv::already_on(name), false, None);
+                self.toast(t::already_on(name), false, None);
                 return;
             }
         }
@@ -704,7 +726,7 @@ impl JulieStormApp {
 
     pub(super) fn open_push_dialog(&mut self, branch: Option<String>) {
         let Some(branch) = branch.or_else(|| self.current_branch()) else {
-            self.toast(tv::DETACHED_NOT_POSSIBLE, true, None);
+            self.toast(t::DETACHED_NOT_POSSIBLE, true, None);
             return;
         };
         self.branch_popup = None;
@@ -734,7 +756,7 @@ impl JulieStormApp {
 
     pub(super) fn start_update(&mut self) {
         let Some(branch) = self.current_branch() else {
-            self.toast(tv::DETACHED_NOT_POSSIBLE, true, None);
+            self.toast(t::DETACHED_NOT_POSSIBLE, true, None);
             return;
         };
         match self.update_method {
@@ -938,10 +960,19 @@ impl JulieStormApp {
                     IntegrationMethod::Rebase
                 };
                 if d.remember {
-                    // Provisoire : le noyau ne sait pas encore écrire les réglages, le choix
-                    // vaut pour la session (signalé dans la barre d'état).
+                    // « Ne plus demander » : réglage [vcs] update_method de ce projet.
                     self.update_method = Some(method);
-                    self.toast(tv::REMEMBER_SESSION_TOAST, false, None);
+                    let value = if method == IntegrationMethod::Merge {
+                        "fusion"
+                    } else {
+                        "rebase"
+                    };
+                    self.write_setting(
+                        julie_core::settings::Scope::Project,
+                        &["vcs", "update_method"],
+                        Some(julie_core::settings::SettingValue::Text(value.to_owned())),
+                    );
+                    self.toast(t::SETTINGS_REMEMBER_SAVED_TOAST, false, None);
                 }
                 self.do_update(method);
             }
@@ -1070,6 +1101,7 @@ impl JulieStormApp {
                 }
             }
             (GitDialog::Discard(d), "discard") => {
+                self.discard_delete_added = d.delete_added;
                 if let Some(root) = self.project_root() {
                     project::spawn_safety_copy(
                         root,
@@ -1105,7 +1137,7 @@ impl JulieStormApp {
         let id = match result {
             Ok(id) => id,
             Err(error) => {
-                self.toast(tv::safety_failed(&error), true, None);
+                self.toast(t::safety_failed(&error), true, None);
                 return;
             }
         };
@@ -1145,6 +1177,13 @@ impl JulieStormApp {
                 if let Some(root) = self.project_root() {
                     project::spawn_restore_copy(root, id, self.channel.clone());
                 }
+            }
+            ToastAction::OpenFile(path, line) => {
+                let goto = line.map(|line| Goto {
+                    position: TextPosition::new(line.saturating_sub(1), 0),
+                    end: None,
+                });
+                self.open_file(path, goto);
             }
         }
     }
@@ -1188,11 +1227,13 @@ impl JulieStormApp {
                 "action": m.action.as_ref().map(|a| match a {
                     ToastAction::RestoreBranch { name, .. } => format!("restore_branch:{name}"),
                     ToastAction::RestoreCopy(id) => format!("restore_copy:{id}"),
+                    ToastAction::OpenFile(path, _) => format!("open_file:{}", path.display()),
                 }),
             })),
             "update_method_session": self.update_method.map(|m| format!("{m:?}")),
             "safety_copy": self.last_copy,
             "net_progress": self.net_progress,
+            "settings": self.settings_state(),
         })
     }
 

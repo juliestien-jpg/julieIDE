@@ -11,7 +11,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use eframe::egui;
-use julie_core::{Project, Settings};
+use julie_core::{Project, Settings, SettingsFiles};
 use julie_index::IndexService;
 use julie_vcs::{Repository, Status, Vcs};
 
@@ -44,6 +44,62 @@ pub enum Msg {
     Notice {
         text: String,
         error: bool,
+    },
+    /// « Appliquer » de la fenêtre de réglages : les écritures sont faites (ou refusées).
+    SettingsApplied {
+        close: bool,
+        result: Result<(), String>,
+    },
+    /// Une écriture de réglage isolée (thème, méthode de mise à jour) est faite.
+    SettingsWritten {
+        result: Result<(), String>,
+    },
+    /// Résultat d'une sonde lancée dans un fil (Git, existence d'un fichier).
+    SettingsProbe {
+        field: &'static str,
+        token: u64,
+        state: crate::settingsui::ProbeState,
+    },
+    /// « Parcourir… » de la fenêtre de réglages.
+    SettingsBrowsed {
+        field: &'static str,
+        scope: julie_core::settings::Scope,
+        path: PathBuf,
+    },
+    /// Un fichier à ouvrir dans l'éditeur (fichier de réglages créé au besoin).
+    OpenPath {
+        path: PathBuf,
+        line: Option<u32>,
+    },
+    /// Un dossier ou un fichier supprimé, renommé ou créé : l'arbre se relit.
+    FilesChanged {
+        text: Option<String>,
+        error: bool,
+        refresh: bool,
+        /// Un élément à montrer (déplier et sélectionner) dans l'arbre.
+        reveal: Option<PathBuf>,
+    },
+    /// Résultat de l'envoi à la corbeille.
+    Trashed {
+        paths: Vec<PathBuf>,
+        result: TrashResult,
+    },
+    /// Un renommage simple (hors `git mv`) est fait.
+    Moved {
+        from: PathBuf,
+        to: PathBuf,
+    },
+}
+
+/// Ce que la corbeille a répondu (`julie_core::trash`).
+#[derive(Debug)]
+pub enum TrashResult {
+    Done,
+    /// Corbeille indisponible : rien n'a été supprimé définitivement.
+    Unavailable(Vec<PathBuf>),
+    Failed {
+        text: String,
+        remaining: Vec<PathBuf>,
     },
 }
 
@@ -104,10 +160,11 @@ impl ProjectState {
 
 /// Ouvre le dossier dans un fil : vérifie que c'est un dossier et lit les
 /// réglages (accès disque).
-pub fn spawn_open(path: PathBuf, channel: Channel) {
+pub fn spawn_open(path: PathBuf, user_file: Option<PathBuf>, channel: Channel) {
     std::thread::spawn(move || match Project::open(&path) {
         Ok(project) => {
-            let settings = Settings::load(Some(&project)).map_err(|e| e.to_string());
+            let files = SettingsFiles::new(user_file, Some(project.clone()));
+            let settings = files.load().map_err(|e| e.to_string());
             channel.send(Msg::ProjectReady { project, settings });
         }
         Err(error) => channel.send(Msg::ProjectFailed {
@@ -132,6 +189,18 @@ pub fn spawn_pick_folder(start: Option<PathBuf>, channel: Channel) {
 /// pas à l'état de la personne qui utilise l'IDE).
 pub fn state_dir_overridden() -> bool {
     std::env::var_os("JULIESTORM_STATE_DIR").is_some()
+}
+
+/// Le fichier de réglages « Tous mes projets » : `%APPDATA%\JulieStorm\settings.toml`,
+/// ou `<JULIESTORM_STATE_DIR>\settings.toml` pour les essais. En mode scénario sans
+/// redirection, **aucun** fichier utilisateur (un essai ne lit ni n'écrit les vrais
+/// réglages de la machine).
+pub fn user_settings_file(scenario: bool) -> Option<PathBuf> {
+    match std::env::var_os("JULIESTORM_STATE_DIR") {
+        Some(dir) => Some(PathBuf::from(dir).join("settings.toml")),
+        None if scenario => None,
+        None => julie_core::settings::user_settings_path(),
+    }
 }
 
 fn state_file() -> Option<PathBuf> {
@@ -242,8 +311,8 @@ pub fn spawn_safety_copy(root: PathBuf, files: Vec<PathBuf>, then: AfterCopy, ch
 pub fn spawn_restore_copy(root: PathBuf, id: String, channel: Channel) {
     std::thread::spawn(move || {
         let (text, error) = match safety::restore(&root, &id) {
-            Ok(n) => (crate::texts_v1::restored_files(n), false),
-            Err(e) => (crate::texts_v1::restore_failed(&e), true),
+            Ok(n) => (crate::texts::restored_files(n), false),
+            Err(e) => (crate::texts::restore_failed(&e), true),
         };
         channel.send(Msg::Notice { text, error });
     });

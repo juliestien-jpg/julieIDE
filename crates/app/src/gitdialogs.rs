@@ -16,7 +16,6 @@ use julie_vcs::{
 
 use crate::kit;
 use crate::texts as t;
-use crate::texts_v1 as tv;
 use crate::theme::Palette;
 
 /// Un bouton du pied de dialogue.
@@ -174,6 +173,8 @@ pub struct Discard {
     /// Fichiers ajoutés : retirés de l'index, ils restent sur le disque.
     pub added: usize,
     pub unsaved: Vec<String>,
+    /// « Supprimer aussi les fichiers ajoutés (vers la corbeille) » : décochée par défaut.
+    pub delete_added: bool,
 }
 
 pub struct CheckoutCommit {
@@ -208,7 +209,7 @@ pub enum Dialog {
 }
 
 fn problem_text(problem: &BranchNameProblem) -> String {
-    tv::branch_name_problem(problem)
+    t::branch_name_problem(problem)
 }
 
 impl Dialog {
@@ -233,19 +234,19 @@ impl Dialog {
 
     fn title(&self) -> String {
         match self {
-            Dialog::NewBranch(_) => tv::DLG_NEW_BRANCH.to_owned(),
-            Dialog::Rename(d) => tv::dlg_rename(&d.old),
-            Dialog::SwitchOverwrite(d) => tv::dlg_switch_overwrite(&d.target),
-            Dialog::ForceSwitch(_) => tv::DLG_FORCE_SWITCH.to_owned(),
-            Dialog::UpdateMethod(_) => tv::DLG_UPDATE_METHOD.to_owned(),
-            Dialog::Push(d) => tv::dlg_push(&d.branch),
-            Dialog::PushRejected(_) => tv::DLG_PUSH_REJECTED.to_owned(),
-            Dialog::DeleteBranch(d) => tv::dlg_delete_branch(&d.name),
-            Dialog::DeleteUnmerged(d) => tv::dlg_delete_unmerged(&d.name),
-            Dialog::DeleteRemote(d) => tv::dlg_delete_remote(&d.remote, &d.branch),
-            Dialog::Reset(d) => tv::dlg_reset(&d.branch, &d.short),
-            Dialog::Discard(d) => tv::dlg_discard(d.items.len()),
-            Dialog::CheckoutCommit(d) => tv::dlg_checkout_commit(&d.short),
+            Dialog::NewBranch(_) => t::DLG_NEW_BRANCH.to_owned(),
+            Dialog::Rename(d) => t::dlg_rename(&d.old),
+            Dialog::SwitchOverwrite(d) => t::dlg_switch_overwrite(&d.target),
+            Dialog::ForceSwitch(_) => t::DLG_FORCE_SWITCH.to_owned(),
+            Dialog::UpdateMethod(_) => t::DLG_UPDATE_METHOD.to_owned(),
+            Dialog::Push(d) => t::dlg_push(&d.branch),
+            Dialog::PushRejected(_) => t::DLG_PUSH_REJECTED.to_owned(),
+            Dialog::DeleteBranch(d) => t::dlg_delete_branch(&d.name),
+            Dialog::DeleteUnmerged(d) => t::dlg_delete_unmerged(&d.name),
+            Dialog::DeleteRemote(d) => t::dlg_delete_remote(&d.remote, &d.branch),
+            Dialog::Reset(d) => t::dlg_reset(&d.branch, &d.short),
+            Dialog::Discard(d) => t::dlg_discard(d.items.len()),
+            Dialog::CheckoutCommit(d) => t::dlg_checkout_commit(&d.short),
             Dialog::Message(d) => d.title.clone(),
         }
     }
@@ -266,9 +267,9 @@ impl Dialog {
                     && d.problem.is_none()
                     && d.checked.as_deref() == Some(d.name.as_str());
                 vec![
-                    Btn::new("create", tv::BTN_CREATE)
+                    Btn::new("create", t::BTN_CREATE)
                         .primary()
-                        .when(valid, tv::TIP_NAME_NOT_VALID),
+                        .when(valid, t::TIP_NAME_NOT_VALID),
                     cancel,
                 ]
             }
@@ -278,51 +279,51 @@ impl Dialog {
                     && d.problem.is_none()
                     && d.checked.as_deref() == Some(d.name.as_str());
                 vec![
-                    Btn::new("rename", tv::BTN_RENAME)
+                    Btn::new("rename", t::BTN_RENAME)
                         .primary()
-                        .when(valid, tv::TIP_NAME_NOT_VALID),
+                        .when(valid, t::TIP_NAME_NOT_VALID),
                     cancel,
                 ]
             }
             Dialog::SwitchOverwrite(d) => {
-                let mut buttons = vec![Btn::new("stash", tv::BTN_STASH_AND_SWITCH).primary()];
+                let mut buttons = vec![Btn::new("stash", t::BTN_STASH_AND_SWITCH).primary()];
                 if d.can_force {
-                    buttons.push(Btn::new("force", tv::BTN_FORCE_SWITCH).danger());
+                    buttons.push(Btn::new("force", t::BTN_FORCE_SWITCH).danger());
                 }
                 buttons.push(cancel);
                 buttons
             }
             Dialog::ForceSwitch(_) => vec![
                 cancel.primary(),
-                Btn::new("force_confirm", tv::BTN_FORCE_AND_DISCARD).danger(),
+                Btn::new("force_confirm", t::BTN_FORCE_AND_DISCARD).danger(),
             ],
             Dialog::UpdateMethod(_) => vec![
-                Btn::new("merge", tv::BTN_METHOD_MERGE).primary(),
-                Btn::new("rebase", tv::BTN_METHOD_REBASE),
+                Btn::new("merge", t::BTN_METHOD_MERGE).primary(),
+                Btn::new("rebase", t::BTN_METHOD_REBASE),
                 cancel,
             ],
             Dialog::Push(d) => {
                 if d.confirm_force {
                     return vec![
-                        Btn::new("force_confirm", tv::BTN_FORCE_LEASE).danger(),
-                        Btn::new("back", tv::BTN_BACK).primary(),
+                        Btn::new("force_confirm", t::BTN_FORCE_LEASE).danger(),
+                        Btn::new("back", t::BTN_BACK).primary(),
                     ];
                 }
                 let nothing = d.preview.as_ref().is_none_or(|p| p.outgoing.is_empty());
                 let protected = d.preview.as_ref().is_some_and(|p| p.protected);
                 vec![
-                    Btn::new("push", tv::BTN_PUSH).primary().when(
+                    Btn::new("push", t::BTN_PUSH).primary().when(
                         d.preview.is_some() && !nothing,
                         if d.preview.is_some() {
-                            tv::TIP_NOTHING_TO_PUSH
+                            t::TIP_NOTHING_TO_PUSH
                         } else {
                             ""
                         },
                     ),
-                    Btn::new("force", tv::BTN_FORCE_LEASE_ASK).when(
+                    Btn::new("force", t::BTN_FORCE_LEASE_ASK).when(
                         d.preview.is_some() && !protected,
                         if protected {
-                            tv::TIP_PROTECTED_BRANCH
+                            t::TIP_PROTECTED_BRANCH
                         } else {
                             ""
                         },
@@ -331,26 +332,26 @@ impl Dialog {
                 ]
             }
             Dialog::PushRejected(_) => vec![
-                Btn::new("merge_push", tv::BTN_MERGE_THEN_PUSH).primary(),
-                Btn::new("rebase_push", tv::BTN_REBASE_THEN_PUSH),
+                Btn::new("merge_push", t::BTN_MERGE_THEN_PUSH).primary(),
+                Btn::new("rebase_push", t::BTN_REBASE_THEN_PUSH),
                 cancel,
             ],
-            Dialog::DeleteBranch(_) => vec![Btn::new("delete", tv::BTN_DELETE).primary(), cancel],
+            Dialog::DeleteBranch(_) => vec![Btn::new("delete", t::BTN_DELETE).primary(), cancel],
             Dialog::DeleteUnmerged(_) => vec![
                 cancel.primary(),
-                Btn::new("force_delete", tv::BTN_DELETE_ANYWAY).danger(),
+                Btn::new("force_delete", t::BTN_DELETE_ANYWAY).danger(),
             ],
             Dialog::DeleteRemote(_) => vec![
                 cancel.primary(),
-                Btn::new("delete_remote", tv::BTN_DELETE_REMOTE).danger(),
+                Btn::new("delete_remote", t::BTN_DELETE_REMOTE).danger(),
             ],
             Dialog::Reset(d) => {
                 let hard = d.mode == ResetUiMode::Hard;
                 let ready = d.preview.is_some();
                 let label = if hard && !d.confirm_hard && has_local(d) {
-                    tv::BTN_CONTINUE
+                    t::BTN_CONTINUE
                 } else {
-                    tv::BTN_RESET
+                    t::BTN_RESET
                 };
                 let mut button = Btn::new("reset", label).when(ready, "");
                 if hard {
@@ -360,9 +361,9 @@ impl Dialog {
                 }
                 vec![button, cancel]
             }
-            Dialog::Discard(_) => vec![Btn::new("discard", tv::BTN_DISCARD).primary(), cancel],
+            Dialog::Discard(_) => vec![Btn::new("discard", t::BTN_DISCARD).primary(), cancel],
             Dialog::CheckoutCommit(_) => {
-                vec![Btn::new("checkout", tv::BTN_CHECKOUT).primary(), cancel]
+                vec![Btn::new("checkout", t::BTN_CHECKOUT).primary(), cancel]
             }
             Dialog::Message(d) => {
                 let mut buttons: Vec<Btn> = d
@@ -409,6 +410,7 @@ impl Dialog {
                 d.selected = value.parse::<usize>().map_err(|_| "numéro attendu")?
             }
             (Dialog::DeleteBranch(d), "also_remote") => d.also_remote = flag()?,
+            (Dialog::Discard(d), "delete_added") => d.delete_added = flag()?,
             (Dialog::Reset(d), "stash_first") => d.stash_first = flag()?,
             (Dialog::Reset(d), "mode") => {
                 d.mode = match value {
@@ -488,6 +490,7 @@ impl Dialog {
                 "local_changes": d.preview.as_ref().map(|p| p.local_changes.iter().map(|f| f.display().to_string()).collect::<Vec<_>>()),
             }),
             Dialog::Discard(d) => serde_json::json!({
+                "delete_added": d.delete_added,
                 "items": d.items.iter().map(|(n, w)| format!("{n} : {w}")).collect::<Vec<_>>(),
                 "unsaved": d.unsaved,
             }),
@@ -563,11 +566,11 @@ impl Dialog {
         let dim = |s: String| RichText::new(s).color(p.text_dim);
         match self {
             Dialog::NewBranch(d) => {
-                ui.label(dim(tv::LABEL_BRANCH_NAME.to_owned()));
+                ui.label(dim(t::LABEL_BRANCH_NAME.to_owned()));
                 let edit = ui.add(
                     TextEdit::singleline(&mut d.name)
                         .desired_width(f32::INFINITY)
-                        .hint_text(tv::HINT_BRANCH_NAME)
+                        .hint_text(t::HINT_BRANCH_NAME)
                         .id_salt("nouvelle-branche-nom"),
                 );
                 if !edit.has_focus() && ui.memory(|m| m.focused().is_none()) {
@@ -575,12 +578,12 @@ impl Dialog {
                 }
                 name_feedback(ui, p, &d.problem, answer);
                 ui.add_space(6.0);
-                ui.label(dim(tv::dlg_start_from(&d.start_label)));
+                ui.label(dim(t::dlg_start_from(&d.start_label)));
                 ui.add_space(4.0);
-                ui.checkbox(&mut d.switch, tv::CHECK_SWITCH_TO_NEW);
+                ui.checkbox(&mut d.switch, t::CHECK_SWITCH_TO_NEW);
             }
             Dialog::Rename(d) => {
-                ui.label(dim(tv::LABEL_NEW_NAME.to_owned()));
+                ui.label(dim(t::LABEL_NEW_NAME.to_owned()));
                 let edit = ui.add(
                     TextEdit::singleline(&mut d.name)
                         .desired_width(f32::INFINITY)
@@ -592,66 +595,64 @@ impl Dialog {
                 name_feedback(ui, p, &d.problem, answer);
                 if let Some(upstream) = &d.upstream {
                     ui.add_space(6.0);
-                    ui.label(dim(tv::rename_upstream_note(upstream)));
+                    ui.label(dim(t::rename_upstream_note(upstream)));
                 }
             }
             Dialog::SwitchOverwrite(d) => {
-                ui.label(dim(tv::SWITCH_OVERWRITE_INTRO.to_owned()));
+                ui.label(dim(t::SWITCH_OVERWRITE_INTRO.to_owned()));
                 ui.add_space(4.0);
                 file_list(ui, p, &d.files);
                 ui.add_space(6.0);
-                ui.label(dim(tv::SWITCH_OVERWRITE_STASH_NOTE.to_owned()));
+                ui.label(dim(t::SWITCH_OVERWRITE_STASH_NOTE.to_owned()));
             }
             Dialog::ForceSwitch(d) => {
-                ui.label(RichText::new(tv::FORCE_SWITCH_WARNING).color(p.error));
+                ui.label(RichText::new(t::FORCE_SWITCH_WARNING).color(p.error));
                 ui.add_space(4.0);
                 file_list(ui, p, &d.files);
                 ui.add_space(6.0);
-                ui.label(dim(tv::FORCE_SWITCH_SAFETY.to_owned()));
+                ui.label(dim(t::FORCE_SWITCH_SAFETY.to_owned()));
             }
             Dialog::UpdateMethod(d) => {
-                ui.label(dim(tv::update_method_intro(
+                ui.label(dim(t::update_method_intro(
                     &d.branch,
                     d.upstream.as_deref(),
                 )));
                 ui.add_space(6.0);
-                ui.label(dim(tv::UPDATE_METHOD_MERGE_HELP.to_owned()));
-                ui.label(dim(tv::UPDATE_METHOD_REBASE_HELP.to_owned()));
+                ui.label(dim(t::UPDATE_METHOD_MERGE_HELP.to_owned()));
+                ui.label(dim(t::UPDATE_METHOD_REBASE_HELP.to_owned()));
                 ui.add_space(6.0);
-                ui.checkbox(&mut d.remember, tv::CHECK_REMEMBER_METHOD);
+                ui.checkbox(&mut d.remember, t::CHECK_REMEMBER_METHOD);
                 ui.label(
-                    RichText::new(tv::REMEMBER_SESSION_ONLY)
+                    RichText::new(t::SETTINGS_REMEMBER_NOTE)
                         .small()
                         .color(p.text_dim),
                 );
             }
             Dialog::Push(d) => push_body(ui, p, d),
             Dialog::PushRejected(d) => {
-                ui.label(dim(tv::push_rejected_text(d.known_behind)));
+                ui.label(dim(t::push_rejected_text(d.known_behind)));
             }
             Dialog::DeleteBranch(d) => {
-                ui.label(dim(tv::DELETE_BRANCH_HELP.to_owned()));
+                ui.label(dim(t::DELETE_BRANCH_HELP.to_owned()));
                 if let Some(upstream) = &d.upstream {
                     ui.add_space(6.0);
-                    ui.checkbox(&mut d.also_remote, tv::check_delete_remote_too(upstream));
+                    ui.checkbox(&mut d.also_remote, t::check_delete_remote_too(upstream));
                 }
             }
             Dialog::DeleteUnmerged(d) => {
-                ui.label(RichText::new(tv::delete_unmerged_text(d.commits)).color(p.error));
+                ui.label(RichText::new(t::delete_unmerged_text(d.commits)).color(p.error));
                 ui.add_space(4.0);
                 for subject in &d.subjects {
                     ui.label(RichText::new(format!("•  {subject}")).color(p.text));
                 }
                 if d.commits as usize > d.subjects.len() {
-                    ui.label(dim(tv::and_n_more(d.commits as usize - d.subjects.len())));
+                    ui.label(dim(t::and_n_more(d.commits as usize - d.subjects.len())));
                 }
                 ui.add_space(6.0);
-                ui.label(dim(tv::delete_unmerged_restore(&d.tip)));
+                ui.label(dim(t::delete_unmerged_restore(&d.tip)));
             }
             Dialog::DeleteRemote(d) => {
-                ui.label(
-                    RichText::new(tv::delete_remote_text(&d.remote, &d.branch)).color(p.error),
-                );
+                ui.label(RichText::new(t::delete_remote_text(&d.remote, &d.branch)).color(p.error));
             }
             Dialog::Reset(d) => reset_body(ui, p, d),
             Dialog::Discard(d) => {
@@ -659,21 +660,22 @@ impl Dialog {
                     ui.label(RichText::new(format!("{name}  —  {what}")).color(p.text));
                 }
                 if d.items.len() > 10 {
-                    ui.label(dim(tv::and_n_more(d.items.len() - 10)));
+                    ui.label(dim(t::and_n_more(d.items.len() - 10)));
                 }
                 for name in &d.unsaved {
                     ui.add_space(2.0);
-                    ui.label(RichText::new(tv::discard_unsaved(name)).color(p.warn));
+                    ui.label(RichText::new(t::discard_unsaved(name)).color(p.warn));
                 }
                 if d.added > 0 {
                     ui.add_space(6.0);
-                    ui.label(dim(tv::discard_added_note(d.added)));
+                    ui.label(dim(t::discard_added_note(d.added)));
+                    ui.checkbox(&mut d.delete_added, t::CHECK_DISCARD_DELETE_ADDED);
                 }
                 ui.add_space(6.0);
-                ui.label(dim(tv::DISCARD_SAFETY.to_owned()));
+                ui.label(dim(t::DISCARD_SAFETY.to_owned()));
             }
             Dialog::CheckoutCommit(d) => {
-                ui.label(dim(tv::checkout_commit_text(&d.short, &d.subject)));
+                ui.label(dim(t::checkout_commit_text(&d.short, &d.subject)));
             }
             Dialog::Message(d) => {
                 let color = if d.error { p.text } else { p.text_dim };
@@ -713,7 +715,7 @@ fn name_feedback(
     ui.add_space(3.0);
     ui.label(RichText::new(problem_text(problem)).color(p.error));
     if let Some(suggestion) = suggestion(&Some(problem.clone())) {
-        if ui.small_button(tv::use_suggestion(&suggestion)).clicked() {
+        if ui.small_button(t::use_suggestion(&suggestion)).clicked() {
             *answer = Some("use_suggestion");
         }
     }
@@ -724,7 +726,7 @@ fn file_list(ui: &mut Ui, p: &Palette, files: &[PathBuf]) {
         ui.label(RichText::new(format!("•  {}", file.display())).color(p.text));
     }
     if files.len() > 10 {
-        ui.label(RichText::new(tv::and_n_more(files.len() - 10)).color(p.text_dim));
+        ui.label(RichText::new(t::and_n_more(files.len() - 10)).color(p.text_dim));
     }
 }
 
@@ -751,7 +753,7 @@ fn push_body(ui: &mut Ui, p: &Palette, d: &mut Push) {
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    tv::PILL_NEW,
+                    t::PILL_NEW,
                     egui::FontId::proportional(12.0),
                     egui::Color32::WHITE,
                 );
@@ -764,28 +766,28 @@ fn push_body(ui: &mut Ui, p: &Palette, d: &mut Push) {
         return;
     };
     if d.confirm_force {
-        ui.label(RichText::new(tv::push_force_text(preview.remote_only)).color(p.error));
+        ui.label(RichText::new(t::push_force_text(preview.remote_only)).color(p.error));
         ui.add_space(4.0);
-        ui.label(RichText::new(tv::PUSH_FORCE_LEASE_HELP).color(p.text_dim));
+        ui.label(RichText::new(t::PUSH_FORCE_LEASE_HELP).color(p.text_dim));
         return;
     }
     if preview.protected {
         ui.label(
-            RichText::new(tv::PUSH_PROTECTED_NOTE)
+            RichText::new(t::PUSH_PROTECTED_NOTE)
                 .small()
                 .color(p.text_dim),
         );
     }
     if preview.sets_upstream {
         ui.label(
-            RichText::new(tv::PUSH_SETS_UPSTREAM)
+            RichText::new(t::PUSH_SETS_UPSTREAM)
                 .small()
                 .color(p.text_dim),
         );
     }
     ui.add_space(4.0);
     ui.label(
-        RichText::new(tv::push_outgoing_title(preview.outgoing.len()))
+        RichText::new(t::push_outgoing_title(preview.outgoing.len()))
             .strong()
             .color(p.text),
     );
@@ -795,14 +797,14 @@ fn push_body(ui: &mut Ui, p: &Palette, d: &mut Push) {
         .auto_shrink([false, true])
         .show(ui, |ui| {
             if preview.outgoing.is_empty() {
-                ui.label(RichText::new(tv::PUSH_NOTHING).color(p.text_dim));
+                ui.label(RichText::new(t::PUSH_NOTHING).color(p.text_dim));
             }
             for (i, c) in preview.outgoing.iter().enumerate() {
                 commit_row(ui, p, c, d.selected == i);
             }
         });
     ui.add_space(4.0);
-    ui.checkbox(&mut d.follow_tags, tv::CHECK_FOLLOW_TAGS);
+    ui.checkbox(&mut d.follow_tags, t::CHECK_FOLLOW_TAGS);
 }
 
 fn commit_row(ui: &mut Ui, p: &Palette, c: &CommitSummary, selected: bool) {
@@ -835,12 +837,12 @@ fn commit_row(ui: &mut Ui, p: &Palette, c: &CommitSummary, selected: bool) {
 }
 
 fn reset_body(ui: &mut Ui, p: &Palette, d: &mut Reset) {
-    ui.label(RichText::new(tv::reset_target(&d.short, &d.subject)).color(p.text_dim));
+    ui.label(RichText::new(t::reset_target(&d.short, &d.subject)).color(p.text_dim));
     ui.add_space(6.0);
     for (mode, label, help) in [
-        (ResetUiMode::Soft, tv::RESET_SOFT, tv::RESET_SOFT_HELP),
-        (ResetUiMode::Mixed, tv::RESET_MIXED, tv::RESET_MIXED_HELP),
-        (ResetUiMode::Hard, tv::RESET_HARD, tv::RESET_HARD_HELP),
+        (ResetUiMode::Soft, t::RESET_SOFT, t::RESET_SOFT_HELP),
+        (ResetUiMode::Mixed, t::RESET_MIXED, t::RESET_MIXED_HELP),
+        (ResetUiMode::Hard, t::RESET_HARD, t::RESET_HARD_HELP),
     ] {
         let response = ui.radio_value(&mut d.mode, mode, label);
         if response.changed() {
@@ -854,24 +856,24 @@ fn reset_body(ui: &mut Ui, p: &Palette, d: &mut Reset) {
         return;
     };
     ui.label(
-        RichText::new(tv::reset_leaving(
+        RichText::new(t::reset_leaving(
             preview.commits_leaving,
             preview.unreachable,
         ))
         .color(p.text),
     );
     if preview.pushed {
-        ui.label(RichText::new(tv::RESET_PUSHED_NOTE).color(p.warn));
+        ui.label(RichText::new(t::RESET_PUSHED_NOTE).color(p.warn));
     }
     if d.mode == ResetUiMode::Hard && !preview.local_changes.is_empty() {
         ui.add_space(4.0);
         if d.confirm_hard {
-            ui.label(RichText::new(tv::RESET_HARD_CONFIRM).color(p.error));
+            ui.label(RichText::new(t::RESET_HARD_CONFIRM).color(p.error));
         }
         for f in preview.local_changes.iter().take(10) {
             ui.label(RichText::new(format!("•  {}", f.display())).color(p.text));
         }
-        ui.checkbox(&mut d.stash_first, tv::CHECK_STASH_FIRST);
+        ui.checkbox(&mut d.stash_first, t::CHECK_STASH_FIRST);
     }
 }
 

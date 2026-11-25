@@ -52,6 +52,8 @@ pub struct TerminalView {
     dragging: bool,
     wheel_remainder: f32,
     focus_requested: bool,
+    /// Clic droit de cette image (le menu est celui de l'IDE).
+    menu_pos: Option<Pos2>,
 }
 
 impl TerminalView {
@@ -68,6 +70,7 @@ impl TerminalView {
             dragging: false,
             wheel_remainder: 0.0,
             focus_requested: false,
+            menu_pos: None,
         }
     }
 
@@ -153,7 +156,14 @@ impl TerminalView {
         // ----- Souris ------------------------------------------------------
         let mut intents = Vec::new();
         self.handle_pointer(ui, &response, session, &metrics, &mut intents);
-        self.context_menu(&response, session);
+        // Le clic droit ouvre le menu de l'IDE (voir `TerminalPanel::menu_request`).
+        if response.secondary_clicked() {
+            self.menu_pos = Some(
+                response
+                    .interact_pointer_pos()
+                    .unwrap_or_else(|| response.rect.center()),
+            );
+        }
 
         // ----- Molette -----------------------------------------------------
         if ui.rect_contains_pointer(rect) {
@@ -315,28 +325,27 @@ impl TerminalView {
         session.extend_selection(self.point_at(pointer, metrics));
     }
 
-    fn context_menu(&mut self, response: &Response, session: &Session) {
-        response.context_menu(|ui| {
-            let has_selection = session.has_selection();
-            if ui
-                .add_enabled(has_selection, egui::Button::new(texts::COPY))
-                .clicked()
-            {
-                if let Some(text) = session.selection_text() {
-                    ui.ctx().copy_text(text);
-                }
-                ui.close();
-            }
-            if ui.button(texts::PASTE).clicked() {
-                ui.memory_mut(|m| m.request_focus(self.id));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                ui.close();
-            }
-            if ui.button(texts::CLEAR).clicked() {
-                session.clear_history();
-                ui.close();
-            }
+    /// Où le clic droit a eu lieu à cette image (une seule fois).
+    pub fn take_menu_pos(&mut self) -> Option<egui::Pos2> {
+        self.menu_pos.take()
+    }
+
+    /// Sélectionne tout l'écran affiché (l'historique n'est pas sélectionné).
+    pub fn select_all(&self, session: &Session) {
+        let lines = self.screen.lines.max(1);
+        let columns = self.screen.columns.max(1);
+        session.start_selection(
+            ScreenPoint {
+                line: 0,
+                column: 0,
+                right_half: false,
+            },
+            SelectionKind::Simple,
+        );
+        session.extend_selection(ScreenPoint {
+            line: lines - 1,
+            column: columns - 1,
+            right_half: true,
         });
     }
 

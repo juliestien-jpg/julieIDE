@@ -15,7 +15,7 @@ use julie_vcs::{branch_tree, Branch, BranchList, BranchNode};
 
 use crate::actions::ActionId;
 use crate::icons::{self, Icon};
-use crate::texts_v1 as tv;
+use crate::texts as t;
 use crate::theme::Palette;
 
 /// Une branche désignée (locale ou distante).
@@ -266,7 +266,7 @@ pub fn build_rows(list: &BranchList, query: &str, collapsed: &HashSet<String>) -
     let mut rows = Vec::new();
     let query = query.trim();
     if query.is_empty() {
-        rows.push(Row::Header(tv::HDR_ACTIONS.to_owned()));
+        rows.push(Row::Header(t::HDR_ACTIONS.to_owned()));
         for id in [
             ActionId::UpdateProject,
             ActionId::GitCommit,
@@ -276,7 +276,7 @@ pub fn build_rows(list: &BranchList, query: &str, collapsed: &HashSet<String>) -
             rows.push(Row::Action(id));
         }
         if !list.recent.is_empty() {
-            rows.push(Row::Header(tv::HDR_RECENT.to_owned()));
+            rows.push(Row::Header(t::HDR_RECENT.to_owned()));
             for name in &list.recent {
                 if let Some(b) = list.find_local(name) {
                     rows.push(branch_row(b, b.name.clone(), 0, Vec::new()));
@@ -289,7 +289,7 @@ pub fn build_rows(list: &BranchList, query: &str, collapsed: &HashSet<String>) -
     local.sort_by_key(|b| (!is_favorite(&b.name), b.name.to_lowercase()));
     let remotes: Vec<&Branch> = list.remote.iter().collect();
     if query.is_empty() {
-        rows.push(Row::Header(tv::HDR_LOCAL.to_owned()));
+        rows.push(Row::Header(t::HDR_LOCAL.to_owned()));
         let names: Vec<&str> = local.iter().map(|b| b.name.as_str()).collect();
         push_tree(
             &mut rows,
@@ -300,7 +300,7 @@ pub fn build_rows(list: &BranchList, query: &str, collapsed: &HashSet<String>) -
             collapsed,
         );
         if !remotes.is_empty() {
-            rows.push(Row::Header(tv::HDR_REMOTE.to_owned()));
+            rows.push(Row::Header(t::HDR_REMOTE.to_owned()));
         }
         for remote in &list.remotes {
             let of: Vec<&Branch> = remotes
@@ -343,11 +343,11 @@ pub fn build_rows(list: &BranchList, query: &str, collapsed: &HashSet<String>) -
         let local_rows = matching(&local);
         let remote_rows = matching(&remotes);
         if !local_rows.is_empty() {
-            rows.push(Row::Header(tv::HDR_LOCAL.to_owned()));
+            rows.push(Row::Header(t::HDR_LOCAL.to_owned()));
             rows.extend(local_rows);
         }
         if !remote_rows.is_empty() {
-            rows.push(Row::Header(tv::HDR_REMOTE.to_owned()));
+            rows.push(Row::Header(t::HDR_REMOTE.to_owned()));
             rows.extend(remote_rows);
         }
     }
@@ -563,7 +563,7 @@ impl BranchPopup {
                         ui.horizontal(|ui| {
                             let edit = ui.add(
                                 TextEdit::singleline(&mut self.query)
-                                    .hint_text(tv::BRANCH_SEARCH_HINT)
+                                    .hint_text(t::BRANCH_SEARCH_HINT)
                                     .desired_width(width - 40.0)
                                     .margin(vec2(8.0, 6.0))
                                     .id_salt("branches-recherche"),
@@ -580,7 +580,7 @@ impl BranchPopup {
                                 Id::unique("branches-fetch"),
                                 Icon::Refresh,
                                 p,
-                                tv::TIP_FETCH,
+                                t::TIP_FETCH,
                                 true,
                             );
                         });
@@ -593,9 +593,7 @@ impl BranchPopup {
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 if self.rows.is_empty() {
-                                    ui.label(
-                                        RichText::new(tv::BRANCH_NONE_FOUND).color(p.text_dim),
-                                    );
+                                    ui.label(RichText::new(t::BRANCH_NONE_FOUND).color(p.text_dim));
                                 }
                                 let scroll = std::mem::take(&mut self.scroll_to_selected);
                                 for (i, row) in self.rows.iter().enumerate() {
@@ -827,7 +825,7 @@ fn draw_row(
                 let r = ui.painter().text(
                     pos2(right, rect.center().y),
                     Align2::RIGHT_CENTER,
-                    tv::UPSTREAM_GONE_MARK,
+                    t::UPSTREAM_GONE_MARK,
                     FontId::proportional(12.0),
                     p.warn,
                 );

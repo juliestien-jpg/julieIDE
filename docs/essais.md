@@ -373,6 +373,33 @@ Les couleurs des blocs et des connecteurs viennent du thème de l'éditeur
 s'estompe. Les mises en couleur syntaxique arrivent d'un fil à part : mettre un `wait 300`
 avant une capture où elles comptent.
 
+### Réglages, menus contextuels restants, multi-sélection (v1 bis)
+
+- **Redirection des réglages** : `JULIESTORM_STATE_DIR=<dossier jetable>` redirige aussi
+  `settings.toml` (« Tous mes projets ») vers `<dossier>\settings.toml`. **Sans** cette variable,
+  le mode scénario n'a **aucun** fichier utilisateur (ni lecture ni écriture de `%APPDATA%`) :
+  la portée « Tous mes projets » est alors indisponible dans la fenêtre.
+- `click <x> <y> [ctrl|shift]` et `rclick <x> <y> [ctrl|shift]` : clic avec modificateur.
+- Réglages (`ui settings.*`) : `settings.open [phpunit|git|terminal|search|appearance]`,
+  `settings.page <p>`, `settings.scope user|project`, `settings.filter <texte>`,
+  `settings.set <section.clé> <valeur>` (portée affichée ; `
+` = saut de ligne),
+  `settings.unset <section.clé>`, `settings.env NOM=valeur` / `settings.env -NOM`,
+  `settings.apply`, `settings.ok`, `settings.cancel`, `settings.open-file`. L'état JSON a une clé
+  `settings` (`dialog` : page, portée, champs avec sondes, `command`, `blocking`, `message` ;
+  `files`, `problems`, `effective`).
+- Menus : `menu.open` accepte aussi `editor`, `test <libellé>`, `hit <n>`, `terminal [tab]` ;
+  `tree a,b` et `git.multi a,b` font une sélection multiple. Fenêtres de l'arbre (nouveau,
+  renommer, supprimer, suppression définitive) : `dialog.set name <nom>`,
+  `dialog.choose create|rename|trash|forever|cancel` ; état `fs_dialog`. Case de l'annulation :
+  `dialog.set delete_added on`.
+
+| Scénario | Décor | Ce qu'il joue |
+|---|---|---|
+| `reglages-backoffice.txt` | `backoffice-copie.sh` | Ctrl+Alt+S : commande et versions détectées, Échap sans rien écrire |
+| `reglages-ecrire.txt` | `backoffice-copie.sh` | arguments et variable écrits, guillemet non fermé refusé, retour à l'héritage, thème clair écrit |
+| `menus-clics-droits.txt` | `phpunit-copy.sh` + `git init` + un non suivi `nouveau.txt` | menus de l'éditeur, de l'arbre (lancer les tests), des tests, du terminal, suppression vers la corbeille |
+
 ## Ce que le mode scénario ne couvre pas
 
 - Le **sélecteur de dossiers du système** (`file.open_folder`) : fenêtre native, hors

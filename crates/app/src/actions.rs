@@ -10,7 +10,6 @@
 use eframe::egui::{Key, KeyboardShortcut, Modifiers};
 
 use crate::texts as t;
-use crate::texts_v1 as t1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionId {
@@ -38,6 +37,7 @@ pub enum ActionId {
     TestsRun,
     TestsStop,
     TestsRerun,
+    Settings,
     // ----- v1 : Git global ----------------------------------------------------
     UpdateProject,
     Push,
@@ -64,6 +64,34 @@ pub enum ActionId {
     TabCloseOthers,
     TabCloseAll,
     TabCloseUnmodified,
+    // ----- v1 bis : éditeur, arbre, tests, recherche, terminal ---------------------
+    EditCut,
+    EditCopy,
+    EditPaste,
+    EditSelectAll,
+    GotoDeclaration,
+    FindUsages,
+    RunTestsHere,
+    TreeNewFile,
+    TreeNewFolder,
+    TreeRename,
+    TreeDelete,
+    TestRunNode,
+    TestRerunFailed,
+    TestGoto,
+    TestCopyName,
+    TestCompare,
+    HitOpen,
+    HitCopyLine,
+    HitExclude,
+    TermCopy,
+    TermPaste,
+    TermSelectAll,
+    TermClear,
+    TermRename,
+    TermClose,
+    TermNewCmd,
+    TermNewGitBash,
     // ----- v1 : journal ---------------------------------------------------------
     LogNewBranch,
     LogCheckout,
@@ -107,6 +135,16 @@ pub struct Action {
     pub shortcut: Option<KeyboardShortcut>,
     /// Reste à l'IDE quand le terminal a le focus (le reste va au shell).
     pub in_terminal: bool,
+    /// Raccourci **affiché** seulement : la touche est traitée par la zone elle-même
+    /// (éditeur, arbre, terminal), pas par la distribution globale des raccourcis.
+    pub shown: Option<&'static str>,
+}
+
+impl Action {
+    fn shown(mut self, text: &'static str) -> Self {
+        self.shown = Some(text);
+        self
+    }
 }
 
 pub struct Registry {
@@ -131,6 +169,7 @@ impl Registry {
             menu,
             shortcut,
             in_terminal,
+            shown: None,
         };
         use ActionId::*;
         let mut actions = vec![
@@ -274,6 +313,14 @@ impl Registry {
                 false,
             ),
             a(
+                Settings,
+                "file.settings",
+                t::ACTION_SETTINGS,
+                Some(Menu::File),
+                sc(CTRL_ALT, Key::S),
+                true,
+            ),
+            a(
                 ToggleCommit,
                 "view.commit",
                 t::ACTION_TOGGLE_COMMIT,
@@ -339,185 +386,250 @@ impl Registry {
             git(
                 UpdateProject,
                 "vcs.update",
-                t1::ACTION_UPDATE_PROJECT,
+                t::ACTION_UPDATE_PROJECT,
                 sc(CTRL, Key::T),
             ),
-            git(Push, "vcs.push", t1::ACTION_PUSH, sc(CTRL_SHIFT, Key::K)),
-            git(NewBranch, "vcs.new_branch", t1::ACTION_NEW_BRANCH, None),
+            git(Push, "vcs.push", t::ACTION_PUSH, sc(CTRL_SHIFT, Key::K)),
+            git(NewBranch, "vcs.new_branch", t::ACTION_NEW_BRANCH, None),
             // Ctrl+Maj+` : réflexe PhpStorm (peu commode en AZERTY : le widget de la barre
             // du haut reste cliquable ; le remplacement n'est pas encore tranché).
             git(
                 BranchesPopup,
                 "vcs.branches",
-                t1::ACTION_BRANCHES,
+                t::ACTION_BRANCHES,
                 sc(CTRL_SHIFT, Key::Backtick),
             ),
-            git(Fetch, "vcs.fetch", t1::ACTION_FETCH, None),
+            git(Fetch, "vcs.fetch", t::ACTION_FETCH, None),
             // La touche Menu reste à l'IDE, même dans le terminal.
             a(
                 ContextMenuKey,
                 "ui.context_menu",
-                t1::ACTION_CONTEXT_MENU,
+                t::ACTION_CONTEXT_MENU,
                 None,
                 sc(Modifiers::NONE, Key::Menu),
                 true,
             ),
-            ctx(GitAdd, "vcs.add", t1::ACTION_GIT_ADD, sc(CTRL_ALT, Key::A)),
-            ctx(GitUnstage, "vcs.unstage", t1::ACTION_GIT_UNSTAGE, None),
+            ctx(GitAdd, "vcs.add", t::ACTION_GIT_ADD, sc(CTRL_ALT, Key::A)),
+            ctx(GitUnstage, "vcs.unstage", t::ACTION_GIT_UNSTAGE, None),
             ctx(
                 GitDiscard,
                 "vcs.discard",
-                t1::ACTION_GIT_DISCARD,
+                t::ACTION_GIT_DISCARD,
                 sc(CTRL_ALT, Key::Z),
             ),
-            ctx(GitShowDiff, "vcs.show_diff", t1::ACTION_GIT_SHOW_DIFF, None),
+            ctx(GitShowDiff, "vcs.show_diff", t::ACTION_GIT_SHOW_DIFF, None),
             ctx(
                 GitFileHistory,
                 "vcs.file_history",
-                t1::ACTION_GIT_FILE_HISTORY,
+                t::ACTION_GIT_FILE_HISTORY,
                 None,
             ),
-            ctx(IgnoreFile, "vcs.ignore_file", t1::ACTION_IGNORE_FILE, None),
+            ctx(IgnoreFile, "vcs.ignore_file", t::ACTION_IGNORE_FILE, None),
             ctx(
                 IgnoreFolder,
                 "vcs.ignore_folder",
-                t1::ACTION_IGNORE_FOLDER,
+                t::ACTION_IGNORE_FOLDER,
                 None,
             ),
             ctx(
                 IgnoreExtension,
                 "vcs.ignore_extension",
-                t1::ACTION_IGNORE_EXTENSION,
+                t::ACTION_IGNORE_EXTENSION,
                 None,
             ),
-            ctx(OpenEntry, "file.open", t1::ACTION_OPEN_ENTRY, None),
+            ctx(OpenEntry, "file.open", t::ACTION_OPEN_ENTRY, None),
             ctx(
                 CopyPath,
                 "file.copy_path",
-                t1::ACTION_COPY_PATH,
+                t::ACTION_COPY_PATH,
                 sc(CTRL_SHIFT, Key::C),
             ),
             ctx(
                 CopyRelativePath,
                 "file.copy_relative_path",
-                t1::ACTION_COPY_RELATIVE_PATH,
+                t::ACTION_COPY_RELATIVE_PATH,
                 None,
             ),
-            ctx(CopyName, "file.copy_name", t1::ACTION_COPY_NAME, None),
-            ctx(RevealInExplorer, "file.reveal", t1::ACTION_REVEAL, None),
+            ctx(CopyName, "file.copy_name", t::ACTION_COPY_NAME, None),
+            ctx(RevealInExplorer, "file.reveal", t::ACTION_REVEAL, None),
             ctx(
                 OpenTerminalHere,
                 "terminal.open_here",
-                t1::ACTION_TERMINAL_HERE,
+                t::ACTION_TERMINAL_HERE,
                 None,
             ),
             ctx(
                 FindInFolder,
                 "nav.find_in_folder",
-                t1::ACTION_FIND_IN_FOLDER,
+                t::ACTION_FIND_IN_FOLDER,
                 None,
             ),
             ctx(
                 TabCloseOthers,
                 "tab.close_others",
-                t1::ACTION_TAB_CLOSE_OTHERS,
+                t::ACTION_TAB_CLOSE_OTHERS,
                 None,
             ),
-            ctx(TabCloseAll, "tab.close_all", t1::ACTION_TAB_CLOSE_ALL, None),
+            ctx(TabCloseAll, "tab.close_all", t::ACTION_TAB_CLOSE_ALL, None),
             ctx(
                 TabCloseUnmodified,
                 "tab.close_unmodified",
-                t1::ACTION_TAB_CLOSE_UNMODIFIED,
+                t::ACTION_TAB_CLOSE_UNMODIFIED,
                 None,
             ),
             ctx(
                 LogNewBranch,
                 "log.new_branch",
-                t1::ACTION_LOG_NEW_BRANCH,
+                t::ACTION_LOG_NEW_BRANCH,
                 None,
             ),
-            ctx(LogCheckout, "log.checkout", t1::ACTION_LOG_CHECKOUT, None),
+            ctx(LogCheckout, "log.checkout", t::ACTION_LOG_CHECKOUT, None),
             ctx(
                 LogCherryPick,
                 "log.cherry_pick",
-                t1::ACTION_LOG_CHERRY_PICK,
+                t::ACTION_LOG_CHERRY_PICK,
                 None,
             ),
-            ctx(LogRevert, "log.revert", t1::ACTION_LOG_REVERT, None),
-            ctx(LogReset, "log.reset", t1::ACTION_LOG_RESET, None),
-            ctx(CopyHash, "log.copy_hash", t1::ACTION_COPY_HASH, None),
+            ctx(LogRevert, "log.revert", t::ACTION_LOG_REVERT, None),
+            ctx(LogReset, "log.reset", t::ACTION_LOG_RESET, None),
+            ctx(CopyHash, "log.copy_hash", t::ACTION_COPY_HASH, None),
             ctx(
                 CopyShortHash,
                 "log.copy_short_hash",
-                t1::ACTION_COPY_SHORT_HASH,
+                t::ACTION_COPY_SHORT_HASH,
                 None,
             ),
             ctx(
                 CopyMessage,
                 "log.copy_message",
-                t1::ACTION_COPY_MESSAGE,
+                t::ACTION_COPY_MESSAGE,
                 None,
             ),
             ctx(
                 BranchCheckout,
                 "branch.checkout",
-                t1::ACTION_BRANCH_CHECKOUT,
+                t::ACTION_BRANCH_CHECKOUT,
                 None,
             ),
             ctx(
                 BranchNewFrom,
                 "branch.new_from",
-                t1::ACTION_BRANCH_NEW_FROM,
+                t::ACTION_BRANCH_NEW_FROM,
                 None,
             ),
             ctx(
                 BranchCheckoutRebase,
                 "branch.checkout_rebase",
-                t1::ACTION_BRANCH_CHECKOUT_REBASE,
+                t::ACTION_BRANCH_CHECKOUT_REBASE,
                 None,
             ),
             ctx(
                 BranchCompare,
                 "branch.compare",
-                t1::ACTION_BRANCH_COMPARE,
+                t::ACTION_BRANCH_COMPARE,
                 None,
             ),
             ctx(
                 BranchRebaseOnto,
                 "branch.rebase_onto",
-                t1::ACTION_BRANCH_REBASE_ONTO,
+                t::ACTION_BRANCH_REBASE_ONTO,
                 None,
             ),
-            ctx(BranchMerge, "branch.merge", t1::ACTION_BRANCH_MERGE, None),
-            ctx(
-                BranchUpdate,
-                "branch.update",
-                t1::ACTION_BRANCH_UPDATE,
-                None,
-            ),
+            ctx(BranchMerge, "branch.merge", t::ACTION_BRANCH_MERGE, None),
+            ctx(BranchUpdate, "branch.update", t::ACTION_BRANCH_UPDATE, None),
             ctx(
                 BranchPullMerge,
                 "branch.pull_merge",
-                t1::ACTION_BRANCH_PULL_MERGE,
+                t::ACTION_BRANCH_PULL_MERGE,
                 None,
             ),
             ctx(
                 BranchPullRebase,
                 "branch.pull_rebase",
-                t1::ACTION_BRANCH_PULL_REBASE,
+                t::ACTION_BRANCH_PULL_REBASE,
                 None,
             ),
-            ctx(BranchPush, "branch.push", t1::ACTION_BRANCH_PUSH, None),
+            ctx(BranchPush, "branch.push", t::ACTION_BRANCH_PUSH, None),
+            ctx(BranchRename, "branch.rename", t::ACTION_BRANCH_RENAME, None),
+            ctx(BranchDelete, "branch.delete", t::ACTION_BRANCH_DELETE, None),
+        ]);
+        // ----- v1 bis : menus de l'éditeur, de l'arbre, des tests, de la recherche, du terminal.
+        // Les raccourcis sont seulement affichés (voir `Action::shown`) : la zone les traite.
+        actions.extend([
+            ctx(EditCut, "edit.cut", t::ACTION_EDIT_CUT, None).shown("Ctrl+X"),
+            ctx(EditCopy, "edit.copy", t::ACTION_EDIT_COPY, None).shown("Ctrl+C"),
+            ctx(EditPaste, "edit.paste", t::ACTION_EDIT_PASTE, None).shown("Ctrl+V"),
             ctx(
-                BranchRename,
-                "branch.rename",
-                t1::ACTION_BRANCH_RENAME,
+                EditSelectAll,
+                "edit.select_all",
+                t::ACTION_EDIT_SELECT_ALL,
+                None,
+            )
+            .shown("Ctrl+A"),
+            ctx(
+                GotoDeclaration,
+                "nav.declaration",
+                t::ACTION_GOTO_DECLARATION,
+                None,
+            )
+            .shown("Ctrl+B"),
+            ctx(FindUsages, "nav.usages", t::ACTION_FIND_USAGES, None).shown("Alt+F7"),
+            ctx(
+                RunTestsHere,
+                "tests.run_here",
+                t::ACTION_RUN_TESTS_HERE,
                 None,
             ),
+            ctx(TreeNewFile, "tree.new_file", t::ACTION_TREE_NEW_FILE, None).shown("Alt+Inser"),
             ctx(
-                BranchDelete,
-                "branch.delete",
-                t1::ACTION_BRANCH_DELETE,
+                TreeNewFolder,
+                "tree.new_folder",
+                t::ACTION_TREE_NEW_FOLDER,
+                None,
+            ),
+            ctx(TreeRename, "tree.rename", t::ACTION_TREE_RENAME, None).shown("Maj+F6"),
+            ctx(TreeDelete, "tree.delete", t::ACTION_TREE_DELETE, None).shown("Suppr"),
+            ctx(TestRunNode, "tests.run_node", t::ACTION_TEST_RUN_NODE, None),
+            ctx(
+                TestRerunFailed,
+                "tests.rerun_failed",
+                t::ACTION_TEST_RERUN_FAILED,
+                None,
+            ),
+            ctx(TestGoto, "tests.goto", t::ACTION_TEST_GOTO, None).shown("F4"),
+            ctx(
+                TestCopyName,
+                "tests.copy_name",
+                t::ACTION_TEST_COPY_NAME,
+                None,
+            )
+            .shown("Ctrl+C"),
+            ctx(TestCompare, "tests.compare", t::ACTION_TEST_COMPARE, None),
+            ctx(HitOpen, "search.open", t::ACTION_HIT_OPEN, None).shown("Entrée"),
+            ctx(
+                HitCopyLine,
+                "search.copy_line",
+                t::ACTION_HIT_COPY_LINE,
+                None,
+            )
+            .shown("Ctrl+C"),
+            ctx(HitExclude, "search.exclude", t::ACTION_HIT_EXCLUDE, None),
+            ctx(TermCopy, "terminal.copy", t::ACTION_TERM_COPY, None).shown("Ctrl+Maj+C"),
+            ctx(TermPaste, "terminal.paste", t::ACTION_TERM_PASTE, None).shown("Ctrl+Maj+V"),
+            ctx(
+                TermSelectAll,
+                "terminal.select_all",
+                t::ACTION_TERM_SELECT_ALL,
+                None,
+            ),
+            ctx(TermClear, "terminal.clear", t::ACTION_TERM_CLEAR, None),
+            ctx(TermRename, "terminal.rename", t::ACTION_TERM_RENAME, None),
+            ctx(TermClose, "terminal.close", t::ACTION_TERM_CLOSE, None).shown("Ctrl+F4"),
+            ctx(TermNewCmd, "terminal.new_cmd", t::ACTION_TERM_NEW_CMD, None),
+            ctx(
+                TermNewGitBash,
+                "terminal.new_git_bash",
+                t::ACTION_TERM_NEW_BASH,
                 None,
             ),
         ]);
@@ -541,7 +653,11 @@ impl Registry {
 
     /// « Ctrl+Maj+N » : le raccourci tel qu'on l'écrit dans les menus.
     pub fn shortcut_text(&self, id: ActionId) -> Option<String> {
-        self.get(id).shortcut.as_ref().map(format_shortcut)
+        let action = self.get(id);
+        action
+            .shown
+            .map(str::to_owned)
+            .or_else(|| action.shortcut.as_ref().map(format_shortcut))
     }
 
     /// Change le raccourci d'une action. Refus (et rien ne change) si un autre

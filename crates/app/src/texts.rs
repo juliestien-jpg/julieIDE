@@ -10,7 +10,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use julie_phpunit::{Counts, Problem, RunOutcome, RunSummary, TestState};
-use julie_vcs::{ConflictKind, ConflictSide, FileKind, Head, OperationKind, Upstream};
+use julie_vcs::{
+    BranchNameProblem, ConflictKind, ConflictSide, FileKind, Head, OperationKind, ProgressPhase,
+    PushedKind, RemoteProgress, Upstream,
+};
 
 pub const APP_NAME: &str = "JulieStorm";
 
@@ -870,7 +873,10 @@ pub fn problem_text(problem: &Problem) -> String {
         Problem::PhpNotRunnable { path, reason } => {
             format!("PHP ne s'exécute pas ({}) : {reason}", path.display())
         }
-        Problem::PhpUnitNotFound { .. } => "PHPUnit introuvable dans vendor/bin".to_owned(),
+        Problem::PhpUnitNotFound { searched } => format!(
+            "PHPUnit introuvable. Indiquez son script dans Réglages, page PHPUnit (cherché : {})",
+            list(searched)
+        ),
         Problem::PhpUnitPathInvalid(path) => {
             format!("Le chemin de PHPUnit réglé n'existe pas : {}", path.display())
         }
@@ -883,6 +889,1034 @@ pub fn problem_text(problem: &Problem) -> String {
         ),
     }
 }
+
+// ===== Lot v1 : branches, distant, opérations Git, menus contextuels, réglages =====
+// (anciennement texts_v1.rs ; relecture à faire par `redacteur`)
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n > 1 { many } else { one })
+}
+
+/// `3 fichiers modifiés` / `1 fichier modifié` : le participe suit le nombre.
+fn counted(n: usize, one: &str, many: &str, participle: &str) -> String {
+    if n > 1 {
+        format!("{n} {many} {participle}s")
+    } else {
+        format!("{n} {one} {participle}")
+    }
+}
+
+fn operation_noun(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Merge => "la fusion",
+        OperationKind::Rebase => "le rebase",
+        OperationKind::CherryPick => "le cherry-pick",
+        OperationKind::Revert => "le revert",
+    }
+}
+
+// ----- Actions du registre ----------------------------------------------------------
+pub const ACTION_UPDATE_PROJECT: &str = "Mettre à jour le projet…";
+pub const ACTION_PUSH: &str = "Pousser…";
+pub const ACTION_NEW_BRANCH: &str = "Nouvelle branche…";
+pub const ACTION_BRANCHES: &str = "Branches…";
+pub const ACTION_FETCH: &str = "Récupérer (fetch)";
+pub const ACTION_CONTEXT_MENU: &str = "Ouvrir le menu contextuel";
+pub const ACTION_GIT_ADD: &str = "Ajouter à Git";
+pub const ACTION_GIT_UNSTAGE: &str = "Retirer de l'index";
+pub const ACTION_GIT_DISCARD: &str = "Annuler les modifications…";
+pub const ACTION_GIT_SHOW_DIFF: &str = "Voir le diff";
+pub const ACTION_GIT_FILE_HISTORY: &str = "Historique du fichier";
+pub const ACTION_IGNORE_FILE: &str = "Ajouter ce fichier au .gitignore";
+pub const ACTION_IGNORE_FOLDER: &str = "Ajouter ce dossier au .gitignore";
+pub const ACTION_IGNORE_EXTENSION: &str =
+    "Ajouter tous les fichiers de cette extension au .gitignore";
+pub const ACTION_OPEN_ENTRY: &str = "Ouvrir";
+pub const ACTION_COPY_PATH: &str = "Chemin absolu";
+pub const ACTION_COPY_RELATIVE_PATH: &str = "Chemin relatif au projet";
+pub const ACTION_COPY_NAME: &str = "Nom du fichier";
+pub const ACTION_REVEAL: &str = "Ouvrir dans l'Explorateur";
+pub const ACTION_TERMINAL_HERE: &str = "Ouvrir un terminal ici";
+pub const ACTION_FIND_IN_FOLDER: &str = "Rechercher dans ce dossier…";
+pub const ACTION_TAB_CLOSE_OTHERS: &str = "Fermer les autres onglets";
+pub const ACTION_TAB_CLOSE_ALL: &str = "Fermer tous les onglets";
+pub const ACTION_TAB_CLOSE_UNMODIFIED: &str = "Fermer les onglets non modifiés";
+pub const ACTION_LOG_NEW_BRANCH: &str = "Nouvelle branche ici…";
+pub const ACTION_LOG_CHECKOUT: &str = "Basculer sur ce commit";
+pub const ACTION_LOG_CHERRY_PICK: &str = "Cherry-pick";
+pub const ACTION_LOG_REVERT: &str = "Annuler par un commit inverse (revert)";
+pub const ACTION_LOG_RESET: &str = "Réinitialiser la branche ici…";
+pub const ACTION_COPY_HASH: &str = "Copier le hash complet";
+pub const ACTION_COPY_SHORT_HASH: &str = "Copier le hash court";
+pub const ACTION_COPY_MESSAGE: &str = "Copier le message";
+pub const ACTION_BRANCH_CHECKOUT: &str = "Basculer";
+pub const ACTION_BRANCH_NEW_FROM: &str = "Nouvelle branche depuis celle-ci…";
+pub const ACTION_BRANCH_CHECKOUT_REBASE: &str = "Basculer et rebaser sur la courante";
+pub const ACTION_BRANCH_COMPARE: &str = "Comparer avec la courante";
+pub const ACTION_BRANCH_REBASE_ONTO: &str = "Rebaser la courante sur celle-ci";
+pub const ACTION_BRANCH_MERGE: &str = "Fusionner dans la courante";
+pub const ACTION_BRANCH_UPDATE: &str = "Mettre à jour";
+pub const ACTION_BRANCH_PULL_MERGE: &str = "Tirer dans la courante par fusion";
+pub const ACTION_BRANCH_PULL_REBASE: &str = "Tirer dans la courante par rebase";
+pub const ACTION_BRANCH_PUSH: &str = "Pousser…";
+pub const ACTION_BRANCH_RENAME: &str = "Renommer…";
+pub const ACTION_BRANCH_DELETE: &str = "Supprimer…";
+
+pub const MENU_COPY_PATH: &str = "Copier le chemin";
+pub const MENU_IGNORE: &str = "Ajouter à .gitignore";
+pub const LABEL_OPEN_FILE: &str = "Ouvrir le fichier";
+pub const LABEL_CLOSE_TAB: &str = "Fermer";
+
+pub fn label_checkout_rebase(current: &str) -> String {
+    format!("Basculer et rebaser sur {current}")
+}
+pub fn label_compare(current: &str) -> String {
+    format!("Comparer avec {current}")
+}
+pub fn label_rebase_onto(current: &str, onto: &str) -> String {
+    format!("Rebaser {current} sur {onto}")
+}
+pub fn label_merge_into(branch: &str, current: &str) -> String {
+    format!("Fusionner {branch} dans {current}")
+}
+pub fn label_pull_merge(current: &str) -> String {
+    format!("Tirer dans {current} par fusion")
+}
+pub fn label_pull_rebase(current: &str) -> String {
+    format!("Tirer dans {current} par rebase")
+}
+pub fn label_new_from(branch: &str) -> String {
+    format!("Nouvelle branche depuis {branch}…")
+}
+pub fn label_ignore_ext(ext: &str) -> String {
+    format!("Ajouter tous les *.{ext} au .gitignore")
+}
+
+// ----- Raisons des entrées grisées (infobulles) ----------------------------------------
+pub const REASON_NOT_IN_REPO: &str = "Ce dossier n'est pas dans un dépôt Git.";
+pub const REASON_GIT_LOADING: &str = "L'état Git est en cours de lecture.";
+pub const REASON_NOTHING_TO_ADD: &str =
+    "Rien à ajouter : aucun fichier non suivi ni modifié non indexé.";
+pub const REASON_NOTHING_STAGED: &str = "Rien d'indexé dans la sélection.";
+pub const REASON_NOTHING_TO_DISCARD: &str = "Aucun changement à annuler.";
+pub const REASON_RESOLVE_CONFLICT: &str = "Résolvez d'abord le conflit.";
+pub const REASON_ONE_FILE: &str = "Choisissez un seul fichier.";
+pub const REASON_NO_CHANGE: &str = "Ce fichier n'a pas de changement.";
+pub const REASON_UNTRACKED: &str = "Ce fichier n'est pas suivi par Git.";
+pub const REASON_NO_COMMIT: &str = "Le dépôt n'a pas encore de commit.";
+pub const REASON_ALREADY_TRACKED: &str = "Git suit déjà ce fichier : l'ignorer ne le retire pas.";
+pub const REASON_ONE_TAB: &str = "Il n'y a qu'un onglet.";
+pub const REASON_NO_UNMODIFIED_TAB: &str = "Tous les onglets sont modifiés.";
+pub const REASON_FOLDER: &str = "Un dossier ne s'ouvre pas dans l'éditeur.";
+pub const REASON_DELETED: &str = "Ce fichier est supprimé du disque.";
+pub const REASON_MERGE_COMMIT: &str = "Commit de fusion : non pris en charge.";
+pub const REASON_OPERATION: &str = "Terminez ou abandonnez l'opération en cours.";
+pub const REASON_DETACHED: &str = "HEAD est détachée : pas de branche courante.";
+pub const REASON_NO_UPSTREAM: &str = "Cette branche n'a pas de branche distante associée.";
+pub const REASON_CURRENT_BRANCH: &str = "C'est la branche courante.";
+pub const REASON_PROTECTED: &str = "Branche protégée.";
+
+// ----- Widget et fenêtre surgissante des branches -----------------------------------------
+pub const WIDGET_NO_REPO: &str = "Pas de dépôt Git";
+
+pub fn widget_detached(short: &str) -> String {
+    format!("HEAD détachée ({short})")
+}
+
+pub fn widget_operation(kind: OperationKind, step: Option<(u32, u32)>) -> String {
+    let name = match kind {
+        OperationKind::Merge => "Fusion",
+        OperationKind::Rebase => "Rebase",
+        OperationKind::CherryPick => "Cherry-pick",
+        OperationKind::Revert => "Revert",
+    };
+    match step {
+        Some((n, total)) => format!("{name} en cours ({n}/{total})"),
+        None => format!("{name} en cours"),
+    }
+}
+
+pub const BRANCH_SEARCH_HINT: &str = "Rechercher une branche…";
+pub const BRANCH_NONE_FOUND: &str = "Aucune branche ne correspond.";
+pub const HDR_ACTIONS: &str = "Actions";
+pub const HDR_RECENT: &str = "Récentes";
+pub const HDR_LOCAL: &str = "Locales";
+pub const HDR_REMOTE: &str = "Distantes";
+pub const TIP_FETCH: &str = "Récupérer : git fetch --all --prune";
+pub const UPSTREAM_GONE_MARK: &str = "amont supprimé";
+pub const TREE_ALL: &str = "Toutes les branches";
+
+// ----- Dialogues : titres, boutons, textes ------------------------------------------------
+pub const DLG_NEW_BRANCH: &str = "Nouvelle branche";
+pub const DLG_FORCE_SWITCH: &str = "Forcer la bascule ?";
+pub const DLG_UPDATE_METHOD: &str = "Mettre à jour le projet";
+pub const DLG_PUSH_REJECTED: &str = "Le distant a des commits que vous n'avez pas";
+
+pub fn dlg_rename(old: &str) -> String {
+    format!("Renommer la branche {old}")
+}
+pub fn dlg_switch_overwrite(target: &str) -> String {
+    format!("Des changements locaux gênent la bascule vers {target}")
+}
+pub fn dlg_push(branch: &str) -> String {
+    format!("Pousser {branch}")
+}
+pub fn dlg_delete_branch(name: &str) -> String {
+    format!("Supprimer la branche {name} ?")
+}
+pub fn dlg_delete_unmerged(name: &str) -> String {
+    format!("{name} n'est pas fusionnée")
+}
+pub fn dlg_delete_remote(remote: &str, branch: &str) -> String {
+    format!("Supprimer {remote}/{branch} sur le distant ?")
+}
+pub fn dlg_reset(branch: &str, short: &str) -> String {
+    format!("Réinitialiser {branch} sur {short}")
+}
+pub fn dlg_discard(n: usize) -> String {
+    format!(
+        "Annuler les modifications de {} ?",
+        plural(n, "fichier", "fichiers")
+    )
+}
+pub fn dlg_checkout_commit(short: &str) -> String {
+    format!("Basculer sur le commit {short} ?")
+}
+pub fn dlg_start_from(label: &str) -> String {
+    format!("Depuis : {label}")
+}
+
+pub const BTN_CREATE: &str = "Créer";
+pub const BTN_RENAME: &str = "Renommer";
+pub const BTN_STASH_AND_SWITCH: &str = "Mettre de côté et basculer";
+pub const BTN_FORCE_SWITCH: &str = "Forcer la bascule…";
+pub const BTN_FORCE_AND_DISCARD: &str = "Forcer et jeter mes changements";
+pub const BTN_METHOD_MERGE: &str = "Fusion";
+pub const BTN_METHOD_REBASE: &str = "Rebase";
+pub const BTN_PUSH: &str = "Pousser";
+pub const BTN_FORCE_LEASE_ASK: &str = "Forcer avec bail…";
+pub const BTN_FORCE_LEASE: &str = "Forcer avec bail";
+pub const BTN_BACK: &str = "Retour";
+pub const BTN_MERGE_THEN_PUSH: &str = "Fusionner puis pousser";
+pub const BTN_REBASE_THEN_PUSH: &str = "Rebaser puis pousser";
+pub const BTN_DELETE: &str = "Supprimer";
+pub const BTN_DELETE_ANYWAY: &str = "Supprimer quand même";
+pub const BTN_DELETE_REMOTE: &str = "Supprimer sur le distant";
+pub const BTN_CONTINUE: &str = "Continuer…";
+pub const BTN_RESET: &str = "Réinitialiser";
+pub const BTN_DISCARD: &str = "Annuler les modifications";
+pub const BTN_CHECKOUT: &str = "Basculer";
+pub const BTN_OPEN_TERMINAL: &str = "Ouvrir le terminal";
+pub const BTN_PUSH_TO_CREATE: &str = "Pousser pour la créer…";
+pub const BTN_PUSH_TO_RECREATE: &str = "Pousser pour la recréer…";
+
+pub const TIP_NAME_NOT_VALID: &str = "Le nom de la branche n'est pas valable.";
+pub const TIP_NOTHING_TO_PUSH: &str = "Rien à pousser.";
+pub const TIP_PROTECTED_BRANCH: &str =
+    "Branche protégée : le push forcé est interdit (réglage [vcs] protected_branches).";
+
+pub const LABEL_BRANCH_NAME: &str = "Nom de la branche";
+pub const HINT_BRANCH_NAME: &str = "feature/ma-branche";
+pub const LABEL_NEW_NAME: &str = "Nouveau nom";
+pub const CHECK_SWITCH_TO_NEW: &str = "Basculer sur la nouvelle branche";
+
+pub fn rename_upstream_note(upstream: &str) -> String {
+    format!("La branche distante {upstream} garde son nom : seule la branche locale est renommée.")
+}
+
+pub fn use_suggestion(suggestion: &str) -> String {
+    format!("Utiliser « {suggestion} »")
+}
+
+pub fn branch_name_problem(problem: &BranchNameProblem) -> String {
+    match problem {
+        BranchNameProblem::Empty => "Le nom est vide.".to_owned(),
+        BranchNameProblem::Invalid { .. } => {
+            "Ce nom n'est pas valable pour Git (espaces, « .. », ~ ^ : ? * [ \\, fin en « .lock » ou « / »)."
+                .to_owned()
+        }
+        BranchNameProblem::AlreadyExists(name) => format!("La branche {name} existe déjà."),
+        BranchNameProblem::SameNameDifferentCase(name) => format!(
+            "La branche {name} porte déjà ce nom à la casse près : Windows ne les distingue pas."
+        ),
+        BranchNameProblem::FolderOfExisting(name) => format!(
+            "Ce nom serait le dossier de la branche {name} : Git ne peut pas avoir les deux."
+        ),
+        BranchNameProblem::InsideExisting(name) => format!(
+            "La branche {name} existe : elle ne peut pas aussi servir de dossier."
+        ),
+        BranchNameProblem::FolderCaseMismatch(name) => format!(
+            "Un dossier de branches existe avec une autre casse ({name}) : Windows les confond."
+        ),
+    }
+}
+
+pub const SWITCH_OVERWRITE_INTRO: &str =
+    "Ces fichiers ont des changements locaux que la bascule écraserait :";
+pub const SWITCH_OVERWRITE_STASH_NOTE: &str = "« Mettre de côté et basculer » range vos changements (git stash), bascule, puis les remet. Si la remise entre en conflit, l'entrée reste dans git stash list.";
+pub const FORCE_SWITCH_WARNING: &str =
+    "Les changements locaux de ces fichiers seront jetés : ils ne reviendront pas.";
+pub const FORCE_SWITCH_SAFETY: &str =
+    "Une copie est gardée 7 jours dans .juliestorm/annulations/ avant d'écraser.";
+
+pub fn update_method_intro(branch: &str, upstream: Option<&str>) -> String {
+    match upstream {
+        Some(up) => format!("Comment intégrer les changements de {up} dans {branch} ?"),
+        None => format!("Comment intégrer les changements du distant dans {branch} ?"),
+    }
+}
+pub const UPDATE_METHOD_MERGE_HELP: &str =
+    "Fusion : un commit de fusion réunit les deux histoires.";
+pub const UPDATE_METHOD_REBASE_HELP: &str =
+    "Rebase : vos commits sont rejoués au-dessus de ceux du distant (historique linéaire).";
+pub const CHECK_REMEMBER_METHOD: &str = "Ne plus demander";
+
+pub const PILL_NEW: &str = "nouvelle";
+pub const CHECK_FOLLOW_TAGS: &str = "Pousser aussi les étiquettes";
+pub const PUSH_NOTHING: &str = "Rien à pousser.";
+pub const PUSH_PROTECTED_NOTE: &str = "Branche protégée : le push forcé est interdit.";
+pub const PUSH_SETS_UPSTREAM: &str =
+    "Cette branche n'a pas d'amont : pousser le posera (git push -u).";
+pub const PUSH_FORCE_LEASE_HELP: &str = "« Forcer avec bail » refuse d'écraser si le distant a bougé depuis votre dernière récupération : ce n'est jamais un push forcé nu.";
+pub const PUSH_STALE_TITLE: &str = "Le distant a bougé";
+pub const PUSH_STALE_TEXT: &str = "Le distant a changé depuis votre dernière récupération : rien n'a été écrasé. Récupérez, puis recommencez.";
+pub const PUSH_REFUSED_TITLE: &str = "Push refusé";
+
+pub fn push_outgoing_title(n: usize) -> String {
+    if n == 0 {
+        "Commits sortants".to_owned()
+    } else {
+        format!("Commits sortants ({n})")
+    }
+}
+pub fn push_force_text(remote_only: u32) -> String {
+    match remote_only {
+        0 => "Aucun commit connu du distant ne sera remplacé.".to_owned(),
+        n => format!(
+            "{} du distant seront remplacés par votre branche.",
+            plural(n as usize, "commit", "commits")
+        ),
+    }
+}
+pub fn push_rejected_text(known_behind: u32) -> String {
+    let n = if known_behind > 0 {
+        format!(" ({known_behind})")
+    } else {
+        String::new()
+    };
+    format!(
+        "Le distant a des commits que vous n'avez pas encore{n}. Intégrez-les avant de pousser."
+    )
+}
+
+pub const DELETE_BRANCH_HELP: &str = "Git refusera si la branche porte des commits non fusionnés.";
+
+pub fn check_delete_remote_too(upstream: &str) -> String {
+    format!("Supprimer aussi {upstream} sur le distant")
+}
+pub fn delete_unmerged_text(n: u32) -> String {
+    format!(
+        "{} ne seront plus sur aucune branche :",
+        plural(n as usize, "commit", "commits")
+    )
+}
+pub fn delete_unmerged_restore(tip: &str) -> String {
+    let short: String = tip.chars().take(7).collect();
+    format!("Récupérable : « Restaurer » juste après, ou git branch <nom> {short}.")
+}
+pub fn delete_remote_text(remote: &str, branch: &str) -> String {
+    format!(
+        "{remote}/{branch} sera supprimée sur le distant, pour tout le monde. Cette action ne s'annule pas depuis JulieStorm."
+    )
+}
+pub fn and_n_more(n: usize) -> String {
+    format!("… et {n} autres")
+}
+
+pub const RESET_SOFT: &str = "Garder tout indexé (--soft)";
+pub const RESET_SOFT_HELP: &str =
+    "HEAD recule ; les changements des commits retirés restent indexés.";
+pub const RESET_MIXED: &str = "Garder les changements dans les fichiers (--mixed)";
+pub const RESET_MIXED_HELP: &str =
+    "HEAD recule ; les changements restent dans les fichiers, non indexés.";
+pub const RESET_HARD: &str = "Tout jeter, fichiers compris (--hard)";
+pub const RESET_HARD_HELP: &str =
+    "HEAD recule et les fichiers reviennent à cet état : travail non validé perdu.";
+pub const RESET_PUSHED_NOTE: &str =
+    "Certains de ces commits sont déjà poussés : il faudra forcer le prochain push.";
+pub const RESET_HARD_CONFIRM: &str = "Ces fichiers ont des changements locaux qui seront jetés :";
+pub const CHECK_STASH_FIRST: &str = "Mettre de côté mes changements locaux avant";
+
+pub fn reset_target(short: &str, subject: &str) -> String {
+    format!("Cible : {short} — {subject}")
+}
+pub fn reset_leaving(n: u32, unreachable: u32) -> String {
+    let verb = if n > 1 { "quittent" } else { "quitte" };
+    let commits = plural(n as usize, "commit", "commits");
+    if unreachable == 0 {
+        format!("{commits} {verb} la branche (encore sur d'autres branches).")
+    } else {
+        format!(
+            "{commits} {verb} la branche ; {unreachable} ne seront plus sur aucune branche (récupérables par le reflog de Git pendant 90 jours)."
+        )
+    }
+}
+
+pub const DISCARD_ADDED: &str = "retiré de l'index (le fichier reste sur le disque)";
+pub const DISCARD_RENAMED: &str = "l'ancien chemin revient, le nouveau est retiré de l'index";
+pub const DISCARD_DELETED: &str = "ramené à HEAD (le fichier revient)";
+pub const DISCARD_MODIFIED: &str = "ramené à HEAD";
+pub const DISCARD_SAFETY: &str =
+    "Une copie est gardée 7 jours dans .juliestorm/annulations/ ; « Restaurer » la remet.";
+pub const DISCARD_CONFLICTED: &str = "Un fichier est en conflit : résolvez-le d'abord.";
+
+pub fn discard_unsaved(name: &str) -> String {
+    format!("Les modifications non enregistrées de {name} seront perdues.")
+}
+pub fn discard_added_note(n: usize) -> String {
+    format!(
+        "{} sera retiré de l'index mais restera sur le disque.",
+        plural(n, "fichier", "fichiers")
+    )
+}
+
+pub fn checkout_commit_text(short: &str, subject: &str) -> String {
+    format!(
+        "{short} — {subject}\n\nVous serez en « HEAD détachée » : vos commits ne seront sur aucune branche tant que vous n'en créez pas une."
+    )
+}
+
+pub const CONFIRM_SKIP_DETAIL: &str =
+    "Les changements de ce commit ne seront pas repris dans la branche.";
+pub const BTN_SKIP_COMMIT: &str = "Passer ce commit";
+pub const BTN_CONTINUE_OP: &str = "Continuer";
+pub const BTN_VALIDATE_MERGE: &str = "Valider";
+pub const TIP_CONFLICTS_REMAIN: &str = "Il reste des fichiers en conflit.";
+
+pub fn confirm_skip_title(kind: OperationKind) -> String {
+    format!("Passer le commit en cours de {} ?", operation_noun(kind))
+}
+pub fn confirm_abort_detail(kind: OperationKind) -> String {
+    match kind {
+        OperationKind::Merge => {
+            "Vos résolutions seront perdues ; la branche reviendra à son état d'avant la fusion."
+                .to_owned()
+        }
+        OperationKind::Rebase => {
+            "La branche reviendra à son état d'avant le rebase ; vos résolutions seront perdues."
+                .to_owned()
+        }
+        _ => "Les changements de l'opération seront annulés ; vos résolutions seront perdues."
+            .to_owned(),
+    }
+}
+pub fn operation_abort_label(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Merge => "Abandonner la fusion",
+        OperationKind::Rebase => "Abandonner le rebase",
+        OperationKind::CherryPick => "Abandonner le cherry-pick",
+        OperationKind::Revert => "Abandonner le revert",
+    }
+}
+pub fn operation_resolved_continue(kind: OperationKind) -> String {
+    format!(
+        "Tous les conflits sont résolus : vous pouvez continuer {}.",
+        operation_noun(kind)
+    )
+}
+pub fn rebase_conflicts(step: (u32, u32), conflicts: usize) -> String {
+    format!(
+        "Rebase en cours — commit {} sur {} — {}",
+        step.0,
+        step.1,
+        plural(conflicts, "fichier en conflit", "fichiers en conflit")
+    )
+}
+
+pub const INDEX_STAGED: &str = "indexé";
+pub const INDEX_PARTIAL: &str = "en partie indexé";
+
+// ----- Filtres du journal ---------------------------------------------------------------------
+pub const FILTER_TEXT_HINT: &str = "Texte";
+pub const FILTER_AUTHOR_HINT: &str = "Auteur";
+pub const FILTER_SINCE_HINT: &str = "Depuis AAAA-MM-JJ";
+pub const FILTER_UNTIL_HINT: &str = "Jusqu'au AAAA-MM-JJ";
+pub const TIP_REMOVE_FILTER: &str = "Retirer ce filtre";
+
+pub fn filter_branch(branch: &str) -> String {
+    format!("Branche : {branch}")
+}
+pub fn filter_path(name: &str) -> String {
+    format!("Fichier : {name}")
+}
+
+// ----- Notifications ---------------------------------------------------------------------------
+pub const UP_TO_DATE: &str = "Déjà à jour.";
+pub const WAITING_FOR_GIT: &str = "En attente de l'opération Git en cours…";
+pub const DETACHED_NOT_POSSIBLE: &str = "HEAD est détachée : créez d'abord une branche.";
+pub const IGNORED_PATHS: &str = "Fichier ignoré par .gitignore : Git refuse de l'ajouter.";
+pub const OPERATION_IN_PROGRESS: &str = "Terminez ou abandonnez l'opération en cours.";
+pub const HOOK_FAILED_TITLE: &str = "Un crochet Git a échoué après la bascule";
+pub const GIT_FAILED_TITLE: &str = "Git a refusé l'opération";
+pub const TIP_CANCEL_TASK: &str = "Annuler cette opération";
+
+pub const AUTH_TITLE: &str = "Authentification requise";
+pub const AUTH_TEXT: &str = "Git demande une authentification qu'il ne peut pas obtenir ici. Lancez la commande une fois dans le terminal intégré pour enregistrer vos identifiants : JulieStorm ne demande ni ne garde jamais de mot de passe.";
+pub const NO_UPSTREAM_TITLE: &str = "Pas de branche distante associée";
+pub const UPSTREAM_GONE_TITLE: &str = "La branche distante n'existe plus";
+
+pub fn no_upstream_text(branch: &str) -> String {
+    format!("{branch} n'a pas de branche distante associée. Aucune fusion ni rebase n'a été lancé.")
+}
+pub fn upstream_gone_text(branch: &str, upstream: &str) -> String {
+    format!("La branche distante {upstream} n'existe plus (supprimée sur le distant). {branch} reste intacte.")
+}
+
+pub fn already_on(name: &str) -> String {
+    format!("Vous êtes déjà sur {name}.")
+}
+pub fn already_tracked(path: &str) -> String {
+    format!("Git suit déjà {path} : l'ignorer ne le retire pas.")
+}
+pub fn protected_refused(branch: &str) -> String {
+    format!("{branch} est une branche protégée : action refusée.")
+}
+pub fn branch_created(name: &str, switched: bool) -> String {
+    if switched {
+        format!("Branche {name} créée ; vous êtes dessus.")
+    } else {
+        format!("Branche {name} créée.")
+    }
+}
+pub fn branch_renamed(old: &str, new: &str) -> String {
+    format!("Branche {old} renommée en {new}.")
+}
+pub fn branch_deleted(name: &str) -> String {
+    format!("Branche {name} supprimée.")
+}
+pub fn branch_restored(name: &str) -> String {
+    format!("Branche {name} restaurée.")
+}
+pub fn remote_branch_deleted(remote: &str, branch: &str) -> String {
+    format!("{remote}/{branch} supprimée sur le distant.")
+}
+pub fn fast_forwarded(branch: &str) -> String {
+    format!("{branch} avancée sur son amont.")
+}
+pub fn switched(name: &str, created: bool, followed: bool) -> String {
+    let base = if created {
+        format!("Branche locale {name} créée et basculée")
+    } else {
+        format!("Basculé sur {name}")
+    };
+    if followed {
+        format!("{base} ; vos changements locaux ont suivi.")
+    } else {
+        format!("{base}.")
+    }
+}
+pub fn switched_behind(name: &str, behind: u32) -> String {
+    format!(
+        "Basculé sur {name}, en retard de {} sur son amont : utilisez « Mettre à jour le projet ».",
+        plural(behind as usize, "commit", "commits")
+    )
+}
+pub fn stash_kept(message: &str) -> String {
+    format!("Remise en conflit : l'entrée « {message} » reste dans git stash list.")
+}
+pub fn fetched(updated: usize, pruned: usize, empty: bool) -> String {
+    if empty {
+        return "Rien de nouveau.".to_owned();
+    }
+    let mut parts = Vec::new();
+    if updated > 0 {
+        parts.push(if updated > 1 {
+            format!("{updated} branches mises à jour")
+        } else {
+            "1 branche mise à jour".to_owned()
+        });
+    }
+    if pruned > 0 {
+        parts.push(if pruned > 1 {
+            format!("{pruned} supprimées sur le distant")
+        } else {
+            "1 supprimée sur le distant".to_owned()
+        });
+    }
+    format!("Récupéré : {}.", parts.join(", "))
+}
+pub fn integrated(kind: OperationKind, received: u32, changed: u32, fast_forward: bool) -> String {
+    let what = match kind {
+        OperationKind::Merge => "Fusion terminée",
+        OperationKind::Rebase => "Rebase terminé",
+        OperationKind::CherryPick => "Cherry-pick terminé",
+        OperationKind::Revert => "Revert terminé",
+    };
+    let mut text = what.to_owned();
+    if received > 0 {
+        text.push_str(&format!(
+            " : {}",
+            counted(received as usize, "commit", "commits", "reçu")
+        ));
+    }
+    if changed > 0 {
+        text.push_str(&format!(
+            ", {}",
+            counted(changed as usize, "fichier", "fichiers", "changé")
+        ));
+    }
+    if fast_forward {
+        text.push_str(" (avance rapide)");
+    }
+    text.push('.');
+    text
+}
+pub fn operation_stopped(kind: OperationKind, conflicts: usize) -> String {
+    format!(
+        "{} s'est arrêté{} : {} à résoudre.",
+        match kind {
+            OperationKind::Merge => "La fusion",
+            OperationKind::Rebase => "Le rebase",
+            OperationKind::CherryPick => "Le cherry-pick",
+            OperationKind::Revert => "Le revert",
+        },
+        if kind == OperationKind::Merge {
+            "e"
+        } else {
+            ""
+        },
+        plural(conflicts, "fichier en conflit", "fichiers en conflit")
+    )
+}
+pub fn skipped(finished: bool) -> String {
+    if finished {
+        "Commit passé ; opération terminée.".to_owned()
+    } else {
+        "Commit passé ; un autre conflit à résoudre.".to_owned()
+    }
+}
+pub fn pushed(n: u32, remote: &str, branch: &str, kind: PushedKind) -> String {
+    match kind {
+        PushedKind::UpToDate => format!("Rien à pousser : {remote}/{branch} est à jour."),
+        PushedKind::Forced => format!("{remote}/{branch} remplacée (forcé avec bail)."),
+        _ => format!(
+            "{} vers {remote}/{branch}.",
+            counted(n as usize, "commit", "commits", "poussé")
+        ),
+    }
+}
+pub fn progress_text(progress: &RemoteProgress) -> String {
+    let phase = match &progress.phase {
+        ProgressPhase::Enumerating => "Énumération",
+        ProgressPhase::Counting => "Comptage",
+        ProgressPhase::Compressing => "Compression",
+        ProgressPhase::Receiving => "Réception",
+        ProgressPhase::Resolving => "Résolution",
+        ProgressPhase::Writing => "Envoi",
+        ProgressPhase::Checkout => "Extraction",
+        ProgressPhase::Other(text) => text.as_str(),
+    };
+    match progress.percent {
+        Some(p) => format!("{phase} {p} %"),
+        None => phase.to_owned(),
+    }
+}
+pub fn reset_done(head: &str, stashed: bool) -> String {
+    let short: String = head.chars().take(7).collect();
+    if stashed {
+        format!("Branche réinitialisée sur {short} ; vos changements sont dans git stash.")
+    } else {
+        format!("Branche réinitialisée sur {short}.")
+    }
+}
+pub fn staged(n: usize) -> String {
+    format!("{} à l'index.", counted(n, "fichier", "fichiers", "ajouté"))
+}
+pub fn unstaged(n: usize) -> String {
+    format!(
+        "{} de l'index.",
+        counted(n, "fichier", "fichiers", "retiré")
+    )
+}
+pub fn discarded(restored: usize, unstaged: usize) -> String {
+    match (restored, unstaged) {
+        (r, 0) => format!("{} à HEAD.", counted(r, "fichier", "fichiers", "ramené")),
+        (0, u) => format!(
+            "{} de l'index.",
+            counted(u, "fichier", "fichiers", "retiré")
+        ),
+        (r, u) => format!(
+            "{} à HEAD, {} de l'index.",
+            counted(r, "fichier", "fichiers", "ramené"),
+            counted(u, "fichier", "fichiers", "retiré")
+        ),
+    }
+}
+pub fn ignore_added(line: &str, already: bool) -> String {
+    if already {
+        format!("« {line} » est déjà dans .gitignore.")
+    } else {
+        format!("« {line} » ajouté à .gitignore.")
+    }
+}
+pub fn copied(n: usize) -> String {
+    if n > 1 {
+        format!("{n} chemins copiés.")
+    } else {
+        "Copié.".to_owned()
+    }
+}
+pub fn safety_failed(error: &str) -> String {
+    format!("Copie de sécurité impossible, rien n'a été touché : {error}")
+}
+pub fn restored_files(n: usize) -> String {
+    format!("{}.", counted(n, "fichier", "fichiers", "rétabli"))
+}
+pub fn restore_failed(error: &str) -> String {
+    format!("Rétablissement impossible : {error}")
+}
+pub const BTN_RESTORE: &str = "Restaurer";
+
+// ----- Fermer des onglets ------------------------------------------------------------------------
+pub fn close_many_title(n: usize) -> String {
+    format!("Fermer {} modifié(s) ?", plural(n, "onglet", "onglets"))
+}
+
+pub fn widget_tooltip(
+    branch: &str,
+    upstream: Option<&str>,
+    ahead_behind: Option<(u32, u32)>,
+    fetched_secs: Option<u64>,
+) -> String {
+    let mut text = format!("Branche : {branch}");
+    match (upstream, ahead_behind) {
+        (Some(up), Some((a, b))) => text.push_str(&format!(
+            "
+Amont : {up} (avance {a}, retard {b})"
+        )),
+        (Some(up), None) => text.push_str(&format!(
+            "
+Amont : {up} (supprimé sur le distant)"
+        )),
+        (None, _) => text.push_str(
+            "
+Pas d'amont",
+        ),
+    }
+    text.push_str(&match fetched_secs {
+        None => "
+Dernier fetch : jamais (depuis l'ouverture)"
+            .to_owned(),
+        Some(s) if s < 90 => "
+Dernier fetch : à l'instant"
+            .to_owned(),
+        Some(s) => format!(
+            "
+Dernier fetch : il y a {} min",
+            s / 60
+        ),
+    });
+    text
+}
+
+pub fn operation_done(kind: OperationKind) -> String {
+    match kind {
+        OperationKind::Merge => "Fusion terminée.",
+        OperationKind::Rebase => "Rebase terminé.",
+        OperationKind::CherryPick => "Cherry-pick terminé.",
+        OperationKind::Revert => "Revert terminé.",
+    }
+    .to_owned()
+}
+
+// ===== Lot v1 bis : réglages, menus contextuels de l'éditeur, des tests, de la recherche, du terminal =====
+// (écrit par dev-interface ; relecture à faire par `redacteur`)
+
+// ----- Fenêtre de réglages ------------------------------------------------------------
+pub const ACTION_SETTINGS: &str = "Réglages…";
+pub const SETTINGS_TITLE: &str = "Réglages";
+pub const SETTINGS_FILTER_HINT: &str = "Filtrer les réglages…";
+pub const SETTINGS_NO_MATCH: &str = "Aucun réglage ne correspond.";
+pub const SETTINGS_PAGE_PHPUNIT: &str = "PHPUnit";
+pub const SETTINGS_PAGE_GIT: &str = "Git";
+pub const SETTINGS_PAGE_TERMINAL: &str = "Terminal";
+pub const SETTINGS_PAGE_SEARCH: &str = "Recherche";
+pub const SETTINGS_PAGE_APPEARANCE: &str = "Apparence";
+pub const SETTINGS_SCOPE_PROJECT: &str = "Ce projet";
+pub const SETTINGS_SCOPE_USER: &str = "Tous mes projets";
+pub const SETTINGS_SCOPE_LABEL: &str = "Portée :";
+pub const SETTINGS_SCOPE_USER_ONLY: &str = "Ce réglage vaut pour tous les projets.";
+pub const SETTINGS_NO_USER_FILE: &str =
+    "Pas de dossier de configuration : les réglages de tous les projets sont indisponibles.";
+pub const SETTINGS_NO_PROJECT: &str =
+    "Aucun projet ouvert : seuls les réglages de tous mes projets existent.";
+pub const SETTINGS_OPEN_FILE: &str = "Ouvrir le fichier de réglages";
+pub const SETTINGS_OK: &str = "OK";
+pub const SETTINGS_CANCEL: &str = "Annuler";
+pub const SETTINGS_APPLY: &str = "Appliquer";
+pub const SETTINGS_BROWSE: &str = "Parcourir…";
+pub const SETTINGS_REVERT: &str = "Revenir à la valeur héritée";
+pub const SETTINGS_INHERITED_CHOICE: &str = "Hérité";
+pub const SETTINGS_MODIFIED_MARK: &str = "modifié";
+pub const SETTINGS_ORIGIN_PROJECT: &str = "réglé pour ce projet";
+pub const SETTINGS_ORIGIN_USER: &str = "réglé pour tous mes projets";
+pub const SETTINGS_ORIGIN_DEFAULT: &str = "par défaut";
+pub const SETTINGS_ORIGIN_USER_FROM_PROJECT: &str = "hérité : réglé pour tous mes projets";
+pub const SETTINGS_PROJECT_OVERRIDES: &str = "ce projet utilise sa propre valeur";
+pub const SETTINGS_EXCLUDED_ALWAYS: &str = ".git et .juliestorm sont toujours exclus.";
+pub const SETTINGS_EXCLUDED_RULE: &str =
+    "nom : à toute profondeur ; /nom : à la racine seulement. Un motif par ligne.";
+pub const SETTINGS_LINES_HINT: &str = "Un par ligne.";
+pub const SETTINGS_ARGS_HINT: &str = "Séparés par des espaces ; les guillemets doubles groupent.";
+pub const SETTINGS_ENV_ADD: &str = "Ajouter une variable";
+pub const SETTINGS_ENV_NAME_HINT: &str = "NOM";
+pub const SETTINGS_ENV_VALUE_HINT: &str = "valeur";
+pub const SETTINGS_ENV_REMOVE: &str = "Retirer cette variable";
+pub const SETTINGS_ENV_EMPTY: &str = "Aucune variable réglée à cette portée.";
+pub const SETTINGS_COMMAND_TITLE: &str = "Commande qui sera lancée";
+pub const SETTINGS_PROBE_RUNNING: &str = "Vérification…";
+pub const SETTINGS_BLOCKED_PREFIX: &str = "Impossible d'enregistrer : ";
+pub const SETTINGS_WRITE_FAILED_PREFIX: &str = "Réglages non enregistrés : ";
+pub const SETTINGS_UNREADABLE_OPEN: &str = "Ouvrir le fichier";
+pub const SETTINGS_REMEMBER_SAVED_TOAST: &str =
+    "Choix enregistré : réglage [vcs] update_method de ce projet.";
+pub const SETTINGS_REMEMBER_NOTE: &str =
+    "Enregistré dans les réglages de ce projet ([vcs] update_method).";
+
+pub fn settings_label(key: &str) -> &'static str {
+    match key {
+        "phpunit.php_path" => "Interpréteur PHP",
+        "phpunit.phpunit_path" => "Script PHPUnit",
+        "phpunit.configuration" => "Fichier de configuration",
+        "phpunit.extra_args" => "Arguments supplémentaires",
+        "phpunit.env" => "Variables d'environnement",
+        "vcs.git_path" => "Exécutable Git",
+        "vcs.update_method" => "Méthode de mise à jour du projet",
+        "vcs.protected_branches" => "Branches protégées",
+        "terminal.default_profile" => "Terminal par défaut",
+        "terminal.git_bash_path" => "Git Bash (bash.exe)",
+        "terminal.cmd_path" => "cmd (cmd.exe)",
+        "index.excluded" => "Dossiers et fichiers exclus",
+        "index.libraries" => "Dossiers de bibliothèques",
+        "app.theme" => "Thème",
+        _ => "",
+    }
+}
+
+pub fn settings_choice_label(key: &str, value: &str) -> &'static str {
+    match (key, value) {
+        ("vcs.update_method", "fusion") => "Fusion",
+        ("vcs.update_method", "rebase") => "Rebase",
+        ("terminal.default_profile", "git-bash") => "Git Bash",
+        ("terminal.default_profile", "cmd") => "cmd",
+        ("app.theme", "sombre") => "Sombre",
+        ("app.theme", "clair") => "Clair",
+        _ => "",
+    }
+}
+
+pub fn settings_detected(path: &str) -> String {
+    format!("détection automatique : {path}")
+}
+pub const SETTINGS_NOT_DETECTED: &str = "non détecté";
+pub fn settings_default_path_in_path(name: &str) -> String {
+    format!("par défaut : {name} cherché dans le PATH")
+}
+pub fn settings_arguments_count(n: usize, shown: &str) -> String {
+    match n {
+        0 => "aucun argument".to_owned(),
+        1 => format!("1 argument : {shown}"),
+        n => format!("{n} arguments : {shown}"),
+    }
+}
+
+pub const SETTINGS_ERR_QUOTE: &str = "Guillemet non fermé.";
+pub const SETTINGS_ERR_RELATIVE_USER: &str =
+    "Un chemin relatif n'a pas de sens pour tous les projets : donnez un chemin complet ou un nom d'exécutable seul.";
+pub const SETTINGS_ERR_ENV_NAME: &str = "Nom de variable vide ou contenant « = ».";
+pub const SETTINGS_ERR_ENV_DUP: &str = "Nom de variable en double.";
+pub fn settings_reserved_arg(arg: &str) -> String {
+    format!("L'IDE pose déjà l'option {arg} : elle casse la commande ou la lecture des résultats.")
+}
+pub const SETTINGS_EMPTY_ARG: &str = "Argument vide : PHPUnit le prendrait pour un chemin.";
+
+/// Niveau (0 réussi, 1 avertissement) et texte d'une sonde PHP / PHPUnit / configuration.
+pub fn probe_text(result: &julie_phpunit::ProbeResult) -> (u8, String) {
+    use julie_phpunit::{ProbeFailure, ProbeKind, ProbeSuccess};
+    match result {
+        Ok(ProbeSuccess::Php { version, .. }) => (
+            0,
+            if version.starts_with("PHP") {
+                version.clone()
+            } else {
+                format!("PHP {version}")
+            },
+        ),
+        Ok(ProbeSuccess::PhpUnit { version, .. }) => (0, format!("PHPUnit {}", version.text)),
+        Ok(ProbeSuccess::Configuration { .. }) => (0, "Configuration PHPUnit lisible".to_owned()),
+        Err(ProbeFailure::NotFound(_)) => (1, "Ce chemin n'existe pas".to_owned()),
+        Err(ProbeFailure::IsDirectory(_)) => (1, "C'est un dossier, pas un fichier".to_owned()),
+        Err(ProbeFailure::TimedOut(_)) => (1, "Pas de réponse en 5 s".to_owned()),
+        Err(ProbeFailure::NotThis { kind, first_line }) => {
+            let what = match kind {
+                ProbeKind::Php => "PHP",
+                ProbeKind::PhpUnit => "PHPUnit",
+                ProbeKind::Configuration => "une configuration PHPUnit",
+            };
+            (1, format!("Ce n'est pas {what} : {first_line}"))
+        }
+        Err(ProbeFailure::NotRunnable { reason, .. }) => (1, format!("Ne se lance pas : {reason}")),
+        Err(ProbeFailure::Unreadable { reason, .. }) => (1, format!("Illisible : {reason}")),
+        Err(ProbeFailure::PhpUnavailable) => (
+            1,
+            "PHP est inutilisable : version de PHPUnit non lue".to_owned(),
+        ),
+    }
+}
+pub fn probe_not_git(first_line: &str) -> String {
+    format!("Ce n'est pas Git : {first_line}")
+}
+pub const PROBE_EXISTS: &str = "Fichier trouvé";
+pub const PROBE_NOT_EXISTS: &str = "Ce chemin n'existe pas";
+pub const PROBE_IS_DIR: &str = "C'est un dossier, pas un fichier";
+pub const PROBE_NO_ANSWER: &str = "Pas de réponse en 5 s";
+
+pub fn settings_unreadable(file: &str, line: Option<u32>, message: &str) -> String {
+    match line {
+        Some(line) => format!("Réglages illisibles : {file}, ligne {line} : {message}"),
+        None => format!("Réglages illisibles : {file} : {message}"),
+    }
+}
+pub fn settings_refused(file: &str) -> String {
+    format!("Le fichier {file} est illisible : rien n'a été écrit. Corrigez-le d'abord.")
+}
+
+// ----- Menus contextuels : éditeur, arbre, tests, recherche, terminal ---------------------
+pub const ACTION_EDIT_CUT: &str = "Couper";
+pub const ACTION_EDIT_COPY: &str = "Copier";
+pub const ACTION_EDIT_PASTE: &str = "Coller";
+pub const ACTION_EDIT_SELECT_ALL: &str = "Tout sélectionner";
+pub const ACTION_GOTO_DECLARATION: &str = "Aller à la déclaration";
+pub const ACTION_FIND_USAGES: &str = "Trouver les usages";
+pub const ACTION_RUN_TESTS_HERE: &str = "Lancer les tests";
+pub const LABEL_RUN_TESTS_FILE: &str = "Lancer les tests de ce fichier";
+pub const LABEL_RUN_TESTS_DIR: &str = "Lancer les tests de ce dossier";
+pub const LABEL_RUN_TESTS_CONFIG: &str = "Lancer la suite de cette configuration";
+pub const ACTION_TREE_NEW_FILE: &str = "Fichier…";
+pub const ACTION_TREE_NEW_FOLDER: &str = "Dossier…";
+pub const MENU_NEW: &str = "Nouveau";
+pub const ACTION_TREE_RENAME: &str = "Renommer…";
+pub const ACTION_TREE_DELETE: &str = "Supprimer…";
+pub const ACTION_TEST_RUN_NODE: &str = "Lancer ce test";
+pub const LABEL_RUN_TEST: &str = "Lancer ce test";
+pub const LABEL_RUN_CLASS: &str = "Lancer cette classe";
+pub const LABEL_RUN_SUITE: &str = "Lancer cette suite";
+pub const LABEL_RUN_ALL: &str = "Relancer toute la suite";
+pub const ACTION_TEST_RERUN_FAILED: &str = "Relancer les tests en échec";
+pub const ACTION_TEST_GOTO: &str = "Aller au code source";
+pub const ACTION_TEST_COPY_NAME: &str = "Copier le nom";
+pub const ACTION_TEST_COMPARE: &str = "Comparer attendu et obtenu";
+pub const ACTION_HIT_OPEN: &str = "Ouvrir à l'occurrence";
+pub const ACTION_HIT_COPY_LINE: &str = "Copier la ligne";
+pub const ACTION_HIT_EXCLUDE: &str = "Exclure ce fichier des résultats";
+pub const ACTION_TERM_COPY: &str = "Copier";
+pub const ACTION_TERM_PASTE: &str = "Coller";
+pub const ACTION_TERM_SELECT_ALL: &str = "Tout sélectionner";
+pub const ACTION_TERM_CLEAR: &str = "Effacer (écran et historique)";
+pub const ACTION_TERM_RENAME: &str = "Renommer l'onglet…";
+pub const ACTION_TERM_CLOSE: &str = "Fermer l'onglet";
+pub const MENU_TERM_NEW: &str = "Nouveau terminal";
+pub const ACTION_TERM_NEW_CMD: &str = "cmd";
+pub const ACTION_TERM_NEW_BASH: &str = "Git Bash";
+
+pub const REASON_SOON: &str = "Bientôt : la navigation arrive avec le prochain lot.";
+pub const REASON_READ_ONLY: &str = "Le document est en lecture seule.";
+pub const REASON_NOT_A_TEST: &str =
+    "Ce n'est ni un fichier de test (*Test.php) ni une configuration PHPUnit.";
+pub const REASON_PHPUNIT_MISSING: &str =
+    "PHPUnit introuvable : réglez-le dans Réglages, page PHPUnit.";
+pub const REASON_NO_SOURCE: &str = "Ce nœud n'a pas de fichier source connu.";
+pub const REASON_NO_FAILURE: &str = "Aucun test en échec dans la dernière exécution.";
+pub const REASON_NO_COMPARISON: &str = "PHPUnit n'a pas fourni de comparaison pour ce test.";
+pub const REASON_MULTI: &str = "Impossible sur plusieurs éléments à la fois.";
+pub const REASON_PROJECT_ROOT: &str = "Impossible sur la racine du projet.";
+pub const REASON_NO_TEXT_SELECTED: &str = "Aucun texte sélectionné.";
+pub const REASON_NOT_SAVED: &str = "Ce fichier n'a jamais été enregistré.";
+pub const REASON_NO_TESTS_RUN: &str = "Aucune exécution de tests dans cette session.";
+pub const REASON_NOTHING_TO_DELETE: &str =
+    "Seuls les fichiers non suivis peuvent être supprimés ici.";
+pub const REASON_NO_TERMINAL: &str = "Aucun terminal ouvert.";
+pub const REASON_NO_PROJECT_OPEN: &str = "Aucun projet ouvert.";
+
+pub const DLG_NEW_FILE: &str = "Nouveau fichier";
+pub const DLG_NEW_FOLDER: &str = "Nouveau dossier";
+pub fn dlg_new_in(dir: &str) -> String {
+    format!("Dans : {dir}")
+}
+pub const LABEL_NAME: &str = "Nom";
+pub const HINT_NEW_NAME: &str = "nom.php ou dossier/nom.php";
+pub fn dlg_rename_fs(name: &str) -> String {
+    format!("Renommer « {name} »")
+}
+pub const BTN_RENAME_FS: &str = "Renommer";
+pub fn dlg_delete(n: usize) -> String {
+    if n == 1 {
+        "Supprimer cet élément ?".to_owned()
+    } else {
+        format!("Supprimer ces {n} éléments ?")
+    }
+}
+pub const DELETE_TRASH_NOTE: &str =
+    "Ils iront dans la corbeille de Windows : vous pourrez les restaurer.";
+pub fn delete_folder_files(name: &str, files: usize) -> String {
+    format!("{name}  —  dossier et ses {files} fichiers")
+}
+pub fn delete_unsaved(name: &str) -> String {
+    format!("Les modifications non enregistrées de {name} resteront dans l'onglet (marqué « supprimé du disque »).")
+}
+pub const BTN_DELETE_TRASH: &str = "Mettre à la corbeille";
+pub const DLG_DELETE_FOREVER: &str = "Suppression définitive";
+pub const DELETE_FOREVER_TEXT: &str =
+    "La corbeille n'est pas disponible pour ces éléments : ils seront supprimés définitivement. Cela ne pourra pas être annulé.";
+pub const BTN_DELETE_FOREVER: &str = "Supprimer définitivement";
+pub const NAME_EMPTY: &str = "Le nom est vide.";
+pub const NAME_EXISTS: &str = "Un fichier ou un dossier de ce nom existe déjà.";
+pub fn name_forbidden_char(c: char) -> String {
+    format!("Caractère interdit par Windows : {c}")
+}
+pub const NAME_RESERVED: &str = "Nom réservé par Windows (CON, NUL, COM1…).";
+pub const NAME_TRAILING: &str = "Un nom ne peut pas finir par un point ou par une espace.";
+pub const NAME_SEPARATOR: &str = "Un nouveau nom ne contient pas de séparateur de dossier.";
+pub fn fs_created(name: &str) -> String {
+    format!("Créé : {name}")
+}
+pub fn fs_renamed(old: &str, new: &str) -> String {
+    format!("Renommé : {old} → {new}")
+}
+pub fn fs_trashed(n: usize) -> String {
+    if n == 1 {
+        "1 élément mis à la corbeille.".to_owned()
+    } else {
+        format!("{n} éléments mis à la corbeille.")
+    }
+}
+pub fn fs_deleted_forever(n: usize) -> String {
+    format!("{n} élément(s) supprimé(s) définitivement.")
+}
+pub fn fs_failed(error: &str) -> String {
+    format!("Opération impossible : {error}")
+}
+pub const CHECK_DISCARD_DELETE_ADDED: &str =
+    "Supprimer aussi les fichiers ajoutés (vers la corbeille)";
+pub fn trashed_added(n: usize) -> String {
+    format!("{n} fichier(s) ajouté(s) mis à la corbeille.")
+}
+pub fn copied_line() -> &'static str {
+    "Ligne copiée."
+}
+pub fn hit_excluded(name: &str) -> String {
+    format!("{name} retiré des résultats de cette recherche.")
+}
+// ===== FIN DES TEXTES v1 bis =====
 
 #[cfg(test)]
 mod tests {

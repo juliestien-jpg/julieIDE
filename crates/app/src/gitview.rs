@@ -27,7 +27,6 @@ use crate::logview::{Filters, LogView};
 use crate::merge::Ineligible;
 use crate::target::{FileRef, MenuRequest, Target, Zone};
 use crate::texts as t;
-use crate::texts_v1 as tv;
 use crate::theme::Palette;
 
 const ROW: f32 = 22.0;
@@ -143,6 +142,10 @@ pub struct GitView {
     checked: HashSet<PathBuf>,
     known: HashSet<PathBuf>,
     pub selected: Option<PathBuf>,
+    /// Sélection multiple (Ctrl+clic, Maj+clic) : tous les fichiers choisis quand ils sont
+    /// plusieurs, `selected` compris. Vide : la sélection est `selected` seul.
+    multi: HashSet<PathBuf>,
+    anchor: Option<PathBuf>,
     pub message: String,
     pub amend: bool,
     focus_message: bool,
@@ -177,6 +180,8 @@ impl GitView {
             checked: HashSet::new(),
             known: HashSet::new(),
             selected: None,
+            multi: HashSet::new(),
+            anchor: None,
             message: String::new(),
             amend: false,
             focus_message: false,
@@ -376,7 +381,7 @@ impl GitView {
                     self.message.clear();
                     self.merge_prefilled = false;
                     self.log.reset();
-                    out.push(GitIntent::Notify(tv::operation_done(outcome.kind)));
+                    out.push(GitIntent::Notify(t::operation_done(outcome.kind)));
                 }
             }
             VcsEvent::OperationAborted(_) => {
@@ -424,6 +429,88 @@ impl GitView {
             }
             None => false,
         }
+    }
+
+    /// Les fichiers choisis, dans l'ordre de la liste (un seul sans sélection multiple).
+    pub fn selection_paths(&self) -> Vec<PathBuf> {
+        let Some(status) = &self.status else {
+            return self.selected.iter().cloned().collect();
+        };
+        if self.multi.len() > 1 {
+            return self
+                .ordered_paths(status)
+                .into_iter()
+                .filter(|p| self.multi.contains(p))
+                .collect();
+        }
+        self.selected.iter().cloned().collect()
+    }
+
+    /// Les fichiers sans conflit, dans l'ordre d'affichage.
+    fn ordered_paths(&self, status: &Status) -> Vec<PathBuf> {
+        [Group::Changed, Group::Untracked]
+            .into_iter()
+            .flat_map(|g| status.files.iter().filter(move |f| f.group() == g))
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    /// Clic avec ou sans Ctrl / Maj : ajuste la sélection multiple.
+    fn click_selection(&mut self, status: &Status, path: &PathBuf, ctrl: bool, shift: bool) {
+        let order = self.ordered_paths(status);
+        if shift {
+            let anchor = self
+                .anchor
+                .clone()
+                .or_else(|| self.selected.clone())
+                .unwrap_or_else(|| path.clone());
+            let from = order.iter().position(|p| *p == anchor);
+            let to = order.iter().position(|p| p == path);
+            if let (Some(a), Some(b)) = (from, to) {
+                self.multi = order[a.min(b)..=a.max(b)].iter().cloned().collect();
+            }
+        } else if ctrl {
+            if self.multi.is_empty() {
+                if let Some(current) = &self.selected {
+                    self.multi.insert(current.clone());
+                }
+            }
+            if !self.multi.remove(path) {
+                self.multi.insert(path.clone());
+            }
+            self.anchor = Some(path.clone());
+        } else {
+            self.multi.clear();
+            self.anchor = Some(path.clone());
+        }
+    }
+
+    /// Sélection multiple depuis le mode scénario (`git.multi a,b`).
+    pub fn select_many(&mut self, wanted: &[String]) -> bool {
+        let Some(status) = self.status.clone() else {
+            return false;
+        };
+        let mut set = HashSet::new();
+        for w in wanted {
+            let w = w.replace('\\', "/");
+            match status.files.iter().find(|f| f.repo_path == w) {
+                Some(f) => {
+                    set.insert(f.path.clone());
+                }
+                None => return false,
+            }
+        }
+        let first = status
+            .files
+            .iter()
+            .find(|f| set.contains(&f.path))
+            .map(|f| f.path.clone());
+        self.multi = set;
+        if let Some(first) = first {
+            self.anchor = Some(first.clone());
+            self.select(first);
+        }
+        true
     }
 
     fn select(&mut self, path: PathBuf) {
@@ -732,15 +819,13 @@ impl GitView {
         let step = status.operation.as_ref().and_then(|o| o.step);
         let text = if conflicts > 0 {
             match step {
-                Some(step) if kind == OperationKind::Rebase => {
-                    tv::rebase_conflicts(step, conflicts)
-                }
+                Some(step) if kind == OperationKind::Rebase => t::rebase_conflicts(step, conflicts),
                 _ => t::operation_conflicts(kind, conflicts),
             }
         } else if kind == OperationKind::Merge {
             t::OPERATION_RESOLVED.to_owned()
         } else {
-            tv::operation_resolved_continue(kind)
+            t::operation_resolved_continue(kind)
         };
         icons::paint(
             ui.painter(),
@@ -762,22 +847,22 @@ impl GitView {
         let rebase_like = kind != OperationKind::Merge;
         kit::child(ui, rect.shrink2(vec2(10.0, 4.0)), |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if kit::button(ui, p, tv::operation_abort_label(kind), false, true).clicked() {
+                if kit::button(ui, p, t::operation_abort_label(kind), false, true).clicked() {
                     self.ask_abort();
                 }
                 if rebase_like {
-                    if kit::button(ui, p, tv::BTN_SKIP_COMMIT, false, true).clicked() {
+                    if kit::button(ui, p, t::BTN_SKIP_COMMIT, false, true).clicked() {
                         self.ask_skip();
                     }
                     let can = conflicts == 0;
-                    let response = kit::button(ui, p, tv::BTN_CONTINUE_OP, true, can);
+                    let response = kit::button(ui, p, t::BTN_CONTINUE_OP, true, can);
                     if can && response.clicked() {
                         out.push(GitIntent::ContinueOperation(None));
                     } else if !can {
-                        response.on_disabled_hover_text(tv::TIP_CONFLICTS_REMAIN);
+                        response.on_disabled_hover_text(t::TIP_CONFLICTS_REMAIN);
                     }
                 } else if conflicts == 0
-                    && kit::button(ui, p, tv::BTN_VALIDATE_MERGE, true, true).clicked()
+                    && kit::button(ui, p, t::BTN_VALIDATE_MERGE, true, true).clicked()
                 {
                     self.show_changes_for_commit();
                 }
@@ -961,6 +1046,9 @@ impl GitView {
         let mut merge_request: Option<PathBuf> = None;
         let mut keep: Option<(ConflictSide, PathBuf)> = None;
         let mut menu_for: Option<(Vec<PathBuf>, egui::Pos2)> = None;
+        // Clic droit hors de la sélection : elle devient cette ligne.
+        let mut plain = false;
+        let order = self.ordered_paths(status);
         kit::child(ui, rect, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             egui::ScrollArea::vertical()
@@ -1029,11 +1117,23 @@ impl GitView {
                                 );
                             } else {
                                 let checked = checkable.then(|| self.checked.contains(&file.path));
-                                let selected = self.selected.as_ref() == Some(&file.path);
+                                let selected = self.selected.as_ref() == Some(&file.path)
+                                    || self.multi.contains(&file.path);
                                 let row = file_row(ui, p, file, selected, checked);
                                 if row.secondary {
-                                    menu_for = Some((vec![file.path.clone()], row.pos));
-                                    clicked = Some(file.path.clone());
+                                    if self.multi.len() > 1 && self.multi.contains(&file.path) {
+                                        // Clic droit dans la sélection : le menu agit sur toute la sélection.
+                                        let all: Vec<PathBuf> = order
+                                            .iter()
+                                            .filter(|p| self.multi.contains(*p))
+                                            .cloned()
+                                            .collect();
+                                        menu_for = Some((all, row.pos));
+                                    } else {
+                                        menu_for = Some((vec![file.path.clone()], row.pos));
+                                        plain = true;
+                                        clicked = Some(file.path.clone());
+                                    }
                                 } else if row.toggled {
                                     toggled.push((file.path.clone(), !checked.unwrap_or(false)));
                                 } else if row.double {
@@ -1071,6 +1171,8 @@ impl GitView {
         }
         if let Some(path) = clicked.or(double.clone()) {
             ui.memory_mut(|m| m.request_focus(self.list_focus));
+            let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+            self.click_selection(status, &path, ctrl && !plain, shift && !plain);
             self.select(path);
         }
         if double.is_some() {
@@ -1107,7 +1209,9 @@ impl GitView {
         let enter = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
         let ctrl_d = ui.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::D));
         let f4 = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F4));
-        let target = match (position, down, up) {
+        let shift_down = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::ArrowDown));
+        let shift_up = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::ArrowUp));
+        let target = match (position, down || shift_down, up || shift_up) {
             (None, true, _) | (None, _, true) => Some(0),
             (Some(i), true, _) if i + 1 < ordered.len() => Some(i + 1),
             (Some(i), _, true) if i > 0 => Some(i - 1),
@@ -1115,7 +1219,17 @@ impl GitView {
         };
         if let Some(i) = target {
             if let Some(file) = ordered.get(i) {
-                self.select(file.path.clone());
+                let path = file.path.clone();
+                if shift_down || shift_up {
+                    if self.anchor.is_none() {
+                        self.anchor = self.selected.clone();
+                    }
+                    self.click_selection(status, &path, false, true);
+                } else {
+                    self.multi.clear();
+                    self.anchor = Some(path.clone());
+                }
+                self.select(path);
             }
         }
         if space && status.operation.is_none() {
@@ -1403,11 +1517,11 @@ impl GitView {
                 }
                 Confirm::AbortOperation(kind) => (
                     t::confirm_abort_title(*kind),
-                    tv::confirm_abort_detail(*kind),
+                    t::confirm_abort_detail(*kind),
                 ),
                 Confirm::SkipOperation(kind) => (
-                    tv::confirm_skip_title(*kind),
-                    tv::CONFIRM_SKIP_DETAIL.to_owned(),
+                    t::confirm_skip_title(*kind),
+                    t::CONFIRM_SKIP_DETAIL.to_owned(),
                 ),
             };
             let mut answer = None;
@@ -1479,7 +1593,7 @@ impl GitView {
                         "merge_check": self.merge_check(&f.path).map(|c| format!("{c:?}")),
                         "merge_disabled": self.merge_disabled(f),
                         "checked": self.checked.contains(&f.path),
-                        "selected": self.selected.as_ref() == Some(&f.path),
+                        "selected": self.selected.as_ref() == Some(&f.path) || self.multi.contains(&f.path),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1603,8 +1717,8 @@ fn file_row(
     );
     // État d'index : « indexé » ou « en partie indexé » (de quoi retirer de l'index).
     let mark = match file.index_state() {
-        IndexState::Staged => Some(tv::INDEX_STAGED),
-        IndexState::PartiallyStaged => Some(tv::INDEX_PARTIAL),
+        IndexState::Staged => Some(t::INDEX_STAGED),
+        IndexState::PartiallyStaged => Some(t::INDEX_PARTIAL),
         _ => None,
     };
     if let Some(mark) = mark {

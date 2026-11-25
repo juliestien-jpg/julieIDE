@@ -18,11 +18,12 @@ use julie_core::process::Stream;
 use julie_core::{Location, TaskId};
 use julie_phpunit::{
     find_links, Detection, NodeId, NodeKind, PhpUnit, PhpUnitEvent, Problem, ResultTree,
-    RunOutcome, RunStart, RunSummary, TestNode, TestState,
+    RunOutcome, RunRequest, RunStart, RunSummary, TestNode, TestState,
 };
 
 use crate::icons::{self, Icon};
 use crate::kit::{self, Look};
+use crate::target::{MenuRequest, Target, TestRef};
 use crate::texts as t;
 use crate::theme::Palette;
 
@@ -85,6 +86,12 @@ pub struct TestsView {
     pub confirm_restart: bool,
     /// Liens de la console affichée (pour le mode scénario).
     links: Vec<Location>,
+    /// Menu contextuel demandé à cette image (clic droit sur un nœud).
+    pub menu_request: Option<MenuRequest>,
+    /// La demande de la dernière exécution lancée (base de « lancer ce nœud »).
+    pub last_request: Option<RunRequest>,
+    /// La demande qui attend la confirmation de relance.
+    pub pending_run: Option<RunRequest>,
 }
 
 impl TestsView {
@@ -106,7 +113,83 @@ impl TestsView {
             list_focus: Id::unique("tests-liste"),
             confirm_restart: false,
             links: Vec::new(),
+            menu_request: None,
+            last_request: None,
+            pending_run: None,
         }
+    }
+
+    // ----- Menu contextuel : ce que l'arbre sait de ses nœuds -----------------------
+
+    pub fn has_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| m.has_focus(self.list_focus))
+    }
+
+    pub fn selected_ref(&self) -> Option<TestRef> {
+        self.node_ref(self.selected)
+    }
+
+    pub fn node_ref(&self, id: NodeId) -> Option<TestRef> {
+        let run = self.run.as_ref()?;
+        let node = run.tree.node(id);
+        Some(TestRef {
+            id,
+            kind: node.kind,
+            label: node.label.clone(),
+        })
+    }
+
+    /// De quoi relancer ce nœud (`None` : nœud sans source connue).
+    pub fn request_for_node(&self, id: NodeId) -> Option<RunRequest> {
+        let run = self.run.as_ref()?;
+        RunRequest::for_node(&run.tree, id, self.last_request.as_ref())
+    }
+
+    /// De quoi relancer les tests en échec (`None` : aucun échec).
+    pub fn failures_request(&self) -> Option<RunRequest> {
+        let run = self.run.as_ref()?;
+        RunRequest::rerun_failures(&run.tree, self.last_request.as_ref())
+    }
+
+    pub fn location_of(&self, id: NodeId) -> Option<Location> {
+        self.run.as_ref()?.tree.node(id).jump_location()
+    }
+
+    pub fn has_comparison(&self, id: NodeId) -> bool {
+        self.run.as_ref().is_some_and(|run| {
+            run.tree
+                .node(id)
+                .diagnostic
+                .as_ref()
+                .is_some_and(|d| d.comparison.is_some())
+        })
+    }
+
+    /// `Classe::méthode`, jeu de données compris.
+    pub fn copy_name(&self, id: NodeId) -> String {
+        let Some(run) = &self.run else {
+            return String::new();
+        };
+        let node = run.tree.node(id);
+        match (node.kind, node.parent) {
+            (NodeKind::DataSet, Some(parent)) => {
+                let parent = run.tree.node(parent);
+                if node.name.starts_with(parent.name.as_str()) {
+                    node.name.clone()
+                } else {
+                    format!("{} {}", parent.name, node.name)
+                }
+            }
+            _ => node.name.clone(),
+        }
+    }
+
+    /// Le service a été reconstruit avec de nouveaux réglages : on redétecte.
+    pub fn set_service(&mut self, service: PhpUnit) {
+        self.service = Some(service);
+        self.detection = None;
+        self.detect_requested = false;
+        self.problem = None;
     }
 
     pub fn is_running(&self) -> bool {
@@ -613,6 +696,7 @@ impl TestsView {
         }
         let mut clicked: Option<NodeId> = None;
         let mut double: Option<NodeId> = None;
+        let mut menu: Option<(NodeId, egui::Pos2)> = None;
         kit::child(ui, rect, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             egui::ScrollArea::vertical()
@@ -632,9 +716,22 @@ impl TestsView {
                         } else if row.clicked {
                             clicked = Some(id);
                         }
+                        if let Some(pos) = row.secondary {
+                            menu = Some((id, pos));
+                            clicked = Some(id);
+                        }
                     }
                 });
         });
+        if let Some((id, pos)) = menu {
+            if let Some(test) = self.node_ref(id) {
+                self.menu_request = Some(MenuRequest {
+                    target: Target::Test(test),
+                    pos,
+                    by_keyboard: false,
+                });
+            }
+        }
         if let Some(id) = clicked.or(double) {
             ui.memory_mut(|m| m.request_focus(self.list_focus));
             select = Some(id);
@@ -986,6 +1083,8 @@ struct NodeRowEvent {
     clicked: bool,
     double: bool,
     chevron: bool,
+    /// Clic droit : où.
+    secondary: Option<egui::Pos2>,
 }
 
 fn state_color(node: &TestNode, p: &Palette) -> Color32 {
@@ -1092,6 +1191,11 @@ fn node_row(
         clicked: response.clicked() && !chevron,
         double: response.double_clicked(),
         chevron,
+        secondary: response.secondary_clicked().then(|| {
+            response
+                .interact_pointer_pos()
+                .unwrap_or(rect.left_bottom())
+        }),
     }
 }
 

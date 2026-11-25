@@ -29,6 +29,9 @@ fn on_off(text: &str) -> Result<bool, String> {
 impl JulieStormApp {
     pub(super) fn ui_command(&mut self, command: &str, arg: &str) -> Result<(), String> {
         let arg = arg.trim();
+        if let Some(result) = self.fs_dialog_command(command, arg) {
+            return result;
+        }
         match command {
             // ----- Git ----------------------------------------------------------
             "git.tab" => {
@@ -40,6 +43,12 @@ impl JulieStormApp {
             "git.select" => {
                 if !self.git.select_path(arg) {
                     return Err(format!("fichier absent de la liste Git : {arg}"));
+                }
+            }
+            "git.multi" => {
+                let wanted: Vec<String> = arg.split(',').map(|s| s.trim().to_owned()).collect();
+                if !self.git.select_many(&wanted) {
+                    return Err("fichier absent de la liste Git".to_owned());
                 }
             }
             "git.check" | "git.uncheck" => {
@@ -207,6 +216,8 @@ impl JulieStormApp {
                     self.tests.confirm_restart = false;
                     if yes {
                         self.run_tests(true);
+                    } else {
+                        self.tests.pending_run = None;
                     }
                 } else {
                     self.git.dismiss_error();
@@ -214,7 +225,7 @@ impl JulieStormApp {
             }
 
             // ----- Tests --------------------------------------------------------
-            "tests.run" => self.run_tests(false),
+            "tests.run" => self.start_run(RunRequest::all(), false),
             "tests.stop" => self.stop_tests(),
             "tests.select" => {
                 self.tools.bottom = BottomTool::Tests;
@@ -239,10 +250,15 @@ impl JulieStormApp {
                     .ok_or_else(|| format!("lien {arg} absent de la console"))?;
                 self.run_tests_intents(vec![TestsIntent::Open(location)]);
             }
-            other => match self.ui_command_v1(other, arg) {
-                Some(result) => return result,
-                None => return Err(format!("commande ui inconnue : « {other} »")),
-            },
+            other => {
+                if let Some(result) = self.ui_command_settings(other, arg) {
+                    return result;
+                }
+                match self.ui_command_v1(other, arg) {
+                    Some(result) => return result,
+                    None => return Err(format!("commande ui inconnue : « {other} »")),
+                }
+            }
         }
         Ok(())
     }
