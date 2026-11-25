@@ -170,3 +170,74 @@ Les sept écarts ont été corrigés ; ils restent à rejouer par la testeuse po
 | M7 BOM | le résultat suit toujours notre version ; bandeau quand les versions diffèrent sur le BOM | `ecarts-m7-bom.txt` |
 
 Changement de comportement à connaître : deux cas que la v0 laissait volontairement en conflit (`js-blank-run-vs-neighbour`, `php-new-method-after-edited-statement`) fusionnent désormais, comme chez Git.
+
+## Contre-recette du 25/11/2026
+
+Faite par la testeuse sur le commit `89ad104` (`target\debug\juliestorm.exe` recompilé : à jour), sans croire les preuves des développeuses : chaque écart a été rejoué à partir de ses étapes d'origine. Aucun commit, aucun push ; le JulieStorm de la personne qui dirige le projet n'a pas été touché (aucun processus JulieStorm n'était d'ailleurs visible au début de la séance). Tout s'est joué dans `%TEMP%` (supprimé à la fin) ; `labmate_paper` rendu comme trouvé (`main` à `2bbd96a`, `README.md` avec le même SHA-256 `20ffe694…`, mêmes deux branches `juliestorm-essai/*` qu'avant, rien d'écrit).
+
+Moyens : `cargo test --workspace` (tout vert, 0 rouge, dont `ctrl_c_works_when_the_ide_ignores_ctrl_c`), `cargo clippy --workspace --all-targets -- -D warnings` propre ; deux `mergecli` compilés hors de l'espace de travail, l'un sur `52689f3` (la v0 avant correction), l'autre sur `89ad104`, pour mesurer **avant / après sur les mêmes triplets** ; nouveau générateur `tests/fixtures/fusion-attaque.py` (familles aléatoire, lignes répétées, séries, code PHP, faille, décalage) ; cas 39 `39-faille-lignes-repetees-decalees.txt` ajouté à `tests/fixtures/fusion-corpus.py` (qui compte donc 39 cas ; correction d'un défaut d'encodage de ma part dans `scenario`).
+
+### Verdict des sept écarts
+
+| Écart | Verdict | Preuve rejouée |
+|---|---|---|
+| M1 faux conflits | **Clos** sur du code ; **pas éradiqué** sur des lignes répétées pathologiques (côté sûr) | Mêmes 2 567 fusions propres pour Git : **22 conflits en trop avant (0,86 %), 0 après**. Cas `25` et `38` du corpus : fusionnés, texte identique à Git. Détail plus bas. |
+| M2 Ctrl+C | **Clos** | Scénario `recette-terminal-cmd.txt` (`ping -t`, Ctrl+C, puis `echo apres-ctrl-c > ctrlc.txt`) joué **depuis Git Bash ET depuis PowerShell** : le ping s'arrête (capture `02-apres-ctrlc.png` : « Ctrl+C », « ^C », l'invite revient, `ctrlc.txt` écrit) ; `cargo test -p julie-terminal --test sessions ctrl_c` vert dans les deux shells (2,4 s depuis Git Bash, où il était rouge 3 fois sur 3). |
+| M3 « Fusionner… » | **Clos** (infobulle non observable) | `ecarts-m3-fusionner-grise.txt` : `merge_check` = `Refused(TooLarge)` ×2, `Refused(Binary)`, `Refused(NotUtf8)`, `Fine` pour le témoin ; `merge_disabled` porte la raison ; capture `m3-liste.png` : quatre boutons grisés, celui de `normal.txt` actif. Le refus après clic reste un filet (message correct). Le survol (infobulle) ne se joue pas en scénario. |
+| M4 délai Git | **Clos** | Scénario `ecarts-m4-modif-externe.txt`, 5 essais : `index.html` présent dans l'état Git à **1,08 / 1,08 / 1,11 / 1,22 / 1,11 s** (avant : absent à 1,82 s, présent à 2,27 s). Mon scénario d'origine `recette-git-modif-externe.txt` : absent à +0,45 s, présent à +0,95 s. |
+| M5 regex | **Clos** | `(`, `)`, `[`, `*a`, `\q`, `(a` : message d'erreur sous le champ dès le premier caractère, **en français** (« Expression régulière invalide : groupe non fermé (il manque une parenthèse fermante) », etc.) ; un caractère valide, ou sans regex : « Saisissez au moins 2 caractères. ». |
+| M6 barre d'état | **Clos** (un reste cosmétique) | `ecarts-m6-messages.txt` : « 1 commit : … » présent à 0 s, **absent à 6,5 s**, absent après ouverture d'un autre projet ; erreur « Fusion de binaire.bin impossible… » **effacée par l'ouverture réussie d'un fichier** et par le changement de projet. Reste : après un `merge.open` **réussi** (dialogue de fusion) l'erreur précédente n'est pas effacée (`m3-normal.json`) ; elle expire seule. |
+| M7 BOM | **Clos** | `ecarts-m7-bom.txt` : cas 14 (BOM chez eux seuls) : bandeau « Leur version change la marque BOM en tête de fichier ; le résultat reste sans marque BOM, comme notre version. » (capture `m7-bom-eux-seul.png`, `bom_banner` dans l'état) ; cas 12 (BOM partout) : pas de bandeau. |
+
+### M1 en chiffres (même corpus, avant / après)
+
+Méthode : mes scripts d'origine (`fusion-reel.py`, `mergecli`), mêmes familles et même mutation. Je n'ai pas retrouvé mon effectif d'origine : j'ai tiré **12 essais par fichier JS** (`labmate_paper/src`, graine 1) et **10 par fichier PHP** (`Framework` de PHPUnit 9.6, graine 1), plus les 39 couples de l'historique. **Le même corpus passe dans les deux moteurs** ; le nombre de fusions propres pour Git diffère donc un peu de l'ancien rapport (2 567 contre 2 209).
+
+| Corpus | Fusions propres pour Git | Conflits en trop AVANT (`52689f3`) | APRÈS (`89ad104`) |
+|---|---|---|---|
+| Historique réel (cherry-picks) | 39 | 1 | **0** |
+| JavaScript, éditions aléatoires | 547 | 0 | 0 |
+| JavaScript, insertions de blocs | 517 | 3 | **0** |
+| PHP, éditions aléatoires | 719 | 2 | **0** |
+| PHP, insertions de blocs | 745 | 16 | **0** |
+| **Total** | **2 567** | **22 (0,86 %)** | **0** |
+
+Deuxième tirage (graine 2, blocs, rejoué seulement sur le moteur corrigé) : JS 513 propres pour Git, 0 en trop ; PHP 305, 0 en trop. Aucun conflit réel fusionné chez nous seulement.
+
+Là où M1 n'est **pas** éradiqué : sur mes familles synthétiques de lignes répétées ou identiques (alphabets de 2 à 3 lignes), Git fusionne proprement des cas que nous laissons en conflit : 250 sur 5 000 (5 %) contre 1 336 (27 %) avant, et 168 sur 1 200 pour la famille « série de lignes identiques » (graine 2). C'est le côté sûr (un conflit montré de trop) et ce n'est pas du code courant ; à garder en tête pour un fichier de données répétitif.
+
+### La propriété intouchable : aucun vrai conflit fusionné en silence
+
+Résultat : **0 cas « nous propre, Git en conflit » sur environ 31 600 triplets comparés à `git merge-file`** (hors les deux cas voulus 08 et 14 du corpus, voir plus bas), plus les 39 cas du corpus passés dans l'application.
+
+| Essai | Triplets | Nous propre / Git en conflit | Conflit en trop (Git propre) | Texte différent, deux propres |
+|---|---|---|---|---|
+| Corpus de 39 cas, dans l'application, 4 modes (appliquer ; gauche ; droite ; les deux), fichier écrit comparé à Git | 39 × 4 | **0** conflit réel appliqué en silence (sauf 08 et 14, voulus) | 0 | écarts voulus (08, 11, 14, 33 selon le mode) et cas 39 (conflit plus large que Git) |
+| Vrai code, aléatoire et blocs, JS + PHP, deux graines, historique | 5 055 | **0** | **0** | 11, **tous des fins de ligne seules** (identiques à Git une fois les `\r` retirés ; lignes insérées sans `\r` dans un fichier CRLF) |
+| Générateur d'attaque, 5 familles (aléatoire, lignes répétées, séries, code PHP, faille), graines 1 et 2 | 11 000 | **0** | 569 (5,2 %) | 0 |
+| Famille « décalage » de la faille (base cadrée de a/b, 0 à 2 suppressions et 1 à 3 insertions chez nous, un remplacement par `Z` chez eux), graines 5 et 9 | 8 000 | **0** | 641 (8 %) | 0 |
+| Énumération exhaustive autour de la faille (5 bases a/b de 8 lettres cadrées par `g` : toutes les positions de remplacement, de suppression, d'insertion) | 7 504 | **0** | 362 (4,8 %) | 0 |
+
+Corpus, dans l'application : tout ce que Git déclare en conflit reste en conflit après « Appliquer tous » (17 cas que Git fusionne seul : 0 conflit en trop chez nous, y compris `25` et `38`), **sauf** `08` (CRLF contre LF) et `14` (BOM chez eux seuls), où nous fusionnons et Git non : fins de ligne et BOM ne sont pas du contenu, c'est le comportement spécifié (et `14` a maintenant son bandeau). Les écarts d'octets restants avec Git (`08`, `11` saut final, `14` BOM, `33` CRLF chez eux) sont ceux que la spécification veut.
+
+**La faille, dans l'application** (cas 39 : base `g b a a b a b b b g`, nôtre `g a a b a a b a b b g`, leur = base avec la 3e ligne remplacée par `Z`, une lettre par ligne) : le dialogue s'ouvre avec **1 conflit** (bloc nôtre [1,10[, leur [1,9[), « Appliquer tous » n'y touche pas, le centre garde la base, « accepter à gauche » donne exactement le texte de Git. Le moteur d'avant correction (`52689f3`), sur les mêmes trois fichiers : **0 conflit, fusion silencieuse** ; la faille était donc réelle, et elle est fermée. Le bloc de conflit est plus large que celui de Git, qui le restreint à quelques lignes : conservateur, conforme à « dans le doute, conflit ». Les modes « droite » et « les deux » donnent un texte différent de celui de Git pour la même raison (région plus large), pas par perte silencieuse.
+
+Honnêteté sur la puissance de l'attaque : lancé sur le moteur d'avant correction, mon générateur n'a **pas retrouvé** la faille dans 13 000 triplets (5 000 + 2 × 4 000) ; elle n'est apparue que dans l'énumération exhaustive (1 cas sur 1 608 pour la base d'origine, 1 sur 1 496 pour une autre ; 2 sur 7 504 au total, environ 0,03 %). « 0 trouvé sur le moteur corrigé » vaut donc surtout par l'énumération et par le code réel, pas par les tirages aléatoires. Je n'ai pas essayé de fichiers de plus de ~12 lignes pour cette famille, ni de bases de trois lettres ou plus en énumération.
+
+### Non-régression
+
+- **Scénarios** : les 16 `recette-*.txt` et les 7 `ecarts-*.txt` ont tous été rejoués : **code 0, aucune étape en échec, aucune panique** (états comparés à ceux de ma recette d'origine quand ils existaient : ne diffèrent que le fichier en plus du corpus (cas 39) et le nombre de commandes Git de la console (283 → 295 : la relève toutes les 1,2 s, voulue par M4)).
+- **Blocages de lancement** : 37 lancements de l'IDE en scénario sur la séance (23 scénarios, 4 rejeux de M4, 1 rejeu depuis PowerShell, 1 rejeu de `recette-git-commit-selectif`, 8 passes du corpus dont 3 refaites) : **0 blocage**, aucun dépassement de délai. Le plus long, 201 s pour une passe du corpus, tournait en même temps qu'une comparaison Git lourde (70 à 90 s sans charge) : lenteur sous charge, pas un blocage.
+- **Captures regardées** : dialogue de fusion avec bandeau BOM (lisible, ne masque rien, décale les volets de 26 px), question « Il reste des blocs à traiter » inchangée, liste des conflits avec les boutons « Fusionner… » grisés, recherche avec l'erreur de regex. Rien à signaler.
+- **Régressions** : aucune bloquante ni majeure. Mineures : (1) l'erreur de la barre d'état survit à un `merge.open` réussi (voir M6) ; (2) à 720 px de haut la liste des conflits coupe toujours le 5e fichier (déjà noté, inchangé).
+
+### Non vérifié
+
+- L'infobulle du bouton grisé (survol impossible en scénario) ; seul le texte `merge_disabled` de l'état l'atteste.
+- Le chiffre d'origine « 14 sur 2 209 » n'est pas rejouable à l'identique (effectif et graine non consignés) : la comparaison avant / après est faite sur un corpus de même construction, pas sur le même que celui de l'ancien rapport.
+- Le IDE de la personne qui dirige le projet n'a pas été observé ; pas de comparaison avec PhpStorm.
+- Aucune souris, aucune fermeture par la croix (limites du mode scénario, inchangées).
+
+### Avis net
+
+La v0 corrigée est **bonne pour la suite** : les sept écarts sont clos, la faille de fusion en silence est réellement fermée (vue ouverte sur l'ancien moteur, fermée sur le nouveau, et rien d'autre n'est apparu sur environ 31 600 triplets), et M1 est passé de 22 à 0 conflit en trop sur le même corpus de code réel. Deux réserves : le moteur reste plus prudent que Git sur les lignes répétées (sans danger), et la faille était assez rare pour qu'un tirage aléatoire ne la voie pas, donc la confiance repose sur l'énumération, qu'il vaudrait la peine d'étendre (bases de trois lettres, fichiers plus longs) avant la v1.

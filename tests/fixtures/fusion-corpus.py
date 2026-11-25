@@ -101,6 +101,9 @@ case("37-insertion-en-fin.txt", b10, b10 + b"fin-nous\n", b10 + b"fin-eux\n", "a
 case("38-php.php", b"<?php\nclass A {\n    public function a() { return 1; }\n\n    public function b() { return 2; }\n}\n",
      b"<?php\nclass A {\n    public function a() { return 10; }\n\n    public function b() { return 2; }\n}\n",
      b"<?php\nclass A {\n    public function a() { return 1; }\n\n    public function b() { return 20; }\n\n    public function c() {}\n}\n", "PHP, méthodes disjointes")
+_l = lambda s: "".join(c + "\n" for c in s.split()).encode()
+case("39-faille-lignes-repetees-decalees.txt", _l("g b a a b a b b b g"), _l("g a a b a a b a b b g"), _l("g b Z a b a b b b g"),
+     "faille de la contre-recette : lignes répétées décalées contre une modification (Git : conflit)")
 
 
 def git(cwd, *args, inp=None, check=True):
@@ -169,7 +172,7 @@ def scenario(dest, mode, out):
         s += ["ui merge.apply all"]
         if mode in ("left", "right", "both"):
             # blocs conflictuels connus par la passe « classify »
-            kinds = json.load(open("%s/%s-ouvert.json" % (ev.replace("etat-" + mode, "etat-classify"), tag))) if os.path.exists("%s/%s-ouvert.json" % (ev.replace("etat-" + mode, "etat-classify"), tag)) else None
+            kinds = json.load(open("%s/%s-ouvert.json" % (ev.replace("etat-" + mode, "etat-classify"), tag), encoding="utf-8")) if os.path.exists("%s/%s-ouvert.json" % (ev.replace("etat-" + mode, "etat-classify"), tag)) else None
             if kinds and kinds.get("merge"):
                 for b in kinds["merge"]["blocks"]:
                     if b["kind"].lower().startswith("conf"):
